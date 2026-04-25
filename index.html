@@ -104,6 +104,52 @@
         border-bottom: 1px solid var(--rule);
         padding: 10px 0;
       }
+      .roster {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .roster-tile {
+        position: relative;
+        border: 1px solid var(--rule);
+        padding: 8px 8px 7px;
+        cursor: pointer;
+        background: rgba(255, 255, 255, 0.18);
+        transition: border-color 0.12s, background 0.12s;
+        overflow: hidden;
+        min-height: 56px;
+      }
+      .roster-tile:hover {
+        border-color: var(--ink);
+      }
+      .roster-tile.active {
+        border-color: var(--ink);
+        background: rgba(26, 24, 21, 0.06);
+      }
+      .roster-tile .tile-stripe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+      }
+      .roster-tile .tile-name {
+        font-size: 15px;
+        font-weight: 500;
+        line-height: 1.15;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .roster-tile .tile-meta {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 9px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ink-soft);
+        margin-top: 2px;
+      }
       .character-card .name {
         font-size: 22px;
         font-weight: 500;
@@ -135,6 +181,59 @@
         color: var(--ink);
         margin-left: 4px;
       }
+      .sliders {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .slider-row {
+        display: grid;
+        grid-template-columns: 70px 1fr 44px;
+        align-items: center;
+        gap: 8px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--ink-soft);
+      }
+      .slider-row .slider-label {
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+      .slider-row input[type="range"] {
+        appearance: none;
+        background: transparent;
+        height: 16px;
+        margin: 0;
+      }
+      .slider-row input[type="range"]::-webkit-slider-runnable-track {
+        height: 1px;
+        background: var(--ink);
+      }
+      .slider-row input[type="range"]::-webkit-slider-thumb {
+        appearance: none;
+        width: 10px;
+        height: 14px;
+        background: var(--paper);
+        border: 1px solid var(--ink);
+        margin-top: -7px;
+        border-radius: 0;
+      }
+      .slider-row input[type="range"]::-moz-range-track {
+        height: 1px;
+        background: var(--ink);
+      }
+      .slider-row input[type="range"]::-moz-range-thumb {
+        width: 10px;
+        height: 14px;
+        background: var(--paper);
+        border: 1px solid var(--ink);
+        border-radius: 0;
+      }
+      .slider-row .slider-val {
+        text-align: right;
+        color: var(--ink);
+      }
       #boot-error {
         position: absolute;
         inset: 0;
@@ -162,18 +261,19 @@
           <p class="sub">procedural totem · pencil on vellum</p>
         </div>
 
+        <div>
+          <h2>roster</h2>
+          <div class="roster" id="roster"></div>
+          <div class="row" style="margin-top: 8px">
+            <button id="btnReroll">reroll all</button>
+          </div>
+        </div>
+
         <div class="character-card" id="card">
           <div class="name" id="cName">—</div>
           <div class="epithet" id="cEpithet">—</div>
           <div class="meta" id="cMeta">—</div>
           <div class="stats" id="cStats"></div>
-        </div>
-
-        <div>
-          <h2>character</h2>
-          <div class="row">
-            <button id="btnReroll">reroll</button>
-          </div>
         </div>
 
         <div>
@@ -184,12 +284,14 @@
         <div>
           <h2>mood</h2>
           <div class="row" id="moodRow"></div>
+          <div class="sliders" id="moodSliders"></div>
         </div>
 
         <div>
           <h2>view</h2>
           <div class="row" id="viewRow">
             <button id="btnAxes">axes</button>
+            <button id="btnPrints">footprints</button>
           </div>
         </div>
       </aside>

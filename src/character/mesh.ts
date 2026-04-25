@@ -14,8 +14,7 @@ import earcut from "earcut";
 import type { Layer, Unit } from "./generator";
 import { getContour } from "./shapes";
 import { BONE, createRig, rigLayout, skinWeightsAtZ, type Rig } from "../rig/skeleton";
-
-const UNIT_SCALE = 0.04;
+import { UNIT_SCALE } from "../scale";
 
 export interface CharacterMesh {
   root: Mesh;
@@ -188,6 +187,118 @@ export function buildCharacter(unit: Unit, scene: Scene): CharacterMesh {
   }
   buildLeg(+1, BONE.footL);
   buildLeg(-1, BONE.footR);
+
+  // ── Protrusions ───────────────────────────────────────────────
+  // Emitted as additional cone meshes inside the same skinned Mesh,
+  // bound 100% to the head bone so they pitch with mood and follow
+  // the character's heading.
+  const topLayer = unit.layers[unit.layers.length - 1];
+  const topRWorld = topLayer.r * UNIT_SCALE;
+  const topZ = layout.height;
+  const protrusionColor = parseHsl(unit.palette.accent);
+
+  function pushPVert(x: number, y: number, z: number): number {
+    const idx = positions.length / 3;
+    positions.push(x, y, z);
+    colors.push(protrusionColor.r, protrusionColor.g, protrusionColor.b, 1);
+    matricesIndices.push(BONE.head, 0, 0, 0);
+    matricesWeights.push(1, 0, 0, 0);
+    return idx;
+  }
+
+  function pushCone(
+    bx: number, by: number, bz: number,
+    dirX: number, dirY: number, dirZ: number,
+    length: number,
+    baseRadius: number,
+    segments: number,
+  ): void {
+    // Normalize direction.
+    const dlen = Math.hypot(dirX, dirY, dirZ) || 1;
+    const dx = dirX / dlen;
+    const dy = dirY / dlen;
+    const dz = dirZ / dlen;
+    // Pick a helper vector not parallel to d.
+    const hx = Math.abs(dz) < 0.9 ? 0 : 1;
+    const hy = 0;
+    const hz = Math.abs(dz) < 0.9 ? 1 : 0;
+    // u = normalize(d × h)
+    let ux = dy * hz - dz * hy;
+    let uy = dz * hx - dx * hz;
+    let uz = dx * hy - dy * hx;
+    const ulen = Math.hypot(ux, uy, uz) || 1;
+    ux /= ulen; uy /= ulen; uz /= ulen;
+    // v = d × u  (already unit since d, u are unit perpendicular)
+    const vx = dy * uz - dz * uy;
+    const vy = dz * ux - dx * uz;
+    const vz = dx * uy - dy * ux;
+
+    const tipIdx = pushPVert(bx + dx * length, by + dy * length, bz + dz * length);
+    const ring: number[] = [];
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      const ca = Math.cos(a) * baseRadius;
+      const sa = Math.sin(a) * baseRadius;
+      ring.push(
+        pushPVert(
+          bx + ux * ca + vx * sa,
+          by + uy * ca + vy * sa,
+          bz + uz * ca + vz * sa,
+        ),
+      );
+    }
+    for (let i = 0; i < segments; i++) {
+      const j = (i + 1) % segments;
+      indices.push(tipIdx, ring[i], ring[j]);
+    }
+    for (let i = 1; i < segments - 1; i++) {
+      indices.push(ring[0], ring[i], ring[i + 1]);
+    }
+  }
+
+  switch (unit.protrusions) {
+    case "none":
+      break;
+    case "horns": {
+      // Two horns, one per side, angled outward and up.
+      const baseY = topRWorld * 0.45;
+      const length = topRWorld * 1.0;
+      const baseR = topRWorld * 0.13;
+      pushCone(0, +baseY, topZ, 0, +0.45, 1, length, baseR, 6);
+      pushCone(0, -baseY, topZ, 0, -0.45, 1, length, baseR, 6);
+      break;
+    }
+    case "blades": {
+      // Two elongated blade-like cones (4-sided base for a flat look).
+      const baseY = topRWorld * 0.35;
+      const length = topRWorld * 1.5;
+      const baseR = topRWorld * 0.10;
+      pushCone(0, +baseY, topZ, 0.2, +0.3, 1, length, baseR, 4);
+      pushCone(0, -baseY, topZ, 0.2, -0.3, 1, length, baseR, 4);
+      break;
+    }
+    case "spikes": {
+      // A row of short spikes across the head, pointing straight up.
+      const SPIKE_COUNT = 5;
+      const length = topRWorld * 0.45;
+      const baseR = topRWorld * 0.09;
+      const span = topRWorld * 1.1;
+      for (let i = 0; i < SPIKE_COUNT; i++) {
+        const t = i / (SPIKE_COUNT - 1) - 0.5;
+        pushCone(0, t * span, topZ, 0, 0, 1, length, baseR, 5);
+      }
+      break;
+    }
+    case "antennae": {
+      // Two thin tall cones, slight outward tilt.
+      const baseY = topRWorld * 0.25;
+      const length = topRWorld * 1.7;
+      const baseR = topRWorld * 0.045;
+      pushCone(0, +baseY, topZ, 0, +0.18, 1, length, baseR, 5);
+      pushCone(0, -baseY, topZ, 0, -0.18, 1, length, baseR, 5);
+      break;
+    }
+  }
 
   const mesh = new Mesh(`character_${unit.id}`, scene);
   const vd = new VertexData();

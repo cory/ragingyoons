@@ -11,6 +11,7 @@
  */
 import { Bone, Matrix, Quaternion, Vector3 } from "@babylonjs/core";
 import type { CharacterMesh } from "../character/mesh";
+import { UNIT_SCALE, WORLD_R_BABYLON, WORLD_R_WALKER } from "../scale";
 import { computeBob, GAITS, skipFoot, walkFoot } from "./gait";
 import {
   deriveExpression,
@@ -21,9 +22,7 @@ import {
   WOBBLE_ROLL_FREQ,
 } from "./mood";
 
-export const WORLD_R_WALKER = 140;
-const UNIT_SCALE = 0.04;
-const WORLD_R_BABYLON = WORLD_R_WALKER * UNIT_SCALE;
+export { WORLD_R_WALKER };
 
 const SPINE_NOISE_FREQ = [0.83, 1.27, 1.61];
 
@@ -57,6 +56,8 @@ export interface DriverState {
   slowTime: number;
   gaitName: keyof typeof GAITS;
   mood: Mood;
+  prevLiftedR: boolean;
+  prevLiftedL: boolean;
 }
 
 export function makeDriverState(
@@ -69,11 +70,14 @@ export function makeDriverState(
     slowTime: 0,
     gaitName: initialGait,
     mood: initialMood ?? { energy: 0, posture: 0, composure: 0, stance: 0 },
+    prevLiftedR: false,
+    prevLiftedL: false,
   };
 }
 
 export interface UpdateOpts {
   speedMul?: number;
+  onPlant?: (side: "L" | "R", worldX: number, worldY: number, headingZ: number) => void;
 }
 
 export function updateDriver(
@@ -209,7 +213,26 @@ export function updateDriver(
   ch.root.position.set(cx, cy, 0);
   // Character +X (forward) aligns with tangent (-sin φ, cos φ, 0).
   // Yaw around +Z: ψ = trackPhi + π/2.
-  ch.root.rotation.set(0, 0, state.trackPhi + Math.PI / 2);
+  const yaw = state.trackPhi + Math.PI / 2;
+  ch.root.rotation.set(0, 0, yaw);
+
+  // Plant detection — emit on lifted→grounded transition for each foot.
+  if (opts.onPlant) {
+    const cosY = Math.cos(yaw);
+    const sinY = Math.sin(yaw);
+    if (state.prevLiftedR && !footRight.lifted) {
+      const lx = footRight.x * UNIT_SCALE;
+      const ly = -footLateralWorld;
+      opts.onPlant("R", cx + cosY * lx - sinY * ly, cy + sinY * lx + cosY * ly, yaw);
+    }
+    if (state.prevLiftedL && !footLeft.lifted) {
+      const lx = footLeft.x * UNIT_SCALE;
+      const ly = +footLateralWorld;
+      opts.onPlant("L", cx + cosY * lx - sinY * ly, cy + sinY * lx + cosY * ly, yaw);
+    }
+  }
+  state.prevLiftedR = footRight.lifted;
+  state.prevLiftedL = footLeft.lifted;
 
   return ex;
 }
