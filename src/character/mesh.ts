@@ -12,9 +12,10 @@ import {
 } from "@babylonjs/core";
 import earcut from "earcut";
 import type { Layer, Unit } from "./generator";
-import { getContour } from "./shapes";
+import { getContour, type Contour } from "./shapes";
 import { BONE, createRig, rigLayout, skinWeightsAtZ, type Rig } from "../rig/skeleton";
 import { UNIT_SCALE } from "../scale";
+import { blendContours, COMMON_N, resampleByAngle, smoothstep } from "./contour";
 
 export interface CharacterMesh {
   root: Mesh;
@@ -63,10 +64,7 @@ function hslToRgb(h: number, s: number, l: number): Color3 {
 
 function layerColor(unit: Unit, layer: Layer): Color3 {
   const p = unit.palette;
-  if (layer.tone === "accent") return parseHsl(layer.inset ? p.accentDark : p.accent);
-  if (layer.role === "base") return parseHsl(p.primaryDark);
-  if (layer.role === "crown") return parseHsl(layer.inset ? p.primaryMid : p.primaryLight);
-  return parseHsl(layer.inset ? p.primaryMid : p.primary);
+  return parseHsl(p[layer.shadeKey]);
 }
 
 export function buildCharacter(unit: Unit, scene: Scene): CharacterMesh {
@@ -96,53 +94,128 @@ export function buildCharacter(unit: Unit, scene: Scene): CharacterMesh {
     return idx;
   }
 
-  // ── Body slabs ────────────────────────────────────────────────
-  for (let li = 0; li < unit.layers.length; li++) {
-    const layer = unit.layers[li];
-    const slab = slabs[li];
-    const color = layerColor(unit, layer);
+  // ── Body — single chain of rings, blended across layer seams ──
+  // Each layer contributes pure rings inside its body and shares a
+  // smooth transition zone with adjacent layers. All contours are
+  // resampled to COMMON_N points so they're index-aligned for blending.
+  const TRANSITION_FRAC = 0.22; // half-width of transition zone, as fraction of min adjacent thickness
+  const TRANSITION_K = 3;       // intermediate rings inside each transition zone
+  const BULGE = 0.18;            // SDF-smin-like outward push at midpoint
 
-    const contour = getContour(layer.shape, layer.r);
-    const N = contour.length;
+  interface ResampledLayer {
+    contour: Contour;
+    thickness: number;          // walker units
+    x: number;                  // walker units, layer x-offset
+    color: Color3;
+  }
 
-    const zBot = slab.zBot * UNIT_SCALE + legHeightWorld;
-    const zTop = slab.zTop * UNIT_SCALE + legHeightWorld;
-    const dx = layer.x * UNIT_SCALE;
+  const resampled: ResampledLayer[] = unit.layers.map((layer) => ({
+    contour: resampleByAngle(getContour(layer.shape, layer.r), COMMON_N),
+    thickness: layer.thickness,
+    x: layer.x,
+    color: layerColor(unit, layer),
+  }));
 
-    const ringBot: number[] = [];
-    const ringTop: number[] = [];
-    for (let i = 0; i < N; i++) {
-      const p = contour[i];
-      const wx = p.x * UNIT_SCALE + dx;
-      const wy = p.y * UNIT_SCALE; // contour y → world Y (lateral)
-      ringBot.push(pushBodyVert(wx, wy, zBot, color));
-      ringTop.push(pushBodyVert(wx, wy, zTop, color));
+  interface RingDef {
+    z: number;          // world z (babylon units)
+    contour: Contour;   // walker units
+    color: Color3;
+    xOffset: number;    // walker units
+  }
+  const rings: RingDef[] = [];
+
+  function lerpC3(a: Color3, b: Color3, t: number): Color3 {
+    return new Color3(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t);
+  }
+
+  let zWalker = 0; // running z in walker units
+  for (let i = 0; i < resampled.length; i++) {
+    const layer = resampled[i];
+    const zBotW = zWalker;
+    const zTopW = zWalker + layer.thickness;
+
+    const δLow = i > 0
+      ? TRANSITION_FRAC * Math.min(layer.thickness, resampled[i - 1].thickness)
+      : 0;
+    const δHigh = i < resampled.length - 1
+      ? TRANSITION_FRAC * Math.min(layer.thickness, resampled[i + 1].thickness)
+      : 0;
+
+    const pureBotW = zBotW + δLow;
+    const pureTopW = zTopW - δHigh;
+
+    const toWorldZ = (zw: number): number => zw * UNIT_SCALE + legHeightWorld;
+
+    rings.push({ z: toWorldZ(pureBotW), contour: layer.contour, color: layer.color, xOffset: layer.x });
+    if (pureTopW > pureBotW) {
+      rings.push({ z: toWorldZ(pureTopW), contour: layer.contour, color: layer.color, xOffset: layer.x });
     }
 
-    // Sides — winding doesn't matter for visibility (culling disabled).
-    for (let i = 0; i < N; i++) {
-      const j = (i + 1) % N;
-      indices.push(ringBot[i], ringTop[i], ringTop[j]);
-      indices.push(ringBot[i], ringTop[j], ringBot[j]);
+    // Transition rings into next layer. δHigh equals next's δLow (both
+    // are TRANSITION_FRAC × min(thickness_i, thickness_{i+1})), so the
+    // full zone spans 2·δHigh straddling the seam at zTopW.
+    if (i < resampled.length - 1) {
+      const next = resampled[i + 1];
+      const span = 2 * δHigh;
+      for (let k = 1; k <= TRANSITION_K; k++) {
+        const t = k / (TRANSITION_K + 1);
+        const ringZW = pureTopW + t * span;
+        const blended = blendContours(layer.contour, next.contour, t, BULGE);
+        const blendedColor = lerpC3(layer.color, next.color, smoothstep(t));
+        const blendedX = layer.x + (next.x - layer.x) * smoothstep(t);
+        rings.push({
+          z: toWorldZ(ringZW),
+          contour: blended,
+          color: blendedColor,
+          xOffset: blendedX,
+        });
+      }
     }
 
-    // Caps — earcut triangulation handles concave contours (crescent)
-    // correctly. Earcut takes a flat [x0,y0,x1,y1,...] and returns
-    // triangle indices into that array.
-    const flat: number[] = [];
-    for (const p of contour) {
-      flat.push(p.x, p.y);
-    }
-    const capTris = earcut(flat);
-    for (let k = 0; k < capTris.length; k += 3) {
-      const a = capTris[k];
-      const b = capTris[k + 1];
-      const c = capTris[k + 2];
-      // Top cap: keep earcut order. Bottom cap: reverse.
-      indices.push(ringTop[a], ringTop[b], ringTop[c]);
-      indices.push(ringBot[c], ringBot[b], ringBot[a]);
+    zWalker = zTopW;
+  }
+
+  // Build vertex rings.
+  const ringStarts: number[] = [];
+  for (const ring of rings) {
+    ringStarts.push(positions.length / 3);
+    for (let i = 0; i < COMMON_N; i++) {
+      const p = ring.contour[i];
+      const wx = (p.x + ring.xOffset) * UNIT_SCALE;
+      const wy = p.y * UNIT_SCALE;
+      pushBodyVert(wx, wy, ring.z, ring.color);
     }
   }
+
+  // Sides — quads between every pair of consecutive rings.
+  for (let r = 0; r < rings.length - 1; r++) {
+    const a = ringStarts[r];
+    const b = ringStarts[r + 1];
+    for (let i = 0; i < COMMON_N; i++) {
+      const j = (i + 1) % COMMON_N;
+      indices.push(a + i, b + i, b + j);
+      indices.push(a + i, b + j, a + j);
+    }
+  }
+
+  // Caps — earcut on first and last rings.
+  function emitCap(ring: RingDef, ringStart: number, reverse: boolean): void {
+    const flat: number[] = [];
+    for (const p of ring.contour) flat.push(p.x + ring.xOffset, p.y);
+    const tris = earcut(flat);
+    for (let k = 0; k < tris.length; k += 3) {
+      const ia = tris[k];
+      const ib = tris[k + 1];
+      const ic = tris[k + 2];
+      if (reverse) {
+        indices.push(ringStart + ic, ringStart + ib, ringStart + ia);
+      } else {
+        indices.push(ringStart + ia, ringStart + ib, ringStart + ic);
+      }
+    }
+  }
+  emitCap(rings[rings.length - 1], ringStarts[ringStarts.length - 1], false);
+  emitCap(rings[0], ringStarts[0], true);
 
   // ── Legs ──────────────────────────────────────────────────────
   // Each leg is an N-sided column from z=0 (foot) to z=zHip (hip-attach),

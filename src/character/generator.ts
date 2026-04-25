@@ -26,6 +26,17 @@ export type ToneKey = "primary" | "accent";
 export type ProtrusionKind = "none" | "horns" | "blades" | "spikes" | "antennae";
 export type EyeKind = "double" | "single" | "triple" | "none";
 
+export type ShadeKey =
+  | "primary"
+  | "primaryMid"
+  | "primaryDark"
+  | "primaryLight"
+  | "accent"
+  | "accentDark"
+  | "accentLight";
+
+export type PaletteMode = "smooth" | "vibrant" | "duotone" | "monochrome";
+
 export interface Layer {
   shape: ShapeName;
   r: number;
@@ -34,6 +45,7 @@ export interface Layer {
   role: LayerRole;
   tone: ToneKey;
   inset: boolean;
+  shadeKey: ShadeKey;
 }
 
 export interface Palette {
@@ -66,6 +78,7 @@ export interface Unit {
   faction: string;
   factionKey: string;
   palette: Palette;
+  paletteMode: PaletteMode;
   profile: string;
   layers: Layer[];
   eyes: EyeKind;
@@ -204,6 +217,51 @@ const ARCHETYPES: Record<string, Archetype> = {
   },
 };
 
+function pickShadeKeys(rng: RNG, mode: PaletteMode, count: number): ShadeKey[] {
+  switch (mode) {
+    case "smooth": {
+      // Smooth ascending gradient from primaryDark at base to primaryLight at crown.
+      const ramp: ShadeKey[] = ["primaryDark", "primaryMid", "primary", "primaryLight"];
+      const out: ShadeKey[] = [];
+      for (let i = 0; i < count; i++) {
+        const t = count === 1 ? 0 : i / (count - 1);
+        const idx = Math.min(ramp.length - 1, Math.round(t * (ramp.length - 1)));
+        out.push(ramp[idx]);
+      }
+      return out;
+    }
+    case "monochrome": {
+      const shade = pick(rng, ["primary", "primaryMid", "primaryDark"] as const) as ShadeKey;
+      return Array.from({ length: count }, () => shade);
+    }
+    case "duotone": {
+      const a = pick(rng, ["primary", "primaryDark", "primaryMid"] as const) as ShadeKey;
+      const b = pick(rng, ["accent", "accentDark", "accentLight"] as const) as ShadeKey;
+      // Sometimes flip so accent starts; gives bottom-accent variety.
+      const flip = chance(rng, 0.4);
+      return Array.from({ length: count }, (_, i) => ((i % 2 === 0) === flip ? b : a));
+    }
+    case "vibrant": {
+      // Per-layer role-weighted random across the full palette.
+      const all: ShadeKey[] = [
+        "primary", "primaryMid", "primaryDark", "primaryLight",
+        "accent", "accentDark", "accentLight",
+      ];
+      const out: ShadeKey[] = [];
+      for (let i = 0; i < count; i++) {
+        const isBase = i === 0;
+        const isCrown = i === count - 1;
+        let weights: number[];
+        if (isBase) weights = [0.18, 0.12, 0.30, 0.05, 0.18, 0.17, 0.00];
+        else if (isCrown) weights = [0.10, 0.08, 0.04, 0.18, 0.22, 0.10, 0.28];
+        else weights = [0.18, 0.18, 0.06, 0.10, 0.20, 0.10, 0.18];
+        out.push(weightedPick(rng, all, weights));
+      }
+      return out;
+    }
+  }
+}
+
 function profileSizes(profile: string, n: number, rng: RNG, baseR: number): number[] {
   const sizes: number[] = [];
   for (let i = 0; i < n; i++) {
@@ -252,6 +310,13 @@ export function generateUnit(rng: RNG, opts: GenerateOpts = {}): Unit {
   const baseR = 46;
   const sizes = profileSizes(profile, layerCount, rng, baseR);
 
+  const paletteMode = weightedPick<PaletteMode>(
+    rng,
+    ["smooth", "vibrant", "duotone", "monochrome"],
+    [0.35, 0.35, 0.20, 0.10],
+  );
+  const shadeKeys = pickShadeKeys(rng, paletteMode, layerCount);
+
   const layers: Layer[] = [];
   for (let i = 0; i < layerCount; i++) {
     const isTop = i === layerCount - 1;
@@ -264,7 +329,16 @@ export function generateUnit(rng: RNG, opts: GenerateOpts = {}): Unit {
     const xOffset = chance(rng, 0.18) ? range(rng, -2.5, 2.5) : 0;
     const useAccent = chance(rng, role === "crown" ? 0.55 : role === "base" ? 0.15 : 0.22);
     const inset = chance(rng, role === "body" ? 0.35 : 0.15);
-    layers.push({ shape, r, thickness, x: xOffset, role, tone: useAccent ? "accent" : "primary", inset });
+    layers.push({
+      shape,
+      r,
+      thickness,
+      x: xOffset,
+      role,
+      tone: useAccent ? "accent" : "primary",
+      inset,
+      shadeKey: shadeKeys[i],
+    });
   }
 
   const eyes = weightedPick<EyeKind>(rng, ["double", "single", "triple", "none"], [0.55, 0.18, 0.10, 0.17]);
@@ -302,6 +376,7 @@ export function generateUnit(rng: RNG, opts: GenerateOpts = {}): Unit {
     faction: FACTIONS[factionKey].name,
     factionKey,
     palette,
+    paletteMode,
     profile,
     layers,
     eyes,

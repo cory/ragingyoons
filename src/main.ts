@@ -76,7 +76,7 @@ function updateCharacterCard(unit: Unit): void {
   const cStats = $("cStats");
   if (cName) cName.textContent = unit.name;
   if (cEpithet) cEpithet.textContent = unit.epithet;
-  if (cMeta) cMeta.textContent = `${unit.archetype} · ${unit.faction} · TIER ${unit.tier}`;
+  if (cMeta) cMeta.textContent = `${unit.archetype} · ${unit.faction} · T${unit.tier} · ${unit.paletteMode}`;
   if (cStats) cStats.innerHTML = statsLine(unit.stats);
 }
 
@@ -167,7 +167,7 @@ async function main(): Promise<void> {
     activeIdx = idx;
     const unit = roster[idx];
     const ch = buildCharacter(unit, scene);
-    applyInkEdges(ch);
+    if (inkOn) applyInkEdges(ch);
     current = ch;
     updateCharacterCard(unit);
     setRosterActive(activeIdx);
@@ -210,6 +210,18 @@ async function main(): Promise<void> {
     footprints.setVisible(on);
     if (!on) footprints.clear();
     const btn = document.getElementById("btnPrints");
+    if (btn) btn.classList.toggle("active", on);
+  }
+
+  // Ink edges (off by default — the smooth blending reads better without them).
+  let inkOn = false;
+  function setInk(on: boolean): void {
+    inkOn = on;
+    if (current) {
+      if (on) applyInkEdges(current);
+      else current.root.disableEdgesRendering();
+    }
+    const btn = document.getElementById("btnInk");
     if (btn) btn.classList.toggle("active", on);
   }
 
@@ -292,6 +304,11 @@ async function main(): Promise<void> {
   const printsBtn = document.getElementById("btnPrints");
   if (printsBtn) {
     printsBtn.addEventListener("click", () => setPrints(!printsOn));
+  }
+
+  const inkBtn = document.getElementById("btnInk");
+  if (inkBtn) {
+    inkBtn.addEventListener("click", () => setInk(!inkOn));
   }
 
   const cam = scene.activeCamera as ArcRotateCamera;
