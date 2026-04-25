@@ -1,0 +1,20 @@
+{
+  "name": "ragingyoons",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^7.34.4",
+    "earcut": "^3.0.2"
+  },
+  "devDependencies": {
+    "@types/earcut": "^3.0.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

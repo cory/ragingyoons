@@ -1,0 +1,1568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plate I · A study in motion — kinematics revisited</title>
+<style>
+  :root {
+    --paper:    #EFE9DC;
+    --paper-2:  #E6DFCD;
+    --ink:      #1A1815;
+    --ink-soft: #5C5446;
+    --ink-fade: #8B7E6A;
+    --rule:     #C9C0AB;
+    --accent:   #B8553A;
+    --accent-soft: rgba(184,85,58,.12);
+
+    --display: "Cormorant Garamond", "EB Garamond", Georgia, serif;
+    --mono:    "JetBrains Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+
+  @import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400;1,500&family=JetBrains+Mono:wght@400;500&display=swap");
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    min-height: 100vh;
+    padding: 48px 56px 64px;
+  }
+
+  .frame {
+    max-width: 940px;
+    margin: 0 auto;
+  }
+
+  header {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 22px;
+    margin-bottom: 28px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-fade);
+    margin-bottom: 14px;
+  }
+  .eyebrow .dot { color: var(--accent); margin: 0 8px; }
+  h1 {
+    font-family: var(--display);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 40px;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+    color: var(--ink);
+  }
+  .deck {
+    font-family: var(--display);
+    font-size: 17px;
+    color: var(--ink-soft);
+    font-style: italic;
+    max-width: 620px;
+  }
+
+  .stage {
+    position: relative;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    padding: 18px;
+    margin-bottom: 22px;
+  }
+  .stage svg { display: block; width: 100%; height: auto; }
+
+  .corner {
+    position: absolute;
+    width: 14px; height: 14px;
+    border: 1px solid var(--ink-fade);
+  }
+  .corner.tl { top: -1px;    left: -1px;    border-right: 0; border-bottom: 0; }
+  .corner.tr { top: -1px;    right: -1px;   border-left: 0;  border-bottom: 0; }
+  .corner.bl { bottom: -1px; left: -1px;    border-right: 0; border-top: 0; }
+  .corner.br { bottom: -1px; right: -1px;   border-left: 0;  border-top: 0; }
+
+  .figref {
+    position: absolute;
+    top: 14px; left: 14px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+  }
+
+  .panel {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+    margin-bottom: 28px;
+  }
+
+  .panel section {
+    border: 1px solid var(--rule);
+    padding: 18px 20px;
+    background: var(--paper);
+  }
+  .panel h2 {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+    margin: 0 0 14px;
+    font-weight: 500;
+  }
+
+  .toggles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 18px;
+  }
+  .toggle {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    cursor: pointer;
+    user-select: none;
+    padding: 4px 0;
+  }
+  .toggle input { display: none; }
+  .toggle .box {
+    width: 12px; height: 12px;
+    border: 1px solid var(--ink-soft);
+    flex: 0 0 12px;
+    position: relative;
+    top: 2px;
+    background: var(--paper);
+    transition: all .15s;
+  }
+  .toggle input:checked + .box {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .toggle .lbl {
+    font-family: var(--display);
+    font-size: 16px;
+    font-style: italic;
+    color: var(--ink);
+  }
+  .toggle .annot {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-fade);
+    margin-left: 6px;
+  }
+
+  .speed {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px dotted var(--rule);
+  }
+  .speed label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--display);
+    font-style: italic;
+    font-size: 16px;
+  }
+  .speed input[type=range] {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 1px;
+    background: var(--ink-soft);
+    outline: none;
+  }
+  .speed input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px; height: 12px;
+    background: var(--accent);
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .speed input[type=range]::-moz-range-thumb {
+    width: 12px; height: 12px;
+    background: var(--accent);
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .speed .val {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-fade);
+    width: 38px;
+    text-align: right;
+  }
+
+  .readout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 18px;
+  }
+  .readout .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 1px dotted var(--rule);
+    padding: 4px 0;
+  }
+  .readout .k {
+    font-family: var(--display);
+    font-style: italic;
+    color: var(--ink-soft);
+    font-size: 14px;
+  }
+  .readout .v {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Proportions panel — body geometry sliders */
+  .proportions {
+    border: 1px solid var(--rule);
+    padding: 16px 22px 18px;
+    background: var(--paper);
+    margin-bottom: 22px;
+  }
+  .proportions h2 {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+    margin: 0 0 14px;
+    font-weight: 500;
+  }
+  .prop-axes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 28px;
+  }
+  .prop-axis {
+    padding: 4px 0;
+  }
+  .prop-axis input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 1px;
+    background: var(--ink-soft);
+    outline: none;
+    margin: 0;
+  }
+  .prop-axis input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px; height: 14px;
+    background: var(--accent);
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .prop-axis input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px;
+    background: var(--accent);
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  /* Expression panel — full-width, sliders + presets */
+  .expression {
+    border: 1px solid var(--rule);
+    padding: 18px 22px 20px;
+    background: var(--paper);
+    margin-bottom: 28px;
+  }
+  .expression h2 {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+    margin: 0 0 16px;
+    font-weight: 500;
+  }
+  .axes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 28px;
+    margin-bottom: 14px;
+  }
+  .axis {
+    padding: 6px 0;
+  }
+  .axis-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4px;
+  }
+  .axis-name {
+    font-family: var(--display);
+    font-style: italic;
+    font-size: 17px;
+    color: var(--ink);
+  }
+  .axis-val {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-fade);
+    font-variant-numeric: tabular-nums;
+  }
+  .axis-poles {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+    margin-bottom: 5px;
+  }
+  .axis input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 1px;
+    background: var(--ink-soft);
+    outline: none;
+    margin: 0;
+  }
+  .axis input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px; height: 14px;
+    background: var(--accent);
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .axis input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px;
+    background: var(--accent);
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    border-top: 1px dotted var(--rule);
+    padding-top: 14px;
+    margin-top: 6px;
+  }
+  .gait-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    align-items: center;
+    border-bottom: 1px dotted var(--rule);
+    padding-bottom: 14px;
+    margin-bottom: 14px;
+  }
+  .gait-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+    margin-right: 8px;
+  }
+  .gait-btn {
+    font-family: var(--display);
+    font-style: italic;
+    font-size: 16px;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    padding: 4px 16px 5px;
+    cursor: pointer;
+    transition: all .15s;
+    letter-spacing: 0.01em;
+  }
+  .gait-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .gait-btn.active {
+    background: var(--ink);
+    color: var(--paper);
+    border-color: var(--ink);
+  }
+  .preset {
+    font-family: var(--display);
+    font-style: italic;
+    font-size: 15px;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    padding: 4px 14px 5px;
+    cursor: pointer;
+    transition: all .15s;
+    letter-spacing: 0.01em;
+  }
+  .preset:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .preset.active {
+    background: var(--accent);
+    color: var(--paper);
+    border-color: var(--accent);
+  }
+
+  .notes {
+    border-top: 1px solid var(--rule);
+    padding-top: 22px;
+    column-count: 2;
+    column-gap: 36px;
+    margin-bottom: 24px;
+  }
+  .notes p {
+    font-family: var(--display);
+    font-size: 16.5px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    margin: 0 0 14px;
+    break-inside: avoid;
+  }
+  .notes em {
+    color: var(--ink);
+    font-style: italic;
+  }
+  .notes code {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+
+  .colophon {
+    border-top: 1px solid var(--rule);
+    padding-top: 18px;
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 28px 22px; }
+    .panel { grid-template-columns: 1fr; }
+    .axes { grid-template-columns: 1fr; }
+    .prop-axes { grid-template-columns: 1fr; }
+    .notes { column-count: 1; }
+    h1 { font-size: 30px; }
+  }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <header>
+    <div class="eyebrow">Plate&nbsp;I <span class="dot">·</span> A study in motion <span class="dot">·</span> Gaits & moods</div>
+    <h1>Kinematics of a walking prism</h1>
+    <div class="deck">Four locomotion patterns — walk, run, skip, shuffle — each parameterized by a stance fraction. The expression axes still apply within each gait: a weary run, a proud walk, an anxious shuffle.</div>
+  </header>
+
+  <div class="stage">
+    <span class="corner tl"></span><span class="corner tr"></span>
+    <span class="corner bl"></span><span class="corner br"></span>
+    <div class="figref">Fig. 1</div>
+
+    <svg id="scene" viewBox="0 0 760 380" preserveAspectRatio="xMidYMid meet" aria-label="Walking triangle on a horizontal track">
+      <defs>
+        <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+          <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#D8CFB7" stroke-width="0.4" opacity="0.5"/>
+        </pattern>
+        <marker id="arr-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#1A1815"/>
+        </marker>
+        <marker id="arr-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#B8553A"/>
+        </marker>
+      </defs>
+
+      <rect x="0" y="0" width="760" height="380" fill="url(#grid)"/>
+
+      <!-- horizon line through scene origin -->
+      <line id="horizon" x1="120" y1="220" x2="640" y2="220" stroke="#D8CFB7" stroke-width="0.6" stroke-dasharray="2 4"/>
+
+      <!-- track ellipse (projected from world XY-plane circle) -->
+      <polyline id="track"
+        fill="none"
+        stroke="#5C5446"
+        stroke-width="1"
+        stroke-dasharray="2 3"
+        opacity="0.7"/>
+
+      <!-- footprints (drawn on the ground, between track and walker) -->
+      <g id="footprints"></g>
+
+      <!-- world axes (drawn under walker) -->
+      <g id="world-axes"></g>
+
+      <!-- walker — group of face polygons rendered with painter's algorithm -->
+      <g id="walker"></g>
+
+      <!-- walker local axes (drawn on top of walker) -->
+      <g id="walker-axes"></g>
+
+      <!-- vertex markers -->
+      <g id="vertices"></g>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <section>
+      <h2>Effects</h2>
+      <div class="toggles" id="toggles">
+        <label class="toggle">
+          <input type="checkbox" id="tWalk" checked>
+          <span class="box"></span>
+          <span><span class="lbl">walking</span><span class="annot">feet · X & Z</span></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="tBob" checked>
+          <span class="box"></span>
+          <span><span class="lbl">bob</span><span class="annot">|sin&nbsp;φ|</span></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="tPitch" checked>
+          <span class="box"></span>
+          <span><span class="lbl">pitch</span><span class="annot">R<sub>y</sub> · fwd/back</span></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="tRoll" checked>
+          <span class="box"></span>
+          <span><span class="lbl">roll</span><span class="annot">R<sub>x</sub> · side/side</span></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="tFollow" checked>
+          <span class="box"></span>
+          <span><span class="lbl">track follow</span><span class="annot">R<sub>z</sub> · yaw</span></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="tPrints" checked>
+          <span class="box"></span>
+          <span><span class="lbl">footprints</span><span class="annot">no-slip witness</span></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="tAxes">
+          <span class="box"></span>
+          <span><span class="lbl">axes</span><span class="annot">world + local</span></span>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="tVerts">
+          <span class="box"></span>
+          <span><span class="lbl">vertices</span><span class="annot">11 control pts</span></span>
+        </label>
+      </div>
+      <div class="speed">
+        <label>
+          <span style="color:var(--ink-soft);">tempo override</span>
+          <input type="range" id="speed" min="0" max="200" value="100">
+          <span class="val" id="speedVal">1.00×</span>
+        </label>
+      </div>
+    </section>
+
+    <section>
+      <h2>Live readout</h2>
+      <div class="readout">
+        <div class="row"><span class="k">phase&nbsp;φ</span><span class="v" id="rPhase">0.000</span></div>
+        <div class="row"><span class="k">track&nbsp;θ</span><span class="v" id="rTheta">0.000</span></div>
+        <div class="row"><span class="k">z<sub>R</sub></span><span class="v" id="rZR">0.0</span></div>
+        <div class="row"><span class="k">z<sub>L</sub></span><span class="v" id="rZL">0.0</span></div>
+        <div class="row"><span class="k">step&nbsp;D/2</span><span class="v" id="rStep">0.0</span></div>
+        <div class="row"><span class="k">R<sub>x</sub>&nbsp;roll</span><span class="v" id="rRx">+0.000</span></div>
+        <div class="row"><span class="k">R<sub>y</sub>&nbsp;pitch</span><span class="v" id="rRy">+0.000</span></div>
+        <div class="row"><span class="k">R<sub>z</sub>&nbsp;yaw</span><span class="v" id="rRz">+0.000</span></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="proportions">
+    <h2>Proportions — Body geometry</h2>
+    <div class="prop-axes">
+      <div class="prop-axis">
+        <div class="axis-head"><span class="axis-name">height</span><span class="axis-val" id="vHeight">60</span></div>
+        <div class="axis-poles"><span>short</span><span>tall</span></div>
+        <input type="range" id="aHeight" min="30" max="100" value="60" step="1">
+      </div>
+      <div class="prop-axis">
+        <div class="axis-head"><span class="axis-name">narrowing</span><span class="axis-val" id="vNarrowing">1.00</span></div>
+        <div class="axis-poles"><span>pinched</span><span>flared</span></div>
+        <input type="range" id="aNarrowing" min="50" max="150" value="100" step="5">
+      </div>
+    </div>
+  </section>
+
+  <section class="expression">
+    <h2>Expression — Four axes of feeling</h2>
+    <div class="gait-row">
+      <span class="gait-label">gait</span>
+      <button class="gait-btn active" data-gait="walk">walk</button>
+      <button class="gait-btn" data-gait="run">run</button>
+      <button class="gait-btn" data-gait="skip">skip</button>
+      <button class="gait-btn" data-gait="shuffle">shuffle</button>
+    </div>
+    <div class="axes">
+      <div class="axis">
+        <div class="axis-head"><span class="axis-name">energy</span><span class="axis-val" id="vEnergy">0.00</span></div>
+        <div class="axis-poles"><span>weary</span><span>elated</span></div>
+        <input type="range" id="aEnergy" min="-100" max="100" value="0">
+      </div>
+      <div class="axis">
+        <div class="axis-head"><span class="axis-name">posture</span><span class="axis-val" id="vPosture">0.00</span></div>
+        <div class="axis-poles"><span>defeated</span><span>proud</span></div>
+        <input type="range" id="aPosture" min="-100" max="100" value="0">
+      </div>
+      <div class="axis">
+        <div class="axis-head"><span class="axis-name">composure</span><span class="axis-val" id="vComposure">0.00</span></div>
+        <div class="axis-poles"><span>unsteady</span><span>composed</span></div>
+        <input type="range" id="aComposure" min="-100" max="100" value="0">
+      </div>
+      <div class="axis">
+        <div class="axis-head"><span class="axis-name">stance</span><span class="axis-val" id="vStance">0.00</span></div>
+        <div class="axis-poles"><span>timid</span><span>planted</span></div>
+        <input type="range" id="aStance" min="-100" max="100" value="0">
+      </div>
+    </div>
+    <div class="presets" id="presets">
+      <button class="preset" data-preset="neutral">neutral</button>
+      <button class="preset" data-preset="happy">happy</button>
+      <button class="preset" data-preset="sad">sad</button>
+      <button class="preset" data-preset="angry">angry</button>
+      <button class="preset" data-preset="proud">proud</button>
+      <button class="preset" data-preset="anxious">anxious</button>
+      <button class="preset" data-preset="drunk">drunk</button>
+      <button class="preset" data-preset="sneaking">sneaking</button>
+      <button class="preset" data-preset="weary">weary</button>
+    </div>
+  </section>
+
+  <section class="notes">
+    <p>The walker is a continuous mesh in two stacked sections — a TORSO above and HIPS below — sharing a four-vertex mid-ring at <em>z = torsoZ</em>. Eleven vertices, fourteen faces total. The torso is a rigid box (top quad, four side quads, with the mid-ring as its bottom). The hips wedge from the mid-ring down through the crotch (<em>z = crotchZ</em>) and out to the two feet. The mid-ring belongs to both sections; the seam-faces between them are internal and are not rendered. Two parameters tune the silhouette: <code>torsoZ</code> sets where the seam sits, and <code>midScale</code> sets the mid-ring's footprint relative to the top — <code>1.0</code> matches the top exactly (a boxy torso), <code>&lt; 1</code> tapers the body inward at the waist, <code>&gt; 1</code> flares the hips wider than the shoulders.</p>
+
+    <p>The dominant parameter that distinguishes gaits is the <em>stance fraction</em> <em>f</em> — what fraction of each cycle a foot spends planted. Walking has <em>f &gt; 0.5</em> (a brief double-support overlap as one foot lands before the other lifts). Running has <em>f &lt; 0.5</em> (a flight phase between stances). Shuffling pushes <em>f</em> high (lots of double-support, low foot lift). The no-slip math generalizes: foot's local-x amplitude <em>A</em> = <em>v·T·f / 2</em>, and the track angular rate becomes <code>ω_track = A·ω_phase / (π·R·f)</code>. Each gait also brings its own multipliers for cadence, stride, lift, bob, and a forward-lean offset; expression axes compose with these on top, so a weary run is genuinely slower and lower than a proud run, while still reading as running.</p>
+
+    <p>Order of operations matters, and now there are two pivots. First, walking deforms the feet in the local frame. Then the torso rotates around the mid-ring centroid (its own pitch and roll, posture- and composure-driven). Then the hips rotate around the walker origin (gait-driven roll and pitch, plus slow wobble). Then a whole-body bob translate, then yaw, then track translate, and finally projection. The torso's roll oscillates with the gait but is phase-lagged by π — when one hip drops, the torso rolls toward the planted foot, the human counter-rotation between shoulders and hips that gives a walk much of its life. Faces are then backface-culled, depth-sorted along the eye direction, and painted back-to-front, each shaded by its world-space normal dotted with a soft overhead light.</p>
+
+    <p>Toggle <em>footprints</em> to witness no-slip directly: each plant drops a mark at the foot's world position, and the walker glides past leaving a tidy trail along the track. Toggle <em>axes</em> for the coordinate triads — black at world origin, terracotta riding with the body. The projection is symmetric 30° iso, so the world circle becomes an axis-aligned ellipse with semi-axes <em>R</em>√(3/2) horizontally and <em>R</em>√(1/2) vertically.</p>
+
+    <p>The <em>expression</em> panel exposes four orthogonal axes — energy, posture, composure, stance — each modulating multiple gait constants at once. Energy scales cadence, stride, lift, and bob magnitude together; the no-slip relation <code>ω_track = 2A·ω_phase / πR</code> keeps feet planted as stride changes. Posture lifts or sinks the body each step (asymmetric bob bias) and tilts the rest pose forward or back. Composure inversely scales transient roll and pitch — at low composure a slow drift in roll and pitch is layered on top, like a wobble at the edge of balance. Stance widens or narrows the half-width <em>baseW</em> at the level of the rest pose, so footprints land farther apart or closer together. Named presets — <em>happy</em>, <em>sad</em>, <em>proud</em>, <em>angry</em>, <em>drunk</em>, <em>sneaking</em>, <em>weary</em>, <em>anxious</em> — are simply named points in this four-dimensional space.</p>
+  </section>
+
+  <div class="colophon">
+    <span>Plate I — fig. 1</span>
+    <span>SVG / vanilla JS · One file, no dependencies</span>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+ * WALKING PRISM — A study in motion
+ * ================================================================
+ *
+ * A two-section articulated walker (torso above, hips below) ambulating
+ * on a circular track in a right-handed Z-up world, projected through a
+ * symmetric 30° orthographic isometry to the page.
+ *
+ * The render pipeline, top-down:
+ *
+ *   per frame:
+ *     1. derive per-frame constants from (mood × gait × proportions)
+ *     2. animate feet in walker-local frame    ──┐
+ *     3. apply torso rotation (mid-ring pivot)   │  Stage 2
+ *     4. apply hip rotation   (origin pivot)     │
+ *     5. apply whole-body bob translate        ──┘
+ *     6. yaw to track tangent + translate to track point      (Stage 3)
+ *     7. backface-cull, depth-sort, and paint the faces       (Stage 4)
+ *
+ * No-slip during stance: each foot stays put in world while it's down.
+ * The track angular rate is derived from stride and stance fraction
+ * every frame, so it is automatically consistent across all gaits.
+ *
+ * --- Where to make common edits ----------------------------------
+ *   • New gait        → add an entry to GAITS (and, if its contact
+ *                       pattern isn't 'alternating' or 'skip', a new
+ *                       foot helper alongside walkFoot/skipFoot in §6
+ *                       and dispatch from the animation loop in §10).
+ *   • New mood preset → add an entry to PRESETS.
+ *   • New mood axis   → add to MOOD_AXES, deriveExpression, and the
+ *                       Expression panel HTML.
+ *   • Body geometry   → see makeRestPose / faces.
+ *   • Look & feel     → see PALETTE; LIGHT/EYE for shading.
+ *
+ * --- Section index ------------------------------------------------
+ *   §1  3D math & projection
+ *   §2  Geometry: dimensions, rest pose, faces
+ *   §3  Data tables: GAITS, MOOD_AXES, PRESETS
+ *   §4  Mutable state (mood, currentGait, mutable proportions)
+ *   §5  Expression model — deriveExpression()
+ *   §6  Foot kinematics — walkFoot() / skipFoot() / computeBob()
+ *   §7  Rendering helpers — axes, footprints, faces
+ *   §8  DOM refs (one place)
+ *   §9  UI wiring (one place)
+ *   §10 Animation loop
+ * ================================================================ */
+(() => {
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §1  3D math & projection                                      ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+// Right-handed rotations. All angles in radians.
+const rotX = (p, a) => {
+  const c = Math.cos(a), s = Math.sin(a);
+  return { x: p.x, y: p.y * c - p.z * s, z: p.y * s + p.z * c };
+};
+const rotY = (p, a) => {
+  const c = Math.cos(a), s = Math.sin(a);
+  return { x: p.x * c + p.z * s, y: p.y, z: -p.x * s + p.z * c };
+};
+const rotZ = (p, a) => {
+  const c = Math.cos(a), s = Math.sin(a);
+  return { x: p.x * c - p.y * s, y: p.x * s + p.y * c, z: p.z };
+};
+
+// Symmetric 30° orthographic iso projection.
+//   world X+ → screen lower-right
+//   world Y+ → screen upper-right
+//   world Z+ → screen up
+// The eye direction (1,−1,1)/√3 is the projection's null space — that
+// is, translation along this vector doesn't change the projected image.
+const ISO     = Math.PI / 6;
+const ISO_COS = Math.cos(ISO);    // ≈ 0.866
+const ISO_SIN = Math.sin(ISO);    // = 0.500
+const SCENE_X = 380;              // screen origin x (canvas pixels)
+const SCENE_Y = 220;              // screen origin y
+
+function project(p) {
+  return {
+    x: SCENE_X + (p.x + p.y) * ISO_COS,
+    y: SCENE_Y + (p.x - p.y) * ISO_SIN - p.z
+  };
+}
+
+// Eye and light directions in world space.
+const EYE = (() => {
+  const n = Math.sqrt(3);
+  return { x: 1 / n, y: -1 / n, z: 1 / n };
+})();
+const LIGHT = (() => {
+  const v = { x: 0.35, y: -0.30, z: 0.90 };   // soft overhead key
+  const m = Math.hypot(v.x, v.y, v.z);
+  return { x: v.x / m, y: v.y / m, z: v.z / m };
+})();
+
+// Page palette (matches CSS variables in <style>).
+const PALETTE = {
+  paper:   '#EFE9DC',
+  ink:     '#1A1815',
+  inkSoft: '#5C5446',
+  inkFade: '#8B7E6A',
+  accent:  '#B8553A'
+};
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §2  Geometry: dimensions, rest pose, faces                    ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+// World scale.
+const worldR = 200;                // track radius (walker centerline)
+
+// Walker proportions.
+//   • baseD, baseW are constants — body footprint is fixed.
+//   • baseH and midScale are mutated by the Proportions panel sliders.
+const baseD      = 14;             // half-length forward (local X)
+const baseW      = 22;             // half-width sideways (local Y)
+let   baseH      = 60;             // body height (local Z) — slider
+let   midScale   = 1.0;            // mid-ring footprint vs top — slider
+                                   //   1.0 = boxy, <1 = pinched, >1 = flared
+const torsoFrac  = 0.63;           // mid-ring height as fraction of baseH
+const crotchFrac = 0.37;           // crotch height  as fraction of baseH
+
+// Vertex layout (11 vertices). Indices are referenced throughout the
+// code — don't reorder without updating faces[] and the foot-index
+// constants below.
+//
+//        0──────3              top of torso         z = baseH
+//        │ TORSO│
+//        │      │
+//        4──────7              mid-ring (seam)      z = baseH·torsoFrac
+//         \    /
+//          \  /  HIPS
+//           ●                  crotch       (8)     z = baseH·crotchFrac
+//          / \
+//         9   10               feet (animated)      z = 0
+//
+// Right foot is index 9, left foot index 10. Crotch is index 8. Torso
+// top is 0–3 (rigid). Mid-ring is 4–7, shared between torso and hips.
+function makeRestPose(footY) {
+  const torsoZ  = baseH * torsoFrac;
+  const crotchZ = baseH * crotchFrac;
+  const midD    = baseD * midScale;
+  const midW    = baseW * midScale;
+  return [
+    { x: +baseD, y: -baseW, z: baseH   },   // 0  top front-right
+    { x: +baseD, y: +baseW, z: baseH   },   // 1  top front-left
+    { x: -baseD, y: +baseW, z: baseH   },   // 2  top back-left
+    { x: -baseD, y: -baseW, z: baseH   },   // 3  top back-right
+    { x: +midD,  y: -midW,  z: torsoZ  },   // 4  mid front-right
+    { x: +midD,  y: +midW,  z: torsoZ  },   // 5  mid front-left
+    { x: -midD,  y: +midW,  z: torsoZ  },   // 6  mid back-left
+    { x: -midD,  y: -midW,  z: torsoZ  },   // 7  mid back-right
+    { x:      0, y:      0, z: crotchZ },   // 8  crotch
+    { x:      0, y: -footY, z:      0  },   // 9  right foot
+    { x:      0, y: +footY, z:      0  }    // 10 left  foot
+  ];
+}
+
+// Faces — vertex indices ordered for outward-facing normals (RH rule).
+// The shared mid-ring is internal between the two sections, so we don't
+// render either section's seam-face (would be invisible anyway).
+const faces = [
+  // ── TORSO ─────────────────────────────────────────────────────
+  [0, 1, 2, 3],     // top quad                outward +Z
+  [0, 4, 5, 1],     // front quad              outward +X
+  [3, 2, 6, 7],     // back  quad              outward -X
+  [0, 3, 7, 4],     // right end               outward -Y
+  [1, 5, 6, 2],     // left  end               outward +Y
+  // ── HIPS — front pentagon, fanned from crotch (outward +X) ────
+  [8, 4, 9],        // right hip leg (front)
+  [8, 5, 4],        // upper torso  (front)
+  [8, 10, 5],       // left  hip leg (front)
+  // ── HIPS — back pentagon, fanned from crotch (outward -X) ─────
+  [8, 9, 7],        // right hip leg (back)
+  [8, 7, 6],        // upper torso  (back)
+  [8, 6, 10],       // left  hip leg (back)
+  // ── End triangles ─────────────────────────────────────────────
+  [4, 7, 9],        // right end               outward -Y
+  [5, 10, 6]        // left  end               outward +Y
+];
+
+// Foot indices and torso-top index range (referenced in animation loop).
+const FOOT_R    = 9;
+const FOOT_L    = 10;
+const TORSO_TOP = [0, 1, 2, 3];    // vertices that get torso rotation
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §3  Data tables: gaits, mood axes, presets                    ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+// Baseline magnitudes — neutral mood, walking gait gives these values.
+// All gait/mood multipliers compose against these.
+const footY0     = 22;             // baseline foot lateral offset
+const strideAmp0 = 24;             // baseline stride amplitude
+const liftAmp0   = 14;             // baseline foot lift apex
+const bobAmp0    = 5;              // baseline bob magnitude
+const pitchAmp0  = 0.10;           // baseline transient pitch (composed)
+const rollAmp0   = 0.13;           // baseline transient roll  (composed)
+const phaseRate0 = 3.6;            // baseline gait cadence (rad/sec)
+
+// Gaits — each is a named locomotion pattern with its own stance fraction
+// (the dominant parameter), plus multipliers that compose with mood-driven
+// scales. Expression axes still work within each gait — e.g. weary run,
+// anxious shuffle.
+//
+// Adding a new gait:
+//   1. Add an entry below.
+//   2. Pick an existing contactPattern, or implement a new foot helper
+//      alongside walkFoot/skipFoot in §6 and dispatch from the loop.
+//   3. Add a button to the Expression panel HTML (data-gait="<n>").
+const GAITS = {
+  walk: {
+    stanceFrac: 0.55,    // > 0.5 → double-support overlap
+    cadence:    1.0,
+    stride:     1.0,
+    lift:       1.0,
+    bob:        1.0,
+    bobShape:   'walk',  // body high at mid-stance (vault)
+    leanOffset: 0,
+    contactPattern: 'alternating'
+  },
+  run: {
+    stanceFrac: 0.30,    // < 0.5 → flight phase
+    cadence:    1.4,
+    stride:     1.7,
+    lift:       1.6,
+    bob:        2.5,
+    bobShape:   'run',   // body low at mid-stance (compression)
+    leanOffset: -0.18,   // ~10° forward whole-body lean
+    contactPattern: 'alternating'
+  },
+  shuffle: {
+    stanceFrac: 0.75,    // heavy double-support
+    cadence:    0.7,
+    stride:     0.4,
+    lift:       0.1,     // foot barely clears the ground
+    bob:        0.3,
+    bobShape:   'walk',
+    leanOffset: -0.10,
+    contactPattern: 'alternating'
+  },
+  skip: {
+    stanceFrac: 0.30,    // total stance per foot (= 2 × 0.15 contacts)
+    cadence:    1.1,
+    stride:     1.2,
+    lift:       1.5,
+    bob:        2.5,
+    bobShape:   'skip',  // four oscillations per cycle
+    leanOffset: 0.05,
+    contactPattern: 'skip',
+    hopRatio:   0.15     // hop world distance as fraction of cycle (D)
+                         //   → hop = 0.15·D, alternating step = 0.35·D
+  }
+};
+
+// Mood axes. Each is a slider in [-1, +1] with two named poles.
+// Adding a new axis:
+//   1. Add the name below (must match its slider's HTML id "a<Name>").
+//   2. Read m.<name> in deriveExpression() and apply it to constants.
+//   3. Add a slider to the Expression panel HTML.
+//   4. (Optional) tweak presets in PRESETS.
+const MOOD_AXES = ['energy', 'posture', 'composure', 'stance'];
+
+// Mood presets — points in the four-axis expression space.
+// Tuple order matches MOOD_AXES.
+const PRESETS = {
+  neutral:  [ 0.00,  0.00,  0.00,  0.00],
+  happy:    [+0.55, +0.55, +0.20, +0.10],
+  sad:      [-0.55, -0.65, -0.15, -0.30],
+  angry:    [+0.80, -0.30, +0.10, +0.60],
+  proud:    [+0.10, +0.65, +0.55, +0.50],
+  anxious:  [+0.30, -0.20, -0.55, -0.60],
+  drunk:    [-0.10, -0.10, -0.95, +0.30],
+  sneaking: [-0.45, -0.40, +0.30, -0.45],
+  weary:    [-0.80, -0.55, +0.05, -0.10]
+};
+
+// Slow-drift wobble for low composure (drunk feel).
+// Two slightly-incommensurate frequencies so the lean doesn't look periodic.
+const WOBBLE_ROLL_FREQ   = 0.70;   // rad/sec
+const WOBBLE_PITCH_FREQ  = 0.55;
+const WOBBLE_PITCH_PHASE = 1.30;
+
+// Footprint visual lifetime.
+const FOOTPRINT_MAX_AGE = 4.0;     // seconds before fully faded
+const FOOTPRINT_MAX     = 80;      // ring buffer capacity
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §4  Mutable state                                             ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+// Mood — sliders write into this object every input event.
+const mood = { energy: 0, posture: 0, composure: 0, stance: 0 };
+
+// Active gait — gait buttons write into this.
+let currentGait = 'walk';
+
+// Animation clocks (mutated by the loop).
+let phase    = 0;                  // gait phase, radians [0, 2π)
+let trackPhi = 0;                  // angle around track, radians [0, 2π)
+let slowTime = 0;                  // for low-frequency wobble drift
+
+// Footprint state — appended on plant detection, aged each frame.
+const footprints = [];             // {x, y, age, side}
+let prevRlifted = false;
+let prevLlifted = false;
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §5  Expression model — (mood, gait) → per-frame constants     ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+// The walker has two pivots:
+//   HIPS  — at walker origin. Gait-driven roll/pitch (and slow wobble)
+//           are applied here, to ALL vertices.
+//   TORSO — at the mid-ring centroid (0, 0, baseH·torsoFrac). Posture-
+//           driven pitch and a phase-lagged roll happen here, applied
+//           to TORSO_TOP only. The torso roll lags hip roll by π — the
+//           human counter-rotation between shoulders and hips.
+//
+// No-slip: trackRate = strideAmp · phaseRate / (π · R · stanceFrac).
+// This is unchanged across gaits (skip splits stance across two
+// contacts, but the total time-on-ground per foot per cycle is still f).
+function deriveExpression(m, gait) {
+  const e = m.energy, p = m.posture, c = m.composure, s = m.stance;
+
+  // Energy axis × gait multipliers
+  const energyScale    = 1 + 0.6 * e - 0.5 * Math.max(0, -e);
+  const phaseRate      = phaseRate0 * gait.cadence * energyScale;
+  const strideAmp      = strideAmp0 * gait.stride  * (1 + 0.4 * e);
+  const liftFromEnergy = Math.max(2, liftAmp0 * (1 + 0.6 * e));
+  const liftAmp        = liftFromEnergy * gait.lift;
+  const bobMag         = bobAmp0 * gait.bob * (0.6 + 0.7 * Math.abs(e));
+
+  // Posture: TORSO lean (mood) and HIP lean (gait). They compose because
+  // torso rotation is applied first, in a frame that is then itself
+  // rotated by the hips.
+  const torsoPitchBaseline = -p * 0.25;        // ±14° at extremes
+  const hipPitchBaseline   = gait.leanOffset;  // gait's whole-body lean
+
+  // Bob bias from posture, asymmetric:
+  //   posture =  0  → +1.0  (normal lift on push-off)
+  //   posture = +1  → +2.0  (springy / proud)
+  //   posture = -1  → -1.0  (sinks each step / sad)
+  const bobBias = 1 + (p >= 0 ? p : 2 * p);
+
+  // Composure axis: hip transients + torso roll.
+  const composureScale = 1 - 0.7 * c;
+  const hipPitchAmp    = pitchAmp0 * composureScale * (1 + 0.4 * Math.abs(e));
+  const hipRollAmp     = rollAmp0  * composureScale * (1 + 0.3 * Math.max(0, -e));
+  const torsoRollAmp   = 0.18 * composureScale * (1 + 0.4 * Math.max(0, -c));
+
+  // Stance axis: foot lateral offset only (body width is fixed).
+  const footY = footY0 * (1 + 0.45 * s);
+
+  // Slow drift overlay for low composure (drunk feel).
+  const wobbleGain     = Math.max(0, -c);
+  const wobbleAmpRoll  = 0.18 * wobbleGain;
+  const wobbleAmpPitch = 0.10 * wobbleGain;
+
+  // Track angular rate from no-slip relation.
+  const stanceFrac = gait.stanceFrac;
+  const trackRate  = strideAmp * phaseRate / (Math.PI * worldR * stanceFrac);
+
+  return {
+    phaseRate, trackRate,
+    strideAmp, liftAmp, bobAmp: bobMag, bobBias,
+    hipPitchAmp, hipPitchBaseline,
+    hipRollAmp,
+    torsoPitchBaseline, torsoRollAmp,
+    wobbleAmpRoll, wobbleAmpPitch,
+    footY,
+    stanceFrac,
+    bobShape: gait.bobShape,
+    contactPattern: gait.contactPattern,
+    hopRatio: gait.hopRatio || 0
+  };
+}
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §6  Foot kinematics & bob shape                               ║
+// ╚═══════════════════════════════════════════════════════════════╝
+//
+// Each helper returns { x, z, lifted } for a foot at cycle phase phi
+// ∈ [0, 1). Use phi as-is for the right foot, and (phi + 0.5) % 1 for
+// the left foot — both helpers handle the foot symmetrically.
+//
+// Local-x is the foot's offset forward of the body in the walker frame.
+// During stance, local-x ramps linearly with slope -D per cycle phase
+// — exactly the walker's forward speed, so the foot stays put in world.
+
+// Walking / running / shuffle — one stance window of duration f per cycle.
+//   stance: phi ∈ [0, f)         linear ramp +A → -A
+//   swing:  phi ∈ [f, 1)         cosine arc -A → +A, parabolic lift
+function walkFoot(phi, f, A, liftAmp) {
+  if (phi < f) {
+    const tau = phi / f;
+    return { x: A * (1 - 2 * tau), z: 0, lifted: false };
+  }
+  const tau = (phi - f) / (1 - f);
+  return {
+    x: -A * Math.cos(Math.PI * tau),
+    z:  Math.sin(Math.PI * tau) * liftAmp,
+    lifted: true
+  };
+}
+
+// Skipping — two stance windows per foot per cycle (step + hop) before
+// the other foot takes over. Cycle is divided into 4 quarters; right
+// foot is grounded in quarters 1 and 2, left in quarters 3 and 4.
+//
+// World distances between consecutive contacts:
+//   step → hop  = h·D       (small, foot bounces forward a little)
+//   hop  → step = (0.5−h)·D (alternating step, big forward motion)
+// where D = 2·A/f and h = hopRatio.
+//
+// Local-x at piece boundaries (right foot):
+//   step start:  +A
+//   step end:    +A − (f/2)·D
+//   hop start:   +A − (0.25 − h)·D
+//   hop end:     +A − (0.25 − h)·D − (f/2)·D
+//   next cycle:  +A
+const SKIP_HOP_LIFT = 0.55;        // hop swing peak as fraction of full liftAmp
+function skipFoot(phi, f, A, D, h, liftAmp) {
+  const half   = f / 2;
+  const xStep0 = A;
+  const xStep1 = A - half * D;
+  const xHop0  = A - (0.25 - h) * D;
+  const xHop1  = xHop0 - half * D;
+  const xCycle = A;
+
+  if (phi < half) {
+    // Step stance — linear ramp (no slip)
+    const tau = phi / half;
+    return { x: xStep0 + (xStep1 - xStep0) * tau, z: 0, lifted: false };
+  }
+  if (phi < 0.25) {
+    // Step → Hop air — small lift, eased x
+    const tau   = (phi - half) / (0.25 - half);
+    const eased = (1 - Math.cos(Math.PI * tau)) / 2;
+    return {
+      x: xStep1 + (xHop0 - xStep1) * eased,
+      z: Math.sin(Math.PI * tau) * liftAmp * SKIP_HOP_LIFT,
+      lifted: true
+    };
+  }
+  if (phi < 0.25 + half) {
+    // Hop stance — linear ramp
+    const tau = (phi - 0.25) / half;
+    return { x: xHop0 + (xHop1 - xHop0) * tau, z: 0, lifted: false };
+  }
+  // Long swing forward to next step — full lift
+  const tau   = (phi - 0.25 - half) / (1 - 0.25 - half);
+  const eased = (1 - Math.cos(Math.PI * tau)) / 2;
+  return {
+    x: xHop1 + (xCycle - xHop1) * eased,
+    z: Math.sin(Math.PI * tau) * liftAmp,
+    lifted: true
+  };
+}
+
+// Bob waveform. Returns the body's vertical offset signal in roughly [-1, 1].
+//   'walk' shape: peaks at mid-stance moments (vault), zero elsewhere
+//                 (half-rectified cosine, always non-negative).
+//   'run'  shape: signed — troughs at mid-stance (compression),
+//                 peaks at mid-flight (apex).
+//   'skip' shape: signed, FOUR oscillations per cycle (one per contact).
+//                 Body lows at mid-stances, highs at mid-airs.
+function computeBob(phi, f, shape) {
+  if (shape === 'skip') {
+    // Period 0.25 cycle; aligned so mid-R-step (phi = f/4) is a low.
+    return -Math.cos(8 * Math.PI * (phi - f / 4));
+  }
+  // Period 0.5 cycle; aligned so mid-R-stance (phi = f/2) is at angle 0.
+  const arg = 4 * Math.PI * (phi - f / 2);
+  return shape === 'walk' ? Math.max(0, Math.cos(arg)) : -Math.cos(arg);
+}
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §7  Rendering helpers                                         ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+// --- Face geometry & shading --------------------------------------
+
+function faceNormal(face, pts) {
+  const a = pts[face[0]], b = pts[face[1]], c = pts[face[2]];
+  const e1 = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const e2 = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+  const n  = {
+    x: e1.y * e2.z - e1.z * e2.y,
+    y: e1.z * e2.x - e1.x * e2.z,
+    z: e1.x * e2.y - e1.y * e2.x
+  };
+  const m = Math.hypot(n.x, n.y, n.z) || 1;
+  return { x: n.x / m, y: n.y / m, z: n.z / m };
+}
+
+function faceCentroid(face, pts) {
+  let cx = 0, cy = 0, cz = 0;
+  for (const i of face) { cx += pts[i].x; cy += pts[i].y; cz += pts[i].z; }
+  return { x: cx / face.length, y: cy / face.length, z: cz / face.length };
+}
+
+// Lerp between deep ink (brightness 0) and warm soft-ink (brightness 1).
+function shadeRGB(brightness) {
+  const t = Math.max(0, Math.min(1, brightness));
+  const r = Math.round(0x1A + (0x6E - 0x1A) * t);
+  const g = Math.round(0x18 + (0x64 - 0x18) * t);
+  const b = Math.round(0x15 + (0x55 - 0x15) * t);
+  return `rgb(${r},${g},${b})`;
+}
+
+// --- Coordinate-axes overlay --------------------------------------
+
+const AXIS_LEN_WORLD  = 56;        // length of world-axes lines
+const AXIS_LEN_WALKER = 30;        // length of walker-axes lines
+const AXIS_LABEL_OFF  = 9;         // pixels past line endpoint for label
+
+function svgLine(a, b, color, marker) {
+  return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${color}" stroke-width="1.2" marker-end="url(#${marker})"/>`;
+}
+function svgLabel(originScr, endScr, text, color) {
+  const dx  = endScr.x - originScr.x;
+  const dy  = endScr.y - originScr.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const x   = endScr.x + (dx / len) * AXIS_LABEL_OFF;
+  const y   = endScr.y + (dy / len) * AXIS_LABEL_OFF + 3.5;  // baseline tweak
+  return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" fill="${color}" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="500" text-anchor="middle" letter-spacing="0.04em">${text}</text>`;
+}
+
+function drawWorldAxes(target) {
+  const L  = AXIS_LEN_WORLD;
+  const o  = project({ x: 0, y: 0, z: 0 });
+  const ex = project({ x: L, y: 0, z: 0 });
+  const ey = project({ x: 0, y: L, z: 0 });
+  const ez = project({ x: 0, y: 0, z: L });
+  target.innerHTML =
+    svgLine(o, ex, PALETTE.ink, 'arr-ink') +
+    svgLine(o, ey, PALETTE.ink, 'arr-ink') +
+    svgLine(o, ez, PALETTE.ink, 'arr-ink') +
+    svgLabel(o, ex, 'X', PALETTE.ink) +
+    svgLabel(o, ey, 'Y', PALETTE.ink) +
+    svgLabel(o, ez, 'Z', PALETTE.ink);
+}
+
+function drawWalkerAxes(target, centerWorld, roll, pitch, yaw) {
+  const L = AXIS_LEN_WALKER;
+  // Apply full rotation chain to each unit basis vector.
+  const xDir = rotZ(rotY(rotX({ x: 1, y: 0, z: 0 }, roll), pitch), yaw);
+  const yDir = rotZ(rotY(rotX({ x: 0, y: 1, z: 0 }, roll), pitch), yaw);
+  const zDir = rotZ(rotY(rotX({ x: 0, y: 0, z: 1 }, roll), pitch), yaw);
+  const o  = project(centerWorld);
+  const ex = project({ x: centerWorld.x + L * xDir.x, y: centerWorld.y + L * xDir.y, z: centerWorld.z + L * xDir.z });
+  const ey = project({ x: centerWorld.x + L * yDir.x, y: centerWorld.y + L * yDir.y, z: centerWorld.z + L * yDir.z });
+  const ez = project({ x: centerWorld.x + L * zDir.x, y: centerWorld.y + L * zDir.y, z: centerWorld.z + L * zDir.z });
+  target.innerHTML =
+    svgLine(o, ex, PALETTE.accent, 'arr-acc') +
+    svgLine(o, ey, PALETTE.accent, 'arr-acc') +
+    svgLine(o, ez, PALETTE.accent, 'arr-acc') +
+    svgLabel(o, ex, 'x', PALETTE.accent) +
+    svgLabel(o, ey, 'y', PALETTE.accent) +
+    svgLabel(o, ez, 'z', PALETTE.accent);
+}
+
+// --- Footprints (projected onto the ground plane) -----------------
+
+function addPrint(side, worldXY) {
+  footprints.push({ x: worldXY.x, y: worldXY.y, age: 0, side });
+  if (footprints.length > FOOTPRINT_MAX) footprints.shift();
+}
+
+// Always ages + culls (so toggling display off doesn't preserve a stale
+// set when toggled back on); only emits SVG when visible is true.
+function renderFootprints(target, dt, visible) {
+  let svg = '';
+  for (let i = footprints.length - 1; i >= 0; i--) {
+    footprints[i].age += dt;
+    if (footprints[i].age > FOOTPRINT_MAX_AGE) {
+      footprints.splice(i, 1);
+      continue;
+    }
+    if (!visible) continue;
+    const fp = footprints[i];
+    const op = (1 - fp.age / FOOTPRINT_MAX_AGE) * 0.55;
+    const sp = project({ x: fp.x, y: fp.y, z: 0 });
+    svg += `<ellipse cx="${sp.x.toFixed(1)}" cy="${sp.y.toFixed(1)}" rx="3.6" ry="2.0" fill="${PALETTE.accent}" opacity="${op.toFixed(3)}"/>`;
+  }
+  target.innerHTML = svg;
+}
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §8  DOM refs                                                  ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+const dom = {
+  // Scene
+  walker:      document.getElementById('walker'),
+  worldAxes:   document.getElementById('world-axes'),
+  walkerAxes:  document.getElementById('walker-axes'),
+  vertices:    document.getElementById('vertices'),
+  footprints:  document.getElementById('footprints'),
+  track:       document.getElementById('track'),
+  // Effect toggles
+  tWalk:       document.getElementById('tWalk'),
+  tBob:        document.getElementById('tBob'),
+  tPitch:      document.getElementById('tPitch'),
+  tRoll:       document.getElementById('tRoll'),
+  tFollow:     document.getElementById('tFollow'),
+  tPrints:     document.getElementById('tPrints'),
+  tAxes:       document.getElementById('tAxes'),
+  tVerts:      document.getElementById('tVerts'),
+  // Tempo override slider
+  speed:       document.getElementById('speed'),
+  speedVal:    document.getElementById('speedVal'),
+  // Proportions sliders
+  aHeight:     document.getElementById('aHeight'),
+  vHeight:     document.getElementById('vHeight'),
+  aNarrowing:  document.getElementById('aNarrowing'),
+  vNarrowing:  document.getElementById('vNarrowing'),
+  // Mood axis sliders, indexed by axis name
+  moodAxes:    Object.fromEntries(MOOD_AXES.map(name => [name, {
+    input: document.getElementById('a' + name[0].toUpperCase() + name.slice(1)),
+    label: document.getElementById('v' + name[0].toUpperCase() + name.slice(1))
+  }])),
+  presetEls:   document.querySelectorAll('.preset'),
+  gaitBtns:    document.querySelectorAll('.gait-btn'),
+  // Readout
+  rPhase:      document.getElementById('rPhase'),
+  rTheta:      document.getElementById('rTheta'),
+  rZR:         document.getElementById('rZR'),
+  rZL:         document.getElementById('rZL'),
+  rStep:       document.getElementById('rStep'),
+  rRx:         document.getElementById('rRx'),
+  rRy:         document.getElementById('rRy'),
+  rRz:         document.getElementById('rRz')
+};
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §9  UI wiring                                                 ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+// One-shot: pre-build the track polyline (projection of the world circle).
+{
+  const N = 96, pts = [];
+  for (let i = 0; i <= N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const sp = project({ x: worldR * Math.cos(a), y: worldR * Math.sin(a), z: 0 });
+    pts.push(sp.x.toFixed(1) + ',' + sp.y.toFixed(1));
+  }
+  dom.track.setAttribute('points', pts.join(' '));
+}
+
+// Tempo slider — multiplies phase advance per frame.
+dom.speed.addEventListener('input', () => {
+  dom.speedVal.textContent = (dom.speed.value / 100).toFixed(2) + '×';
+});
+
+// Mood sliders → mood object.
+function syncMoodFromSliders() {
+  for (const name of MOOD_AXES) {
+    const v = parseFloat(dom.moodAxes[name].input.value) / 100;
+    mood[name] = v;
+    dom.moodAxes[name].label.textContent = (v >= 0 ? '+' : '') + v.toFixed(2);
+  }
+}
+for (const name of MOOD_AXES) {
+  dom.moodAxes[name].input.addEventListener('input', () => {
+    syncMoodFromSliders();
+    clearActivePreset();
+  });
+}
+
+function clearActivePreset() {
+  dom.presetEls.forEach(el => el.classList.remove('active'));
+}
+function applyPreset(name) {
+  const v = PRESETS[name];
+  if (!v) return;
+  MOOD_AXES.forEach((axis, i) => {
+    dom.moodAxes[axis].input.value = v[i] * 100;
+  });
+  syncMoodFromSliders();
+  clearActivePreset();
+  const el = document.querySelector(`.preset[data-preset="${name}"]`);
+  if (el) el.classList.add('active');
+}
+dom.presetEls.forEach(el => {
+  el.addEventListener('click', () => applyPreset(el.dataset.preset));
+});
+
+// Proportions sliders → mutable globals (baseH, midScale).
+function syncProportions() {
+  baseH    = parseFloat(dom.aHeight.value);
+  midScale = parseFloat(dom.aNarrowing.value) / 100;
+  dom.vHeight.textContent    = baseH.toFixed(0);
+  dom.vNarrowing.textContent = midScale.toFixed(2);
+}
+dom.aHeight.addEventListener('input', syncProportions);
+dom.aNarrowing.addEventListener('input', syncProportions);
+
+// Gait buttons → currentGait.
+function selectGait(name) {
+  if (!GAITS[name]) return;
+  currentGait = name;
+  dom.gaitBtns.forEach(el => {
+    el.classList.toggle('active', el.dataset.gait === name);
+  });
+}
+dom.gaitBtns.forEach(el => {
+  el.addEventListener('click', () => selectGait(el.dataset.gait));
+});
+
+// Initial state.
+applyPreset('neutral');
+syncProportions();
+
+// ╔═══════════════════════════════════════════════════════════════╗
+// ║ §10  Animation loop                                           ║
+// ╚═══════════════════════════════════════════════════════════════╝
+
+let lastFrameTime = performance.now();
+
+function frame(now) {
+  const dt = Math.min(64, now - lastFrameTime) / 1000;
+  lastFrameTime = now;
+
+  // ─── Per-frame derived constants ──────────────────────────────
+  const ex = deriveExpression(mood, GAITS[currentGait]);
+  slowTime += dt;
+
+  const speedMult = dom.speed.value / 100;
+  phase    += dt * ex.phaseRate * speedMult;
+  trackPhi += dt * ex.trackRate * speedMult;
+  if (phase    > Math.PI * 2) phase    -= Math.PI * 2;
+  if (trackPhi > Math.PI * 2) trackPhi -= Math.PI * 2;
+
+  const phi = phase / (Math.PI * 2);
+  const f   = ex.stanceFrac;
+  const A   = ex.strideAmp;
+
+  const wobbleRoll  = Math.sin(slowTime * WOBBLE_ROLL_FREQ)  * ex.wobbleAmpRoll;
+  const wobblePitch = Math.sin(slowTime * WOBBLE_PITCH_FREQ + WOBBLE_PITCH_PHASE) * ex.wobbleAmpPitch;
+
+  // ─── Stage 1 — animate feet in walker-local frame ─────────────
+  const local = makeRestPose(ex.footY);
+  let rLifted = false, lLifted = false;
+  let zR = 0, zL = 0;
+
+  if (dom.tWalk.checked) {
+    let r, l;
+    if (ex.contactPattern === 'skip') {
+      const D = 2 * A / f;             // walker's per-cycle world distance
+      r = skipFoot(phi, f, A, D, ex.hopRatio, ex.liftAmp);
+      l = skipFoot((phi + 0.5) % 1, f, A, D, ex.hopRatio, ex.liftAmp);
+    } else {
+      r = walkFoot(phi, f, A, ex.liftAmp);
+      l = walkFoot((phi + 0.5) % 1, f, A, ex.liftAmp);
+    }
+    local[FOOT_R].x += r.x;  local[FOOT_R].z += r.z;  rLifted = r.lifted;  zR = r.z;
+    local[FOOT_L].x += l.x;  local[FOOT_L].z += l.z;  lLifted = l.lifted;  zL = l.z;
+  }
+
+  // ─── Stage 2 — torso rotation, hip rotation, bob ──────────────
+  // (a) torso rotation around mid-ring centroid (TORSO_TOP only)
+  // (b) hip rotation around walker origin (all vertices)
+  // (c) whole-body bob translate in z
+  const bobZ = dom.tBob.checked
+    ? computeBob(phi, f, ex.bobShape) * ex.bobAmp * ex.bobBias
+    : 0;
+
+  const hipPitch =
+    ex.hipPitchBaseline +
+    (dom.tPitch.checked ? Math.sin(phase) * ex.hipPitchAmp : 0) +
+    wobblePitch;
+  const hipRoll =
+    (dom.tRoll.checked ? -Math.sin(phase) * ex.hipRollAmp : 0) +
+    wobbleRoll;
+
+  // Torso roll lags hip roll by π — human counter-rotation.
+  const torsoRoll = dom.tRoll.checked
+    ? -Math.sin(phase + Math.PI) * ex.torsoRollAmp
+    : 0;
+  const torsoPitch = ex.torsoPitchBaseline;
+
+  const PIVOT_Z = baseH * torsoFrac;   // mid-ring centroid in walker frame
+
+  const bodyLocal = local.map((p, idx) => {
+    let q = { x: p.x, y: p.y, z: p.z };
+    // (a) torso rotation, only on TORSO_TOP, around mid-ring centroid
+    if (idx <= 3) {
+      q.z -= PIVOT_Z;
+      q   = rotX(q, torsoRoll);
+      q   = rotY(q, torsoPitch);
+      q.z += PIVOT_Z;
+    }
+    // (b) hip rotation, on all vertices, around walker origin
+    q = rotX(q, hipRoll);
+    q = rotY(q, hipPitch);
+    // (c) whole-body bob
+    q.z += bobZ;
+    return q;
+  });
+
+  // ─── Stage 3 — yaw to track tangent, translate to track point ─
+  const yawAngle = dom.tFollow.checked ? trackPhi + Math.PI / 2 : 0;
+  const trackX   = worldR * Math.cos(trackPhi);
+  const trackY   = worldR * Math.sin(trackPhi);
+  const worldPts = bodyLocal.map(p => {
+    const q = rotZ(p, yawAngle);
+    return { x: q.x + trackX, y: q.y + trackY, z: q.z };
+  });
+
+  // Footprint capture — emit on the lifted→grounded transition.
+  if (dom.tWalk.checked) {
+    if (prevRlifted && !rLifted) addPrint('R', worldPts[FOOT_R]);
+    if (prevLlifted && !lLifted) addPrint('L', worldPts[FOOT_L]);
+    prevRlifted = rLifted;
+    prevLlifted = lLifted;
+  } else {
+    prevRlifted = false;
+    prevLlifted = false;
+  }
+  renderFootprints(dom.footprints, dt, dom.tPrints.checked);
+
+  // ─── Stage 4 — backface cull, depth sort, paint ───────────────
+  const screen = worldPts.map(project);
+  const renderable = [];
+  for (const face of faces) {
+    const n = faceNormal(face, worldPts);
+    const dotEye = n.x * EYE.x + n.y * EYE.y + n.z * EYE.z;
+    if (dotEye <= 0) continue;
+    const c = faceCentroid(face, worldPts);
+    const depth      = c.x * EYE.x + c.y * EYE.y + c.z * EYE.z;
+    const lightDot   = n.x * LIGHT.x + n.y * LIGHT.y + n.z * LIGHT.z;
+    const brightness = 0.15 + 0.85 * Math.max(0, lightDot);
+    renderable.push({ face, depth, brightness });
+  }
+  renderable.sort((a, b) => a.depth - b.depth);   // back-to-front
+
+  let svg = '';
+  for (const { face, brightness } of renderable) {
+    const pts = face.map(i =>
+      screen[i].x.toFixed(2) + ',' + screen[i].y.toFixed(2)
+    ).join(' ');
+    svg += `<polygon points="${pts}" fill="${shadeRGB(brightness)}" stroke="${PALETTE.ink}" stroke-width="0.9" stroke-linejoin="round"/>`;
+  }
+  dom.walker.innerHTML = svg;
+
+  // Optional overlays.
+  if (dom.tAxes.checked) {
+    drawWorldAxes(dom.worldAxes);
+    // Walker axes anchored at the prism's centroid (~2/3 up the body),
+    // translating with bob and orienting with the hip rotation chain.
+    const center = { x: trackX, y: trackY, z: bobZ + baseH * (2 / 3) };
+    drawWalkerAxes(dom.walkerAxes, center, hipRoll, hipPitch, yawAngle);
+  } else {
+    dom.worldAxes.innerHTML  = '';
+    dom.walkerAxes.innerHTML = '';
+  }
+  if (dom.tVerts.checked) {
+    dom.vertices.innerHTML = screen.map(
+      p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.4" fill="${PALETTE.paper}" stroke="${PALETTE.accent}" stroke-width="1"/>`
+    ).join('');
+  } else {
+    dom.vertices.innerHTML = '';
+  }
+
+  // Live readout.
+  dom.rPhase.textContent = phase.toFixed(3);
+  dom.rTheta.textContent = trackPhi.toFixed(3);
+  dom.rZR.textContent    = zR.toFixed(1);
+  dom.rZL.textContent    = zL.toFixed(1);
+  dom.rStep.textContent  = (2 * ex.strideAmp).toFixed(1);
+  dom.rRx.textContent    = (hipRoll  >= 0 ? '+' : '') + hipRoll.toFixed(3);
+  dom.rRy.textContent    = (hipPitch >= 0 ? '+' : '') + hipPitch.toFixed(3);
+  dom.rRz.textContent    = (yawAngle >= 0 ? '+' : '') + yawAngle.toFixed(3);
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
