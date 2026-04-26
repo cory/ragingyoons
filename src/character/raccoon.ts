@@ -493,8 +493,29 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
   const baseScale = arch.scale * tierBoost * (1 + range(rng, -0.12, 0.12));
   const vertMul = arch.vert * (1 + range(rng, -0.18, 0.18));
   const horizMul = arch.horiz * (1 + range(rng, -0.18, 0.18));
-  const lenMul = arch.bodyLen * horizMul * (1 + range(rng, -0.12, 0.12));
-  const widMul = arch.bodyWid * horizMul * (1 + range(rng, -0.12, 0.12));
+
+  // Asymmetry roll: most raccoons are roughly round (rx≈ry), but some
+  // get squeezed front-to-back into flat-and-wide pancakes (or rarer,
+  // long-and-thin). Drives the body, head, and (lightly) the arms so
+  // the look is consistent end-to-end.
+  let asymLen = 1;
+  let asymWid = 1;
+  const asymRoll = rng();
+  if (asymRoll < 0.32) {
+    // Flat-and-wide: shorten X (front-to-back), expand Y (side-to-side).
+    const k = range(rng, 0.30, 0.55);
+    asymLen = 1 - k;            // 0.45 .. 0.70
+    asymWid = 1 + k * 0.55;     // 1.17 .. 1.30
+  } else if (asymRoll < 0.42) {
+    // Long-and-thin: rarer, opposite skew.
+    const k = range(rng, 0.20, 0.40);
+    asymLen = 1 + k;
+    asymWid = 1 - k * 0.5;
+  }
+  // else: symmetric (~58%)
+
+  const lenMul = arch.bodyLen * horizMul * asymLen * (1 + range(rng, -0.10, 0.10));
+  const widMul = arch.bodyWid * horizMul * asymWid * (1 + range(rng, -0.10, 0.10));
 
   const oldPeak = base.bodyPeak;
   const oldOverlap = base.bodyOverlap;
@@ -522,8 +543,8 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
 
   const headScale = baseScale * arch.headMul * (1 + range(rng, -0.08, 0.08));
   for (const b of spec.head) {
-    b.rx *= headScale * horizMul;
-    b.ry *= headScale * horizMul;
+    b.rx *= headScale * horizMul * asymLen;
+    b.ry *= headScale * horizMul * asymWid;
     b.thickness *= headScale * vertMul;
   }
   spec.ears.size *= baseScale * arch.earMul * (1 + range(rng, -0.18, 0.18));

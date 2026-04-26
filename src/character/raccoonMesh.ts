@@ -588,7 +588,15 @@ function emitTailToBuf(
 
   const bodyH = layout.zHigh - layout.zHip;
   const attachZ = layout.zHip + bodyH * tail.attachZFrac;
-  // Tail axis: backward (-X) plus upward tilt.
+
+  // The body silhouette extends well past x=0 in -X, so a tail starting
+  // at body center would be buried. Start the tail just inside the
+  // body's back surface (a fraction of the widest band) so the first
+  // segment crosses the silhouette and the rest pokes out clearly.
+  let maxRx = 0;
+  for (const b of spec.body) if (b.rx > maxRx) maxRx = b.rx;
+  const startX = -maxRx * UNIT_SCALE * 0.55;
+
   const dirX = -Math.cos(tail.upTilt);
   const dirZ = Math.sin(tail.upTilt);
   const tailLenW = tail.length * UNIT_SCALE;
@@ -602,12 +610,11 @@ function emitTailToBuf(
   for (let i = 0; i < N; i++) {
     const t0 = i / N;
     const t1 = (i + 1) / N;
-    // Linear taper between baseR and tipR along the tail.
     const r0 = baseR + (tipR - baseR) * t0;
     const r1 = baseR + (tipR - baseR) * t1;
-    const x0 = dirX * tailLenW * t0;
+    const x0 = startX + dirX * tailLenW * t0;
     const z0 = attachZ + dirZ * tailLenW * t0;
-    const x1 = dirX * tailLenW * t1;
+    const x1 = startX + dirX * tailLenW * t1;
     const z1 = attachZ + dirZ * tailLenW * t1;
     const color = i % 2 === 0 ? primary : band;
     pushTaperedCylinder(
