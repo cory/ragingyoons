@@ -93,6 +93,15 @@ export function attachBoidFurShells(
     const shell = body.clone(`${body.name}_furshell${i}`, null, true, false);
     if (!shell) continue;
 
+    // Critical: clone() shares Geometry with the source by default.
+    // Our follow-up `thinInstanceSetBuffer` calls mutate the geometry's
+    // world0..3 vertex buffers — which would also mutate the body's
+    // copy. When fur is later detached, the body's pipeline rebuilds
+    // against poisoned geometry state, producing the "10 vertex buffers
+    // > 8" device error and (incidentally) the zombie pile. Forcing
+    // each shell to own its geometry isolates them.
+    shell.makeGeometryUnique();
+
     shell.position.set(0, 0, 0);
     shell.rotation.set(0, 0, 0);
     shell.scaling.set(1, 1, 1);
@@ -111,7 +120,19 @@ export function attachBoidFurShells(
       4,
       false,
     );
-    shell.thinInstanceCount = body.thinInstanceCount;
+    // Critical: thinInstanceCount must be > 0 BEFORE the effect first
+    // compiles. Babylon decides `useInstances` from `hasThinInstances`,
+    // which reads `_thinInstanceDataStorage.instancesCount`. If that's
+    // 0 at first compile, the shell's pipeline gets baked WITHOUT the
+    // INSTANCES + BAKED_VERTEX_ANIMATION_TEXTURE defines — meaning no
+    // world0..3 / bakedVertexAnimationSettingsInstanced attribs — and
+    // when count later goes positive Babylon tries to recompile into a
+    // 10-attrib pipeline that exceeds the 8-vertex-buffer device limit.
+    // Mirroring body's count is fine when boids already exist; if body
+    // is empty (e.g. fur toggled before any flush), fall back to 1 so
+    // the pipeline still compiles with instancing enabled. The flush
+    // pass will write the real per-LOD count next frame.
+    shell.thinInstanceCount = Math.max(1, body.thinInstanceCount);
 
     const mat = createFurBoidMaterial(scene, {
       shellIndex: i,

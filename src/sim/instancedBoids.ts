@@ -280,6 +280,12 @@ class BoidSource {
   headTranslations: Float32Array;
   /** Shell-fur layers wrapping this source's body, when fur is on. */
   furState: FurBoidState | null = null;
+  /** Per-frame histogram of boid LOD levels for this source. Indexed
+   *  by lod value (0..16); flush() reads cumulative-from-top counts to
+   *  decide how many instances each shell renders. Sized for the max
+   *  shell-count clamp; only the first (shellCount+1) entries are
+   *  meaningful at any given time. */
+  lodCounts = new Int32Array(17);
 
   constructor(unit: Unit, scene: Scene, capacity: number) {
     this.unit = unit;
@@ -648,6 +654,10 @@ export interface InstancedBoid {
   source: BoidSource;
   slot: number;
   targetMood: PRESETS_LOOKUP;
+  /** Per-frame fur LOD level (0..SHELL_COUNT). Set in stepAnimate from
+   *  camera distance; consumed by the per-source lodCounts histogram
+   *  used to drive each fur shell's thinInstanceCount. */
+  lod: number;
 
   // Hysteresis: committed context vs latest contender + frames held.
   context: BoidContext;
@@ -715,6 +725,13 @@ export class InstancedBoidsField {
    *  (so toggling fur on then spawning a new archetype Just Works). */
   private furOn = false;
   private furOpts: FurAttachOpts = {};
+  /** LOD distance window. Boids with camera distance ≤ furLodNear get
+   *  full fur (lod = shellCount-1); ≥ furLodFar get no fur clones (lod
+   *  = 0). Linear interp + round in between. World-space babylon meters.
+   *  Defaults are tuned for the arena's typical camera range (~8–15m
+   *  from boids); the UI sliders let the user dial. */
+  private furLodNear = 4.0;
+  private furLodFar = 12.0;
 
   constructor(private scene: Scene, opts: InstancedBoidsFieldOpts = {}) {
     this.bounds = opts.bounds ?? 25;
@@ -913,6 +930,7 @@ export class InstancedBoidsField {
       source: src,
       slot,
       targetMood: unit.moods.idle as PRESETS_LOOKUP,
+      lod: 0,
       context: "idle",
       pendingContext: "idle",
       pendingFrames: 0,
@@ -956,6 +974,13 @@ export class InstancedBoidsField {
   updateFurParams(opts: FurAttachOpts): void {
     this.furOpts = { ...this.furOpts, ...opts };
     for (const src of this.sources.values()) src.updateFurParams(opts);
+  }
+
+  /** Tune the LOD distance window. `near` (≤) gets full fur, `far` (≥)
+   *  gets none. Takes effect on the next frame's stepAnimate. */
+  setFurLodRange(near: number, far: number): void {
+    this.furLodNear = Math.max(0, near);
+    this.furLodFar = Math.max(this.furLodNear + 0.001, far);
   }
 
   dispose(): void {
@@ -1282,6 +1307,13 @@ export class InstancedBoidsField {
     const cam = this.scene.activeCamera;
     const camX = cam ? cam.globalPosition.x : 0;
     const camY = cam ? cam.globalPosition.y : 0;
+    const camZ = cam ? cam.globalPosition.z : 0;
+
+    // LOD compute + boid sort intentionally disabled — the LOD-driven
+    // per-shell thinInstanceCount changes were churning Babylon's
+    // pipeline cache and tripping a "vertex buffer count > 8" device
+    // error on toggle. Re-enable when we move per-instance data into
+    // a storage buffer (which makes count-zero shells safe).
 
     for (const b of this.boids) {
       const slot = b.source.count++;

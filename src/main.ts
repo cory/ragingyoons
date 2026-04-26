@@ -397,6 +397,18 @@ async function main(): Promise<void> {
     if (btn) btn.classList.toggle("active", on);
   }
 
+  // Pause: freezes both walker and boid sim updates, but keeps the
+  // render loop running so the camera + UI remain interactive.
+  let paused = false;
+  function setPaused(on: boolean): void {
+    paused = on;
+    const btn = document.getElementById("btnPause");
+    if (btn) {
+      btn.classList.toggle("active", on);
+      btn.textContent = on ? "play" : "pause";
+    }
+  }
+
   // Shell fur (off by default). Track-mode only; boids rebuild their
   // own decomposed meshes via the instanced field. Length + density
   // are tunable via sliders; the values are kept in scope so re-attach
@@ -447,6 +459,19 @@ async function main(): Promise<void> {
     // = shellCount-1). Force a re-attach via setFur.
     if (furOn) boidsField.setFur(true, boidFurOpts());
   }
+  // Fur LOD distance window — same babylon-meter scale used elsewhere.
+  let furLodNear = 4.0;
+  let furLodFar = 12.0;
+  function setFurLodNear(v: number): void {
+    furLodNear = v;
+    if (furLodFar <= furLodNear) furLodFar = furLodNear + 0.5;
+    boidsField.setFurLodRange(furLodNear, furLodFar);
+  }
+  function setFurLodFar(v: number): void {
+    furLodFar = Math.max(v, furLodNear + 0.5);
+    boidsField.setFurLodRange(furLodNear, furLodFar);
+  }
+  boidsField.setFurLodRange(furLodNear, furLodFar);
 
   // Initial roster — generated AFTER the axes plumbing so attachWalkerAxes
   // can find the freshly-built character.
@@ -641,6 +666,19 @@ async function main(): Promise<void> {
     furBtn.addEventListener("click", () => setFur(!furOn));
   }
 
+  const pauseBtn = document.getElementById("btnPause");
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", () => setPaused(!paused));
+  }
+  // Spacebar also toggles pause — handy during stress-testing without
+  // hunting for the button in the sidebar.
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && e.target === document.body) {
+      e.preventDefault();
+      setPaused(!paused);
+    }
+  });
+
   // Fur sliders — length is shown in mm for legibility (×1000), density
   // is the raw noise frequency. Both update live when fur is on, and
   // the values persist across toggles / roster switches.
@@ -681,6 +719,28 @@ async function main(): Promise<void> {
     furShellInput.addEventListener("change", () => {
       const v = parseInt(furShellInput.value, 10);
       setBoidShellCount(v);
+    });
+  }
+  const furNearInput = document.getElementById("furLodNear") as HTMLInputElement | null;
+  const furNearVal = document.getElementById("furLodNearVal");
+  if (furNearInput && furNearVal) {
+    furNearInput.value = String(furLodNear);
+    furNearVal.textContent = furLodNear.toFixed(1) + " m";
+    furNearInput.addEventListener("input", () => {
+      const v = parseFloat(furNearInput.value);
+      setFurLodNear(v);
+      furNearVal.textContent = v.toFixed(1) + " m";
+    });
+  }
+  const furFarInput = document.getElementById("furLodFar") as HTMLInputElement | null;
+  const furFarVal = document.getElementById("furLodFarVal");
+  if (furFarInput && furFarVal) {
+    furFarInput.value = String(furLodFar);
+    furFarVal.textContent = furLodFar.toFixed(1) + " m";
+    furFarInput.addEventListener("input", () => {
+      const v = parseFloat(furFarInput.value);
+      setFurLodFar(v);
+      furFarVal.textContent = furLodFar.toFixed(1) + " m";
     });
   }
 
@@ -778,11 +838,26 @@ async function main(): Promise<void> {
   engine.runRenderLoop(() => {
     const now = performance.now();
     const rawDt = (now - last) / 1000;
-    const dt = Math.min(0.064, rawDt);
+    // Pause freezes sim/animation but lets render continue so the
+    // camera still works. We also clamp `last` to now so the dt on
+    // resume isn't a giant catch-up step.
+    const dt = paused ? 0 : Math.min(0.064, rawDt);
     last = now;
     let flockMs = 0;
     let animMs = 0;
-    if (viewMode === "track") {
+    if (paused && viewMode === "boids") {
+      // Keep stepAnimate running with dt=0 so fur LOD recomputes when
+      // the user changes near/far or moves the camera while paused —
+      // sim state (positions, headings, phase) doesn't advance because
+      // dt=0 zeroes out every per-frame integration. stepFlock (the
+      // O(N²) sim work) is skipped, since paused frames don't need it.
+      const t0 = performance.now();
+      boidsField.stepAnimate(0);
+      animMs = performance.now() - t0;
+    } else if (paused) {
+      // Track mode: fur uniforms update directly via setFloat, so
+      // there's nothing per-frame to re-run.
+    } else if (viewMode === "track") {
       const t0 = performance.now();
       if (current) {
         const lookMix = current.unit.raccoon?.lookMix ?? {
