@@ -6,6 +6,7 @@ color: charcoal
 vibe: dumpsters, alleys, fire escapes, neon
 synergy_theme: density / swarm
 cost_distribution: skews cheap (cost 1-2 dominant)
+applies: [traffic, smelly]
 synergies:
   - threshold: 2
     effect: City raccoons gain +damage when within friend-sensing range of 3+ allied raccoons
