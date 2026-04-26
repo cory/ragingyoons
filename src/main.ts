@@ -31,7 +31,14 @@ import { makeLookState, stepLook } from "./walker/look";
 import { applyInkEdges, applyVellum, applyWorldBounds } from "./render/vellum";
 import { createAxes } from "./render/axes";
 import { FootprintTrail } from "./render/footprints";
-import { attachFurShells, detachFurShells, type FurState } from "./render/furShells";
+import {
+  attachFurShells,
+  DEFAULT_FUR_LENGTH,
+  DEFAULT_NOISE_FREQ,
+  detachFurShells,
+  type FurState,
+  updateFurParams,
+} from "./render/furShells";
 import { InstancedBoidsField } from "./sim/instancedBoids";
 import { WORLD_R_BABYLON } from "./scale";
 
@@ -302,7 +309,7 @@ async function main(): Promise<void> {
       if (inkOn) applyInkEdges(ch);
       current = ch;
       attachWalkerAxes();
-      if (furOn) furState = attachFurShells(ch, scene);
+      if (furOn) furState = attachFurShells(ch, scene, { furLength, noiseFreq: furDensity });
     }
   }
 
@@ -391,14 +398,18 @@ async function main(): Promise<void> {
   }
 
   // Shell fur (off by default). Track-mode only; boids rebuild their
-  // own decomposed meshes via the instanced field.
+  // own decomposed meshes via the instanced field. Length + density
+  // are tunable via sliders; the values are kept in scope so re-attach
+  // (after roster switch / view-mode change) preserves the user's pick.
   let furOn = false;
   let furState: FurState | null = null;
+  let furLength = DEFAULT_FUR_LENGTH;
+  let furDensity = DEFAULT_NOISE_FREQ;
   function setFur(on: boolean): void {
     furOn = on;
     if (current && viewMode === "track") {
       if (on && !furState) {
-        furState = attachFurShells(current, scene);
+        furState = attachFurShells(current, scene, { furLength, noiseFreq: furDensity });
       } else if (!on && furState) {
         detachFurShells(current, furState);
         furState = null;
@@ -406,6 +417,14 @@ async function main(): Promise<void> {
     }
     const btn = document.getElementById("btnFur");
     if (btn) btn.classList.toggle("active", on);
+  }
+  function setFurLength(v: number): void {
+    furLength = v;
+    if (furState) updateFurParams(furState, { furLength: v });
+  }
+  function setFurDensity(v: number): void {
+    furDensity = v;
+    if (furState) updateFurParams(furState, { noiseFreq: v });
   }
 
   // Initial roster — generated AFTER the axes plumbing so attachWalkerAxes
@@ -599,6 +618,32 @@ async function main(): Promise<void> {
   const furBtn = document.getElementById("btnFur");
   if (furBtn) {
     furBtn.addEventListener("click", () => setFur(!furOn));
+  }
+
+  // Fur sliders — length is shown in mm for legibility (×1000), density
+  // is the raw noise frequency. Both update live when fur is on, and
+  // the values persist across toggles / roster switches.
+  const furLenInput = document.getElementById("furLength") as HTMLInputElement | null;
+  const furLenVal = document.getElementById("furLengthVal");
+  if (furLenInput && furLenVal) {
+    furLenInput.value = String(furLength);
+    furLenVal.textContent = (furLength * 1000).toFixed(0) + " mm";
+    furLenInput.addEventListener("input", () => {
+      const v = parseFloat(furLenInput.value);
+      setFurLength(v);
+      furLenVal.textContent = (v * 1000).toFixed(0) + " mm";
+    });
+  }
+  const furDenInput = document.getElementById("furDensity") as HTMLInputElement | null;
+  const furDenVal = document.getElementById("furDensityVal");
+  if (furDenInput && furDenVal) {
+    furDenInput.value = String(furDensity);
+    furDenVal.textContent = furDensity.toFixed(0);
+    furDenInput.addEventListener("input", () => {
+      const v = parseFloat(furDenInput.value);
+      setFurDensity(v);
+      furDenVal.textContent = v.toFixed(0);
+    });
   }
 
   // Debug overlay: per-boid separation-radius rings.

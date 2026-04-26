@@ -25,13 +25,34 @@ export interface FurState {
   originalMaterial: Material | null;
 }
 
-export const SHELL_COUNT = 8;
-/** Babylon meters per shell step. 8 shells × 0.0025 m ≈ 2 cm of fluff. */
-export const SHELL_SPACING = 0.0025;
+export const SHELL_COUNT = 16;
+/** Default fluff height (babylon meters) above the skin. SHELL_COUNT − 1
+ *  layers span this distance, so spacing = length / (SHELL_COUNT − 1). */
+export const DEFAULT_FUR_LENGTH = 0.060;
+export const DEFAULT_NOISE_FREQ = 55;
 
-export function attachFurShells(ch: CharacterMesh, scene: Scene): FurState {
+export interface FurAttachOpts {
+  /** Total fur height (babylon meters) above the skin. */
+  furLength?: number;
+  /** Strand frequency (1/walker units of mesh-local position). */
+  noiseFreq?: number;
+}
+
+function spacingFromLength(length: number): number {
+  return length / Math.max(1, SHELL_COUNT - 1);
+}
+
+export function attachFurShells(
+  ch: CharacterMesh,
+  scene: Scene,
+  opts: FurAttachOpts = {},
+): FurState {
   const root = ch.root;
   const originalMaterial = root.material;
+
+  const length = opts.furLength ?? DEFAULT_FUR_LENGTH;
+  const noiseFreq = opts.noiseFreq ?? DEFAULT_NOISE_FREQ;
+  const shellSpacing = spacingFromLength(length);
 
   const furMaterials: ShaderMaterial[] = [];
   const shells: Mesh[] = [];
@@ -40,7 +61,8 @@ export function attachFurShells(ch: CharacterMesh, scene: Scene): FurState {
   const skinMat = createFurMaterial(scene, {
     shellIndex: 0,
     shellCount: SHELL_COUNT,
-    shellSpacing: SHELL_SPACING,
+    shellSpacing,
+    noiseFreq,
   });
   root.material = skinMat;
   furMaterials.push(skinMat);
@@ -66,7 +88,8 @@ export function attachFurShells(ch: CharacterMesh, scene: Scene): FurState {
     const mat = createFurMaterial(scene, {
       shellIndex: i,
       shellCount: SHELL_COUNT,
-      shellSpacing: SHELL_SPACING,
+      shellSpacing,
+      noiseFreq,
     });
     shell.material = mat;
     shell.skeleton = root.skeleton;
@@ -83,4 +106,15 @@ export function detachFurShells(ch: CharacterMesh, state: FurState): void {
   for (const shell of state.shells) shell.dispose();
   for (const mat of state.furMaterials) mat.dispose();
   ch.root.material = state.originalMaterial;
+}
+
+/** Update fur parameters live on an existing FurState — no rebuild. */
+export function updateFurParams(state: FurState, opts: FurAttachOpts): void {
+  if (opts.furLength !== undefined) {
+    const spacing = spacingFromLength(opts.furLength);
+    for (const mat of state.furMaterials) mat.setFloat("uShellSpacing", spacing);
+  }
+  if (opts.noiseFreq !== undefined) {
+    for (const mat of state.furMaterials) mat.setFloat("uNoiseFreq", opts.noiseFreq);
+  }
 }

@@ -91,7 +91,13 @@ fn main(input: VertexInputs) -> FragmentInputs {
   vertexOutputs.vNormal = (uniforms.world * vec4f(skinnedNormal, 0.0)).xyz;
   vertexOutputs.vShellT = shellT;
   vertexOutputs.vViewDir = uniforms.cameraPosition - worldPos.xyz;
-  vertexOutputs.vLocalPos = skinnedPos;
+  // Sample noise in REST-POSE mesh-local space (the raw vertex position
+  // before bone influence), not in skinned space. Skinned position
+  // changes as bones rotate, so noise sampled there shifts under the
+  // surface → strands appear to swim. Rest-pose position is constant
+  // per vertex, so each strand stays pinned to a specific spot on the
+  // body and rides the deformation along with it.
+  vertexOutputs.vLocalPos = vertexInputs.position;
   vertexOutputs.vColor = vertexInputs.color.rgb;
   vertexOutputs.vFurAmount = furAmount;
 }
@@ -147,8 +153,10 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
   // Outer shells cull more aggressively → wispier fluff edge. Shell 0
   // (vShellT = 0) is fully opaque (the skin underneath). vFurAmount=0
   // (eyes) skips the cutout entirely so eye discs render across every
-  // shell — they stay sharp under fur.
-  let cutoff = fragmentInputs.vShellT * 0.9 + 0.05;
+  // shell — they stay sharp under fur. Cap the max cutoff at 0.85
+  // (instead of ~0.95): keeps enough strands passing on the outermost
+  // shell so we don't get visible holes in the fluff at long lengths.
+  let cutoff = mix(0.05, 0.85, fragmentInputs.vShellT);
   if (fragmentInputs.vFurAmount > 0.5 && fragmentInputs.vShellT > 0.0 && strand < cutoff) {
     discard;
   }
