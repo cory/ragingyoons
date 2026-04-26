@@ -494,25 +494,26 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
   const vertMul = arch.vert * (1 + range(rng, -0.18, 0.18));
   const horizMul = arch.horiz * (1 + range(rng, -0.18, 0.18));
 
-  // Asymmetry roll: most raccoons are roughly round (rx≈ry), but some
-  // get squeezed front-to-back into flat-and-wide pancakes (or rarer,
-  // long-and-thin). Drives the body, head, and (lightly) the arms so
-  // the look is consistent end-to-end.
+  // Asymmetry roll: most raccoons stay round (~76%), some are gently
+  // squeezed front-to-back into flat-wide, a few rare long-and-thin.
+  // Strength dialed in conservative — extreme asymmetry produces
+  // cartoony / frog-shaped raccoons. Only the BODY gets warped; head
+  // stays normal proportions so the face doesn't go pancake.
   let asymLen = 1;
   let asymWid = 1;
   const asymRoll = rng();
-  if (asymRoll < 0.32) {
-    // Flat-and-wide: shorten X (front-to-back), expand Y (side-to-side).
-    const k = range(rng, 0.30, 0.55);
-    asymLen = 1 - k;            // 0.45 .. 0.70
-    asymWid = 1 + k * 0.55;     // 1.17 .. 1.30
-  } else if (asymRoll < 0.42) {
-    // Long-and-thin: rarer, opposite skew.
-    const k = range(rng, 0.20, 0.40);
+  if (asymRoll < 0.18) {
+    // Flat-and-wide: shorten X, expand Y a bit.
+    const k = range(rng, 0.18, 0.32);
+    asymLen = 1 - k;            // 0.68 .. 0.82
+    asymWid = 1 + k * 0.45;     // 1.08 .. 1.14
+  } else if (asymRoll < 0.24) {
+    // Long-and-thin: rarer.
+    const k = range(rng, 0.15, 0.28);
     asymLen = 1 + k;
-    asymWid = 1 - k * 0.5;
+    asymWid = 1 - k * 0.45;
   }
-  // else: symmetric (~58%)
+  // else: symmetric (~76%)
 
   const lenMul = arch.bodyLen * horizMul * asymLen * (1 + range(rng, -0.10, 0.10));
   const widMul = arch.bodyWid * horizMul * asymWid * (1 + range(rng, -0.10, 0.10));
@@ -543,8 +544,10 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
 
   const headScale = baseScale * arch.headMul * (1 + range(rng, -0.08, 0.08));
   for (const b of spec.head) {
-    b.rx *= headScale * horizMul * asymLen;
-    b.ry *= headScale * horizMul * asymWid;
+    // Head stays roughly round — asymmetry is a body-only roll. A
+    // pancake-wide head reads as frog/UFO instead of raccoon.
+    b.rx *= headScale * horizMul;
+    b.ry *= headScale * horizMul;
     b.thickness *= headScale * vertMul;
   }
   spec.ears.size *= baseScale * arch.earMul * (1 + range(rng, -0.18, 0.18));
