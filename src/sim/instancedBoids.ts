@@ -58,6 +58,14 @@ import {
   FACTION_STRIDE,
   traitsFor,
 } from "./rules";
+import {
+  attachBoidFurShells,
+  detachBoidFurShells,
+  type FurBoidState,
+  syncBoidFurShells,
+  updateBoidFurParams,
+} from "../render/furBoidShells";
+import type { FurAttachOpts } from "../render/furShells";
 
 const CHASED_SPEED_BONUS = 1.4;
 const FRIENDS_THRESHOLD = 2;
@@ -270,6 +278,8 @@ class BoidSource {
    *  body's animated head bone (bob + spine sway) instead of sitting
    *  static at the rest position. 3 floats per frame: x, y, z. */
   headTranslations: Float32Array;
+  /** Shell-fur layers wrapping this source's body, when fur is on. */
+  furState: FurBoidState | null = null;
 
   constructor(unit: Unit, scene: Scene, capacity: number) {
     this.unit = unit;
@@ -368,10 +378,44 @@ class BoidSource {
     );
     this.decomp.head.thinInstanceCount = this.count;
     this.decomp.head.thinInstanceBufferUpdated("matrix");
+    if (this.furState) syncBoidFurShells(this.furState);
     this.manager.time += dt;
   }
 
+  setFurEnabled(on: boolean, scene: Scene, opts: FurAttachOpts): void {
+    // Always tear down then optionally rebuild — lets a re-call with
+    // on=true and changed opts (e.g. shellCount) actually take effect.
+    // Length/density tweaks don't need a rebuild and go through
+    // updateFurParams instead.
+    if (this.furState) {
+      detachBoidFurShells(this.furState);
+      this.furState = null;
+    }
+    if (on) {
+      this.furState = attachBoidFurShells(
+        this.decomp.body,
+        scene,
+        this.bodyMatrixBuffer,
+        this.animBuffer,
+        opts,
+      );
+    }
+  }
+
+  updateFurParams(opts: FurAttachOpts): void {
+    if (this.furState) updateBoidFurParams(this.furState, opts);
+  }
+
+  setFurVisible(v: boolean): void {
+    if (!this.furState) return;
+    for (const shell of this.furState.shells) shell.setEnabled(v);
+  }
+
   dispose(): void {
+    if (this.furState) {
+      detachBoidFurShells(this.furState);
+      this.furState = null;
+    }
     this.manager.texture?.dispose();
     this.decomp.body.dispose(false, true);
     this.decomp.head.dispose(false, true);
@@ -666,6 +710,12 @@ export class InstancedBoidsField {
    *  by slot, since slots are repacked every frame in stepAnimate. */
   selected: InstancedBoid | null = null;
 
+  /** Shell-fur state. Applied to every BoidSource — both ones that
+   *  already exist when setFur is called, and ones created afterwards
+   *  (so toggling fur on then spawning a new archetype Just Works). */
+  private furOn = false;
+  private furOpts: FurAttachOpts = {};
+
   constructor(private scene: Scene, opts: InstancedBoidsFieldOpts = {}) {
     this.bounds = opts.bounds ?? 25;
     this.perSourceCapacity = opts.perSourceCapacity ?? 4096;
@@ -803,6 +853,7 @@ export class InstancedBoidsField {
     if (src) return src;
     src = new BoidSource(unit, this.scene, this.perSourceCapacity);
     this.sources.set(unit.id, src);
+    if (this.furOn) src.setFurEnabled(true, this.scene, this.furOpts);
     return src;
   }
 
@@ -887,7 +938,24 @@ export class InstancedBoidsField {
     for (const src of this.sources.values()) {
       src.decomp.body.setEnabled(v);
       src.decomp.head.setEnabled(v);
+      src.setFurVisible(v);
     }
+  }
+
+  /** Toggle shell fur across every BoidSource (existing and future). */
+  setFur(on: boolean, opts: FurAttachOpts = {}): void {
+    this.furOn = on;
+    this.furOpts = opts;
+    for (const src of this.sources.values()) {
+      src.setFurEnabled(on, this.scene, opts);
+    }
+  }
+
+  /** Live-update fur params (length / density) on all sources without
+   *  rebuilding shells. */
+  updateFurParams(opts: FurAttachOpts): void {
+    this.furOpts = { ...this.furOpts, ...opts };
+    for (const src of this.sources.values()) src.updateFurParams(opts);
   }
 
   dispose(): void {

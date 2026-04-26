@@ -36,6 +36,9 @@ export interface FurAttachOpts {
   furLength?: number;
   /** Strand frequency (1/walker units of mesh-local position). */
   noiseFreq?: number;
+  /** Number of shell layers. Track mode uses the SHELL_COUNT const;
+   *  boid mode honours this and falls back to its own default. */
+  shellCount?: number;
 }
 
 function spacingFromLength(length: number): number {

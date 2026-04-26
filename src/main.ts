@@ -405,6 +405,14 @@ async function main(): Promise<void> {
   let furState: FurState | null = null;
   let furLength = DEFAULT_FUR_LENGTH;
   let furDensity = DEFAULT_NOISE_FREQ;
+  // Boid-mode shell count is tunable from the UI: shell fur is
+  // fillrate-bound, and at large flock counts every shell costs real
+  // frame time. Default is conservative (4); user can dial up for
+  // smaller flocks or down to find the perf knee.
+  let boidShellCount = 4;
+  function boidFurOpts(): { furLength: number; noiseFreq: number; shellCount: number } {
+    return { furLength, noiseFreq: furDensity, shellCount: boidShellCount };
+  }
   function setFur(on: boolean): void {
     furOn = on;
     if (current && viewMode === "track") {
@@ -415,16 +423,29 @@ async function main(): Promise<void> {
         furState = null;
       }
     }
+    // Boids manage their own per-source fur state internally; we just
+    // tell the field to flip. Works in both view modes — even when the
+    // user is in track mode, the field remembers the flag and applies
+    // it the moment we enter boids.
+    boidsField.setFur(on, boidFurOpts());
     const btn = document.getElementById("btnFur");
     if (btn) btn.classList.toggle("active", on);
   }
   function setFurLength(v: number): void {
     furLength = v;
     if (furState) updateFurParams(furState, { furLength: v });
+    boidsField.updateFurParams({ furLength: v });
   }
   function setFurDensity(v: number): void {
     furDensity = v;
     if (furState) updateFurParams(furState, { noiseFreq: v });
+    boidsField.updateFurParams({ noiseFreq: v });
+  }
+  function setBoidShellCount(v: number): void {
+    boidShellCount = Math.max(1, Math.min(16, Math.round(v)));
+    // Shell count changes require rebuilding the shell stack (clones
+    // = shellCount-1). Force a re-attach via setFur.
+    if (furOn) boidsField.setFur(true, boidFurOpts());
   }
 
   // Initial roster — generated AFTER the axes plumbing so attachWalkerAxes
@@ -643,6 +664,23 @@ async function main(): Promise<void> {
       const v = parseFloat(furDenInput.value);
       setFurDensity(v);
       furDenVal.textContent = v.toFixed(0);
+    });
+  }
+  // Boid shell count — perf knob. Use "change" not "input" so the user
+  // commits the value (a rebuild fires per change; firing every "input"
+  // event would thrash through dozens of detach/attach cycles in a
+  // single drag).
+  const furShellInput = document.getElementById("furShells") as HTMLInputElement | null;
+  const furShellVal = document.getElementById("furShellsVal");
+  if (furShellInput && furShellVal) {
+    furShellInput.value = String(boidShellCount);
+    furShellVal.textContent = String(boidShellCount);
+    furShellInput.addEventListener("input", () => {
+      furShellVal.textContent = furShellInput.value;
+    });
+    furShellInput.addEventListener("change", () => {
+      const v = parseInt(furShellInput.value, 10);
+      setBoidShellCount(v);
     });
   }
 

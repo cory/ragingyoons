@@ -131,12 +131,44 @@ function resolveImported(filePath, ident, seen) {
  * `vertexInputs.X` / `uniforms.X` / `vertexOutputs.X` to read/write
  * those structs. We approximate that here.
  */
-function translate(src, stage) {
+/**
+ * Strip `#ifdef`/`#ifndef`/`#else`/`#endif`/`#if defined(...)` blocks
+ * by treating every named symbol as defined — that's the runtime path
+ * we actually exercise (instanced + VAT in our shaders today). The
+ * non-defined branches are left untested at file level; runtime would
+ * hit them only in edge cases like a pre-pass with no instances.
+ */
+function preprocessConditionals(src) {
+  const lines = src.split("\n");
+  const stack = []; // each entry: include?: boolean
+  const out = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (/^#ifdef\s+\w+/.test(t)) { stack.push(true); continue; }
+    if (/^#ifndef\s+\w+/.test(t)) { stack.push(false); continue; }
+    if (/^#if\b/.test(t)) {
+      // Default include unless the expression is explicitly negated.
+      stack.push(!t.includes("!defined"));
+      continue;
+    }
+    if (/^#else\b/.test(t)) {
+      if (stack.length) stack[stack.length - 1] = !stack[stack.length - 1];
+      continue;
+    }
+    if (/^#endif\b/.test(t)) { stack.pop(); continue; }
+    if (stack.every((v) => v)) out.push(line);
+  }
+  return out.join("\n");
+}
+
+function translate(srcRaw, stage) {
+  const src = preprocessConditionals(srcRaw);
   const lines = src.split("\n");
 
   const attributes = []; // { name, type }
   const varyings = [];   // { name, type }
   const uniforms = [];   // { name, type }
+  const textures = [];   // { name, type } — `var X: texture_*<...>;`
   const fnLines = [];
 
   let inFn = false;
@@ -145,9 +177,11 @@ function translate(src, stage) {
       const a = line.match(/^\s*attribute\s+(\w+)\s*:\s*([^;]+);/);
       const v = line.match(/^\s*varying\s+(\w+)\s*:\s*([^;]+);/);
       const u = line.match(/^\s*uniform\s+(\w+)\s*:\s*([^;]+);/);
+      const t = line.match(/^\s*var\s+(\w+)\s*:\s*(texture_\w+(?:<[^>]+>)?)\s*;/);
       if (a) { attributes.push({ name: a[1], type: a[2].trim() }); continue; }
       if (v) { varyings.push({ name: v[1], type: v[2].trim() }); continue; }
       if (u) { uniforms.push({ name: u[1], type: u[2].trim() }); continue; }
+      if (t) { textures.push({ name: t[1], type: t[2].trim() }); continue; }
     }
     if (/^@vertex\b|^@fragment\b/.test(line.trim())) inFn = true;
     fnLines.push(line);
@@ -163,6 +197,11 @@ function translate(src, stage) {
     out.push("};");
     out.push("@group(0) @binding(0) var<uniform> uniforms: Uniforms;");
   }
+
+  // Textures: each gets its own binding after the uniforms slot.
+  textures.forEach((t, i) => {
+    out.push(`@group(0) @binding(${i + 1}) var ${t.name}: ${t.type};`);
+  });
 
   // VertexInputs / FragmentInputs / FragmentOutputs structs.
   if (stage === "vertex") {
