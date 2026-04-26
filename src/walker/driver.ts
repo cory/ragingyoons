@@ -82,6 +82,10 @@ export interface UpdateOpts {
    *  touch ch.root.position / .rotation. Use when an external system
    *  (e.g. boids flock) places the character. */
   skipWorldPlacement?: boolean;
+  /** Independent head yaw in body-local frame (radians, +Z = look left).
+   *  Owned by the caller (see walker/look.ts). When omitted, head yaw is 0
+   *  and the head faces the body's heading like the original walker. */
+  headYaw?: number;
 }
 
 export function updateDriver(
@@ -178,7 +182,7 @@ export function updateDriver(
     layout.zHead - layout.zHigh,
     0,
     ex.headPitch,
-    0,
+    opts.headYaw ?? 0,
   );
 
   // Feet — walker output goes straight in: x = forward stride, z = lift.

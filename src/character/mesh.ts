@@ -16,6 +16,8 @@ import { getContour, type Contour } from "./shapes";
 import { BONE, createRig, rigLayout, skinWeightsAtZ, type Rig } from "../rig/skeleton";
 import { UNIT_SCALE } from "../scale";
 import { blendContours, COMMON_N, resampleByAngle, smoothstep } from "./contour";
+import { parseHsl } from "./color";
+import { buildRaccoon } from "./raccoonMesh";
 
 export interface CharacterMesh {
   root: Mesh;
@@ -41,33 +43,13 @@ function slabHeights(unit: Unit): SlabHeights[] {
   return out;
 }
 
-function parseHsl(s: string): Color3 {
-  const m = s.match(/hsl\(\s*([\d.\-]+)\s+([\d.\-]+)%\s+([\d.\-]+)%/);
-  if (!m) return new Color3(0.6, 0.6, 0.6);
-  return hslToRgb(parseFloat(m[1]) / 360, parseFloat(m[2]) / 100, parseFloat(m[3]) / 100);
-}
-
-function hslToRgb(h: number, s: number, l: number): Color3 {
-  if (s === 0) return new Color3(l, l, l);
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  const hueToRgb = (t: number): number => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  return new Color3(hueToRgb(h + 1 / 3), hueToRgb(h), hueToRgb(h - 1 / 3));
-}
-
 function layerColor(unit: Unit, layer: Layer): Color3 {
   const p = unit.palette;
   return parseHsl(p[layer.shadeKey]);
 }
 
 export function buildCharacter(unit: Unit, scene: Scene): CharacterMesh {
+  if (unit.kind === "raccoon" && unit.raccoon) return buildRaccoon(unit, scene);
   const slabs = slabHeights(unit);
 
   const bodyHeightLocal = slabs[slabs.length - 1].zTop;
@@ -109,12 +91,19 @@ export function buildCharacter(unit: Unit, scene: Scene): CharacterMesh {
     color: Color3;
   }
 
-  const resampled: ResampledLayer[] = unit.layers.map((layer) => ({
-    contour: resampleByAngle(getContour(layer.shape, layer.r), COMMON_N),
-    thickness: layer.thickness,
-    x: layer.x,
-    color: layerColor(unit, layer),
-  }));
+  const resampled: ResampledLayer[] = unit.layers.map((layer) => {
+    const c = resampleByAngle(getContour(layer.shape, layer.r), COMMON_N);
+    const a = layer.aspect ?? 1;
+    if (a !== 1) {
+      for (const p of c) p.x *= a;
+    }
+    return {
+      contour: c,
+      thickness: layer.thickness,
+      x: layer.x,
+      color: layerColor(unit, layer),
+    };
+  });
 
   interface RingDef {
     z: number;          // world z (babylon units)

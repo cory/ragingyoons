@@ -57,6 +57,8 @@ export interface Layer {
   tone: ToneKey;
   inset: boolean;
   shadeKey: ShadeKey;
+  /** Optional rx/ry. >1 stretches along +X (forward), <1 along +Y. Defaults to 1. */
+  aspect?: number;
 }
 
 export interface Palette {
@@ -112,6 +114,12 @@ export interface Unit {
 
   // ── Team membership (Phase 2). Stamped after generation. ────────
   teamIndex: 0 | 1;
+
+  // ── Optional character kinds. When `kind === "raccoon"`, the mesh
+  //    builder reads `raccoon` instead of `layers`. Default behavior
+  //    (single stack with the full layers chain) is used otherwise. ──
+  kind?: "stack" | "raccoon";
+  raccoon?: import("./raccoon").RaccoonSpec;
 }
 
 const FACTIONS = {
