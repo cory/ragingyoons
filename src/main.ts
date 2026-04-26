@@ -13,14 +13,16 @@ import "@babylonjs/core/Rendering/edgesRenderer";
 import { ArcRotateCamera, Color3, Engine, Scene, Vector3 } from "@babylonjs/core";
 import { WebGPUEngine } from "@babylonjs/core/Engines/webgpuEngine";
 
-import { generateRoster, type Unit } from "./character/generator";
+import type { Unit } from "./character/generator";
+import { generateTeams, type Roster, type Team } from "./character/teams";
 import { buildCharacter, type CharacterMesh } from "./character/mesh";
 import { GAITS } from "./walker/gait";
 import { MOOD_AXES, type MoodAxis, PRESETS, presetMood } from "./walker/mood";
 import { makeDriverState, updateDriver } from "./walker/driver";
-import { applyInkEdges, applyVellum } from "./render/vellum";
+import { applyInkEdges, applyVellum, applyWorldBounds } from "./render/vellum";
 import { createAxes } from "./render/axes";
 import { FootprintTrail } from "./render/footprints";
+import { InstancedBoidsField } from "./sim/instancedBoids";
 import { WORLD_R_BABYLON } from "./scale";
 
 async function createEngine(canvas: HTMLCanvasElement): Promise<Engine | WebGPUEngine> {
@@ -55,11 +57,12 @@ function setupCamera(scene: Scene): ArcRotateCamera {
   );
   cam.upVector = new Vector3(0, 0, 1);
   cam.lowerRadiusLimit = WORLD_R_BABYLON * 0.6;
-  cam.upperRadiusLimit = WORLD_R_BABYLON * 5.0;
+  cam.upperRadiusLimit = 400;          // far enough to frame the full boid flock
   cam.lowerBetaLimit = 0.15;
   cam.upperBetaLimit = Math.PI / 2.05;
   cam.attachControl(true);
-  cam.wheelPrecision = 30;
+  cam.wheelDeltaPercentage = 0.05;     // ~5% per scroll tick, scales w/ current zoom
+  cam.pinchDeltaPercentage = 0.05;
   cam.panningSensibility = 0;
   return cam;
 }
@@ -76,26 +79,49 @@ function updateCharacterCard(unit: Unit): void {
   const cStats = $("cStats");
   if (cName) cName.textContent = unit.name;
   if (cEpithet) cEpithet.textContent = unit.epithet;
-  if (cMeta) cMeta.textContent = `${unit.archetype} · ${unit.faction} · T${unit.tier} · ${unit.paletteMode}`;
+  if (cMeta) {
+    const teamLabel = unit.teamIndex === 0 ? "Team A" : "Team B";
+    const gaits = unit.availableGaits.join("/");
+    cMeta.textContent = `${teamLabel} · ${unit.archetype} · ${unit.faction} · ${unit.personality} · ${gaits} · ${unit.formationRole}`;
+  }
   if (cStats) cStats.innerHTML = statsLine(unit.stats);
 }
 
-function renderRoster(roster: Unit[], activeIdx: number, onPick: (i: number) => void): void {
+function renderRoster(roster: Roster, activeIdx: number, onPick: (i: number) => void): void {
   const root = document.getElementById("roster");
   if (!root) return;
   root.innerHTML = "";
-  for (let i = 0; i < roster.length; i++) {
-    const unit = roster[i];
-    const tile = document.createElement("div");
-    tile.className = "roster-tile" + (i === activeIdx ? " active" : "");
-    tile.dataset.idx = String(i);
-    tile.innerHTML = `
-      <div class="tile-stripe" style="background: ${unit.palette.primary}"></div>
-      <div class="tile-name">${unit.name}</div>
-      <div class="tile-meta">${unit.archetype} · T${unit.tier}</div>
+  let globalIdx = 0;
+  for (const team of roster.teams) {
+    const block = document.createElement("div");
+    block.className = "team-block";
+    const header = document.createElement("div");
+    header.className = "team-header";
+    const teamColor = `hsl(${team.baseHue} 60% 55%)`;
+    header.innerHTML = `
+      <span class="team-stripe" style="background: ${teamColor}"></span>
+      <span class="team-name">Team ${team.index === 0 ? "A" : "B"} · ${team.name}</span>
+      <span class="team-meta">${team.factions.join(" · ")}</span>
     `;
-    tile.addEventListener("click", () => onPick(i));
-    root.appendChild(tile);
+    block.appendChild(header);
+    const grid = document.createElement("div");
+    grid.className = "team-grid";
+    for (const unit of team.units) {
+      const tile = document.createElement("div");
+      tile.className = "roster-tile" + (globalIdx === activeIdx ? " active" : "");
+      tile.dataset.idx = String(globalIdx);
+      tile.innerHTML = `
+        <div class="tile-stripe" style="background: ${unit.palette.primary}"></div>
+        <div class="tile-name">${unit.name}</div>
+        <div class="tile-meta">${unit.archetype} · ${unit.personality}</div>
+      `;
+      const idxCapture = globalIdx;
+      tile.addEventListener("click", () => onPick(idxCapture));
+      grid.appendChild(tile);
+      globalIdx++;
+    }
+    block.appendChild(grid);
+    root.appendChild(block);
   }
 }
 
@@ -152,32 +178,72 @@ async function main(): Promise<void> {
   setupCamera(scene);
   applyVellum(scene, { worldR: WORLD_R_BABYLON });
 
+  // World/sim bounds.
+  const WORLD_HALF_EXTENT = 25;
+  applyWorldBounds(scene, WORLD_HALF_EXTENT);
+
   let current: CharacterMesh | null = null;
-  let roster: Unit[] = [];
+  let roster: Roster = { teams: [null as unknown as Team, null as unknown as Team], units: [] };
   let activeIdx = 0;
   const driver = makeDriverState("walk", presetMood("neutral"));
 
+  type ViewMode = "track" | "boids";
+  let viewMode: ViewMode = "track";
+  const boidsField = new InstancedBoidsField(scene, { bounds: WORLD_HALF_EXTENT });
+  let boidCount = 60;
+
   function activateUnit(idx: number): void {
-    if (idx < 0 || idx >= roster.length) return;
+    if (idx < 0 || idx >= roster.units.length) return;
     if (current) {
       current.root.dispose(false, true);
       current.rig.skeleton.dispose();
       current = null;
     }
     activeIdx = idx;
-    const unit = roster[idx];
-    const ch = buildCharacter(unit, scene);
-    if (inkOn) applyInkEdges(ch);
-    current = ch;
+    const unit = roster.units[idx];
     updateCharacterCard(unit);
     setRosterActive(activeIdx);
-    attachWalkerAxes();
+    if (viewMode === "track") {
+      const ch = buildCharacter(unit, scene);
+      if (inkOn) applyInkEdges(ch);
+      current = ch;
+      attachWalkerAxes();
+    }
   }
 
   function rerollRoster(seed: string): void {
-    roster = generateRoster(seed, 8);
+    roster = generateTeams(seed);
     renderRoster(roster, 0, activateUnit);
     activateUnit(0);
+    if (viewMode === "boids") {
+      boidsField.dispose();
+      boidsField.setCount(boidCount, roster.units);
+      const insp = document.getElementById("boidInspector");
+      if (insp) insp.style.display = "none";
+    }
+  }
+
+  function setViewMode(mode: ViewMode): void {
+    if (mode === viewMode) return;
+    viewMode = mode;
+    setViewModeActive(mode);
+    const flockPanel = document.getElementById("flockPanel");
+    if (flockPanel) flockPanel.style.display = mode === "boids" ? "" : "none";
+    const insp = document.getElementById("boidInspector");
+    if (insp) insp.style.display = "none";
+    if (mode === "track") {
+      boidsField.dispose();
+      activateUnit(activeIdx);
+    } else {
+      if (current) {
+        current.root.dispose(false, true);
+        current.rig.skeleton.dispose();
+        current = null;
+      }
+      walkerAxes?.dispose();
+      walkerAxes = null;
+      boidsField.setCount(boidCount, roster.units);
+    }
   }
 
   let seedCounter = Date.now();
@@ -306,30 +372,196 @@ async function main(): Promise<void> {
     printsBtn.addEventListener("click", () => setPrints(!printsOn));
   }
 
+  // View mode (track / boids).
+  const setViewModeActive = buildButtonRow(
+    "viewModeRow",
+    ["track", "boids"] as const,
+    viewMode,
+    (name) => setViewMode(name as ViewMode),
+  );
+
+  // Flock count slider.
+  const boidSlider = document.getElementById("boidCount") as HTMLInputElement | null;
+  const boidVal = document.getElementById("boidCountVal");
+  if (boidSlider && boidVal) {
+    boidSlider.addEventListener("input", () => {
+      boidCount = parseInt(boidSlider.value, 10);
+      boidVal.textContent = String(boidCount);
+      if (viewMode === "boids") boidsField.setCount(boidCount, roster.units);
+    });
+  }
+
   const inkBtn = document.getElementById("btnInk");
   if (inkBtn) {
     inkBtn.addEventListener("click", () => setInk(!inkOn));
   }
 
+  // Debug overlay: per-boid separation-radius rings.
+  let radiiOn = false;
+  function setRadii(on: boolean): void {
+    radiiOn = on;
+    boidsField.setRadiiVisible(on);
+    const btn = document.getElementById("btnRadii");
+    if (btn) btn.classList.toggle("active", on);
+  }
+  const radiiBtn = document.getElementById("btnRadii");
+  if (radiiBtn) {
+    radiiBtn.addEventListener("click", () => setRadii(!radiiOn));
+  }
+
+  // ── Click-to-inspect a boid ──
+  // Pointerdown picks the nearest boid under the cursor (z=0 plane raycast,
+  // O(n) over boids). Drag-then-release shouldn't pick — only treat as a
+  // click if the pointer didn't move much between down and up.
+  const inspectorEl = document.getElementById("boidInspector");
+  const biName = document.getElementById("biName");
+  const biGrid = document.getElementById("biGrid");
+  let downX = 0, downY = 0, downT = 0;
+  canvas.addEventListener("pointerdown", (e) => {
+    downX = e.clientX;
+    downY = e.clientY;
+    downT = performance.now();
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    if (viewMode !== "boids") return;
+    const dx = e.clientX - downX;
+    const dy = e.clientY - downY;
+    if (dx * dx + dy * dy > 25) return;             // moved too far → drag
+    if (performance.now() - downT > 400) return;    // held too long → drag
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const picked = boidsField.pickAt(x, y);
+    boidsField.setSelected(picked);
+    if (inspectorEl) inspectorEl.style.display = picked ? "" : "none";
+  });
+
+  function updateInspector(): void {
+    const b = boidsField.selected;
+    if (!b || !biName || !biGrid) return;
+    const speed = Math.hypot(b.vel.x, b.vel.y);
+    const headingDeg = (b.heading * 180 / Math.PI).toFixed(0);
+    const ctxStr = b.context === b.pendingContext
+      ? b.context
+      : `${b.context}→${b.pendingContext} (${b.pendingFrames})`;
+    biName.textContent = `${b.unit.name} · T${b.unit.teamIndex === 0 ? "A" : "B"}`;
+    biGrid.innerHTML =
+      `<span>arch</span><b>${b.archetype}</b>` +
+      `<span>faction</span><b>${b.factionKey}</b>` +
+      `<span>person</span><b>${b.unit.personality}</b>` +
+      `<span>context</span><b>${ctxStr}</b>` +
+      `<span>gait</span><b>${b.currentGait}</b>` +
+      `<span>mood</span><b>${b.targetMood}</b>` +
+      `<span>speed</span><b>${speed.toFixed(2)} / ${(b.traits.maxSpeed * b.unitSpeedMul).toFixed(2)}</b>` +
+      `<span>heading</span><b>${headingDeg}°</b>` +
+      `<span>pos</span><b>${b.pos.x.toFixed(1)}, ${b.pos.y.toFixed(1)}</b>` +
+      `<span>sepR</span><b>${b.separateR.toFixed(2)}</b>`;
+  }
+
   const cam = scene.activeCamera as ArcRotateCamera;
+
+  // Frame-time HUD with split metrics:
+  //   total  — rolling 60-frame interval (drives fps + slow)
+  //   sim    — CPU time spent in our per-frame logic (driver / boids step)
+  //   draw   — CPU time spent inside scene.render() (Babylon submission)
+  //   gpu    — GPU time from Babylon's perf counter (WebGPU timestamp queries)
+  const FPS_BUFFER = 60;
+  const totalMsBuf = new Float32Array(FPS_BUFFER);
+  const flockMsBuf = new Float32Array(FPS_BUFFER);
+  const animMsBuf = new Float32Array(FPS_BUFFER);
+  const drawMsBuf = new Float32Array(FPS_BUFFER);
+  let frameIdx = 0;
+  let frameFilled = 0;
+  let perfTick = 0;
+  const perfEl = document.getElementById("perf");
+
+  // Enable GPU frame-time capture. The setter is exposed as a method on
+  // some Babylon versions, so we call it via a permissive cast.
+  const eng = engine as unknown as {
+    captureGPUFrameTime?: ((v: boolean) => void) | boolean;
+  };
+  if (typeof eng.captureGPUFrameTime === "function") {
+    eng.captureGPUFrameTime(true);
+  } else {
+    eng.captureGPUFrameTime = true;
+  }
+
   let last = performance.now();
   engine.runRenderLoop(() => {
     const now = performance.now();
-    const dt = Math.min(0.064, (now - last) / 1000);
+    const rawDt = (now - last) / 1000;
+    const dt = Math.min(0.064, rawDt);
     last = now;
-    if (current) {
-      updateDriver(current, driver, dt, {
-        onPlant: printsOn
-          ? (side, x, y, h) => footprints.addPrint(side, x, y, h)
-          : undefined,
-      });
+    let flockMs = 0;
+    let animMs = 0;
+    if (viewMode === "track") {
+      const t0 = performance.now();
+      if (current) {
+        updateDriver(current, driver, dt, {
+          onPlant: printsOn
+            ? (side, x, y, h) => footprints.addPrint(side, x, y, h)
+            : undefined,
+        });
+      }
+      animMs = performance.now() - t0;
+    } else {
+      const t0 = performance.now();
+      boidsField.stepFlock(dt);
+      const t1 = performance.now();
+      boidsField.stepAnimate(dt);
+      const t2 = performance.now();
+      flockMs = t1 - t0;
+      animMs = t2 - t1;
     }
-    if (printsOn) footprints.update(dt);
+    if (viewMode === "boids" && boidsField.selected) updateInspector();
+    if (printsOn && viewMode === "track") footprints.update(dt);
     if (axesOn) {
       worldAxes.update(cam);
       walkerAxes?.update(cam);
     }
+    const drawStart = performance.now();
     scene.render();
+    const drawEnd = performance.now();
+
+    totalMsBuf[frameIdx] = rawDt * 1000;
+    flockMsBuf[frameIdx] = flockMs;
+    animMsBuf[frameIdx] = animMs;
+    drawMsBuf[frameIdx] = drawEnd - drawStart;
+    frameIdx = (frameIdx + 1) % FPS_BUFFER;
+    if (frameFilled < FPS_BUFFER) frameFilled++;
+
+    // Update perf HUD every ~10 frames so the readout doesn't flicker.
+    perfTick++;
+    if (perfEl && perfTick % 10 === 0) {
+      let totalSum = 0, totalMax = 0;
+      let flockSum = 0, animSum = 0, drawSum = 0;
+      for (let i = 0; i < frameFilled; i++) {
+        const t = totalMsBuf[i];
+        totalSum += t;
+        if (t > totalMax) totalMax = t;
+        flockSum += flockMsBuf[i];
+        animSum += animMsBuf[i];
+        drawSum += drawMsBuf[i];
+      }
+      const totalAvg = totalSum / frameFilled;
+      const flockAvg = flockSum / frameFilled;
+      const animAvg = animSum / frameFilled;
+      const drawAvg = drawSum / frameFilled;
+      const fps = 1000 / totalAvg;
+
+      const gpuCounter = (engine as { gpuFrameTimeCounter?: { lastSecAverage: number } })
+        .gpuFrameTimeCounter;
+      const gpuMs = gpuCounter && typeof gpuCounter.lastSecAverage === "number"
+        ? gpuCounter.lastSecAverage / 1_000_000
+        : -1;
+
+      const count = viewMode === "boids" ? boidsField.count() : current ? 1 : 0;
+      const gpuStr = gpuMs >= 0 ? `${gpuMs.toFixed(1)}` : "--";
+      perfEl.textContent =
+        `${fps.toFixed(0)}fps · flock ${flockAvg.toFixed(1)} · ` +
+        `anim ${animAvg.toFixed(1)} · draw ${drawAvg.toFixed(1)} · ` +
+        `gpu ${gpuStr}ms · slow ${totalMax.toFixed(0)}ms · n=${count}`;
+    }
   });
 
   window.addEventListener("resize", () => engine.resize());

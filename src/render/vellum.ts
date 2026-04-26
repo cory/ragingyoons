@@ -65,3 +65,20 @@ export function applyInkEdges(ch: CharacterMesh): void {
   mesh.edgesWidth = 6.0;
   mesh.edgesColor = INK;
 }
+
+/** Draw a square outline showing the simulation world's bounds on the XY plane. */
+export function applyWorldBounds(scene: Scene, halfExtent: number): void {
+  const h = halfExtent;
+  const z = 0.002;
+  const pts: Vector3[] = [
+    new Vector3(-h, -h, z),
+    new Vector3(+h, -h, z),
+    new Vector3(+h, +h, z),
+    new Vector3(-h, +h, z),
+    new Vector3(-h, -h, z),
+  ];
+  const line = MeshBuilder.CreateLines("worldBounds", { points: pts }, scene);
+  line.color = RULE;
+  line.alpha = 0.55;
+  line.isPickable = false;
+}

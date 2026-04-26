@@ -5,8 +5,8 @@
  * (X = lateral, Y = up, Z = forward) happens in driver.ts.
  */
 
-export type ContactPattern = "alternating" | "skip";
-export type BobShape = "walk" | "run" | "skip";
+export type ContactPattern = "alternating";
+export type BobShape = "walk" | "run";
 
 export interface Gait {
   stanceFrac: number;
@@ -51,17 +51,6 @@ export const GAITS: Record<string, Gait> = {
     leanOffset: -0.10,
     contactPattern: "alternating",
   },
-  skip: {
-    stanceFrac: 0.30,
-    cadence: 1.1,
-    stride: 1.2,
-    lift: 1.5,
-    bob: 2.5,
-    bobShape: "skip",
-    leanOffset: 0.05,
-    contactPattern: "skip",
-    hopRatio: 0.15,
-  },
 };
 
 export interface FootSample {
@@ -83,53 +72,7 @@ export function walkFoot(phi: number, f: number, A: number, liftAmp: number): Fo
   };
 }
 
-const SKIP_HOP_LIFT = 0.55;
-
-export function skipFoot(
-  phi: number,
-  f: number,
-  A: number,
-  D: number,
-  h: number,
-  liftAmp: number,
-): FootSample {
-  const half = f / 2;
-  const xStep0 = A;
-  const xStep1 = A - half * D;
-  const xHop0 = A - (0.25 - h) * D;
-  const xHop1 = xHop0 - half * D;
-  const xCycle = A;
-
-  if (phi < half) {
-    const tau = phi / half;
-    return { x: xStep0 + (xStep1 - xStep0) * tau, z: 0, lifted: false };
-  }
-  if (phi < 0.25) {
-    const tau = (phi - half) / (0.25 - half);
-    const eased = (1 - Math.cos(Math.PI * tau)) / 2;
-    return {
-      x: xStep1 + (xHop0 - xStep1) * eased,
-      z: Math.sin(Math.PI * tau) * liftAmp * SKIP_HOP_LIFT,
-      lifted: true,
-    };
-  }
-  if (phi < 0.25 + half) {
-    const tau = (phi - 0.25) / half;
-    return { x: xHop0 + (xHop1 - xHop0) * tau, z: 0, lifted: false };
-  }
-  const tau = (phi - 0.25 - half) / (1 - 0.25 - half);
-  const eased = (1 - Math.cos(Math.PI * tau)) / 2;
-  return {
-    x: xHop1 + (xCycle - xHop1) * eased,
-    z: Math.sin(Math.PI * tau) * liftAmp,
-    lifted: true,
-  };
-}
-
 export function computeBob(phi: number, f: number, shape: BobShape): number {
-  if (shape === "skip") {
-    return -Math.cos(8 * Math.PI * (phi - f / 4));
-  }
   const arg = 4 * Math.PI * (phi - f / 2);
   return shape === "walk" ? Math.max(0, Math.cos(arg)) : -Math.cos(arg);
 }

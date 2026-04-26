@@ -1,4 +1,15 @@
 import { chance, irange, makeRNG, pick, range, weightedPick, type RNG } from "./rng";
+import {
+  type FormationRole,
+  type GaitChoice,
+  type MoodReactions,
+  type PersonalityName,
+  moodReactionsFor,
+  pickAvailableGaits,
+  pickFormationRole,
+  pickPersonality,
+  speedMulFor,
+} from "./personality";
 
 export type ShapeName =
   | "hexagon"
@@ -88,6 +99,19 @@ export interface Unit {
   tier: number;
   stats: Stats;
   floating: boolean;
+  // ── Personality (Phase 1) ──────────────────────────────────────
+  personality: PersonalityName;
+  /** Mood reaction lookup for this unit, derived from its personality. */
+  moods: MoodReactions;
+  /** Multiplier on the archetype's max speed. */
+  speedMul: number;
+  /** Subset of gaits this unit is willing to use. Always contains "walk". */
+  availableGaits: GaitChoice[];
+  /** Where this unit wants to sit in its team's formation. */
+  formationRole: FormationRole;
+
+  // ── Team membership (Phase 2). Stamped after generation. ────────
+  teamIndex: 0 | 1;
 }
 
 const FACTIONS = {
@@ -104,9 +128,11 @@ type FactionKey = keyof typeof FACTIONS;
 const hsl = (h: number, s: number, l: number, a = 1): string =>
   a === 1 ? `hsl(${h} ${s}% ${l}%)` : `hsla(${h} ${s}% ${l}% / ${a})`;
 
-function makePalette(rng: RNG, factionKey: FactionKey): Palette {
+function makePalette(rng: RNG, factionKey: FactionKey, hueOverride?: number): Palette {
   const f = FACTIONS[factionKey];
-  const h = (f.hue + range(rng, -8, 8) + 360) % 360;
+  const h = hueOverride !== undefined
+    ? (hueOverride + 360) % 360
+    : (f.hue + range(rng, -8, 8) + 360) % 360;
   const s = Math.max(20, Math.min(95, f.sat + range(rng, -10, 8)));
   const l = Math.max(20, Math.min(85, f.lit + range(rng, -6, 6)));
   const accentH = (h + f.shift + 360) % 360;
@@ -298,13 +324,17 @@ function profileSizes(profile: string, n: number, rng: RNG, baseR: number): numb
 export interface GenerateOpts {
   archetype?: string;
   faction?: FactionKey;
+  /** When set, the palette's primary hue is forced to this value. Used by
+   *  team generation so faction members within a team cluster around a
+   *  team-defined hue band. */
+  hueOverride?: number;
 }
 
 export function generateUnit(rng: RNG, opts: GenerateOpts = {}): Unit {
   const archetypeKey = opts.archetype ?? pick(rng, Object.keys(ARCHETYPES));
   const A = ARCHETYPES[archetypeKey];
   const factionKey = opts.faction ?? pick(rng, A.factions);
-  const palette = makePalette(rng, factionKey);
+  const palette = makePalette(rng, factionKey, opts.hueOverride);
   const profile = pick(rng, A.profile);
   const layerCount = irange(rng, A.layers[0], A.layers[1]);
   const baseR = 46;
@@ -368,6 +398,13 @@ export function generateUnit(rng: RNG, opts: GenerateOpts = {}): Unit {
   const epithet = pick(rng, EPITHETS);
   const floating = !!A.floating;
 
+  // ── Personality + per-unit traits ────────────────────────────────
+  const personality = pickPersonality(rng);
+  const moods = moodReactionsFor(personality);
+  const speedMul = speedMulFor(personality, rng);
+  const availableGaits = pickAvailableGaits(rng);
+  const formationRole = pickFormationRole(archetypeKey, rng);
+
   return {
     id,
     name,
@@ -386,6 +423,12 @@ export function generateUnit(rng: RNG, opts: GenerateOpts = {}): Unit {
     tier,
     stats,
     floating,
+    personality,
+    moods,
+    speedMul,
+    availableGaits,
+    formationRole,
+    teamIndex: 0,
   };
 }
 

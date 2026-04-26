@@ -51,9 +51,8 @@ export interface Expression {
   liftAmp: number;
   bobAmp: number;
   bobBias: number;
-  bobShape: "walk" | "run" | "skip";
-  contactPattern: "alternating" | "skip";
-  hopRatio: number;
+  bobShape: "walk" | "run";
+  contactPattern: "alternating";
   stanceFrac: number;
   footY: number;
 
@@ -144,7 +143,6 @@ export function deriveExpression({ mood, gait, worldR }: ExpressionInput): Expre
     bobBias,
     bobShape: gait.bobShape,
     contactPattern: gait.contactPattern,
-    hopRatio: gait.hopRatio ?? 0,
     stanceFrac,
     footY,
     hipPitchAmp,

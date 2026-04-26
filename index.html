@@ -105,9 +105,65 @@
         padding: 10px 0;
       }
       .roster {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        max-height: 360px;
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+      .team-block {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .team-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink);
+      }
+      .team-stripe {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 1px solid var(--ink);
+      }
+      .team-name {
+        font-weight: 500;
+      }
+      .team-meta {
+        margin-left: auto;
+        color: var(--ink-soft);
+        font-size: 10px;
+      }
+      .team-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 6px;
+      }
+      .inspector-name {
+        font-size: 14px;
+        font-weight: 500;
+        margin-bottom: 4px;
+        letter-spacing: 0.02em;
+      }
+      .inspector-grid {
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        gap: 2px 8px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        line-height: 1.45;
+        color: var(--ink-soft);
+      }
+      .inspector-grid b {
+        color: var(--ink);
+        font-weight: 500;
       }
       .roster-tile {
         position: relative;
@@ -247,18 +303,53 @@
       #boot-error.visible {
         display: grid;
       }
+      #perf {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        color: var(--ink);
+        background: rgba(239, 233, 220, 0.7);
+        padding: 4px 8px;
+        border: 1px solid var(--rule);
+        pointer-events: none;
+      }
     </style>
   </head>
   <body>
     <div id="app">
       <div id="stage">
         <canvas id="canvas"></canvas>
+        <div id="perf">— fps</div>
         <div id="boot-error"></div>
       </div>
       <aside id="panel">
         <div>
           <h1>ragingyoons</h1>
           <p class="sub">procedural totem · pencil on vellum</p>
+        </div>
+
+        <div>
+          <h2>view</h2>
+          <div class="row" id="viewModeRow"></div>
+        </div>
+
+        <div id="flockPanel" style="display: none">
+          <h2>flock</h2>
+          <div class="slider-row">
+            <span class="slider-label">count</span>
+            <input type="range" id="boidCount" min="10" max="20000" value="60" />
+            <span class="slider-val" id="boidCountVal">60</span>
+          </div>
+          <div class="row" style="margin-top: 6px">
+            <button id="btnRadii">radii</button>
+          </div>
+          <div id="boidInspector" style="display: none; margin-top: 10px">
+            <div class="inspector-name" id="biName">—</div>
+            <div class="inspector-grid" id="biGrid"></div>
+          </div>
         </div>
 
         <div>
@@ -288,7 +379,7 @@
         </div>
 
         <div>
-          <h2>view</h2>
+          <h2>overlays</h2>
           <div class="row" id="viewRow">
             <button id="btnAxes">axes</button>
             <button id="btnPrints">footprints</button>

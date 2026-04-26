@@ -12,7 +12,7 @@
 import { Bone, Matrix, Quaternion, Vector3 } from "@babylonjs/core";
 import type { CharacterMesh } from "../character/mesh";
 import { UNIT_SCALE, WORLD_R_BABYLON, WORLD_R_WALKER } from "../scale";
-import { computeBob, GAITS, skipFoot, walkFoot } from "./gait";
+import { computeBob, GAITS, walkFoot } from "./gait";
 import {
   deriveExpression,
   type Expression,
@@ -78,6 +78,10 @@ export function makeDriverState(
 export interface UpdateOpts {
   speedMul?: number;
   onPlant?: (side: "L" | "R", worldX: number, worldY: number, headingZ: number) => void;
+  /** When true, the driver only updates bones (gait + mood) and does NOT
+   *  touch ch.root.position / .rotation. Use when an external system
+   *  (e.g. boids flock) places the character. */
+  skipWorldPlacement?: boolean;
 }
 
 export function updateDriver(
@@ -107,15 +111,8 @@ export function updateDriver(
     ex.wobbleAmpPitch;
 
   // Foot kinematics in walker frame: x = forward, z = vertical lift.
-  let footRight, footLeft;
-  if (ex.contactPattern === "skip") {
-    const D = (2 * A) / f;
-    footRight = skipFoot(phi, f, A, D, ex.hopRatio, ex.liftAmp);
-    footLeft = skipFoot((phi + 0.5) % 1, f, A, D, ex.hopRatio, ex.liftAmp);
-  } else {
-    footRight = walkFoot(phi, f, A, ex.liftAmp);
-    footLeft = walkFoot((phi + 0.5) % 1, f, A, ex.liftAmp);
-  }
+  const footRight = walkFoot(phi, f, A, ex.liftAmp);
+  const footLeft = walkFoot((phi + 0.5) % 1, f, A, ex.liftAmp);
 
   const bobZ = computeBob(phi, f, ex.bobShape) * ex.bobAmp * ex.bobBias;
 
@@ -207,14 +204,22 @@ export function updateDriver(
     0,
   );
 
-  // World transform — circle in XY plane at z=0, CCW heading along tangent.
-  const cx = WORLD_R_BABYLON * Math.cos(state.trackPhi);
-  const cy = WORLD_R_BABYLON * Math.sin(state.trackPhi);
-  ch.root.position.set(cx, cy, 0);
-  // Character +X (forward) aligns with tangent (-sin φ, cos φ, 0).
-  // Yaw around +Z: ψ = trackPhi + π/2.
-  const yaw = state.trackPhi + Math.PI / 2;
-  ch.root.rotation.set(0, 0, yaw);
+  // World transform — circle in XY plane at z=0, CCW heading along
+  // tangent. Skipped when the caller (e.g. boids) is placing the mesh.
+  let cx: number;
+  let cy: number;
+  let yaw: number;
+  if (opts.skipWorldPlacement) {
+    cx = ch.root.position.x;
+    cy = ch.root.position.y;
+    yaw = ch.root.rotation.z;
+  } else {
+    cx = WORLD_R_BABYLON * Math.cos(state.trackPhi);
+    cy = WORLD_R_BABYLON * Math.sin(state.trackPhi);
+    ch.root.position.set(cx, cy, 0);
+    yaw = state.trackPhi + Math.PI / 2;
+    ch.root.rotation.set(0, 0, yaw);
+  }
 
   // Plant detection — emit on lifted→grounded transition for each foot.
   if (opts.onPlant) {
