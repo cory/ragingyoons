@@ -570,6 +570,53 @@ function emitBodyToBuf(
     /* capBottom */ true,
   );
   emitArmsToBuf(buf, spec, palette, layout);
+  emitTailToBuf(buf, spec, palette, layout);
+}
+
+/** Tail: chain of N tapered cylinder segments along (-X, up) from the
+ *  body's lower back, alternating between primary and band shades to
+ *  read as the raccoon's signature ringed tail. Skinned to spineLow so
+ *  the whole tail sways with hip + spine motion. */
+function emitTailToBuf(
+  buf: BuildBuffers,
+  spec: RaccoonSpec,
+  palette: Unit["palette"],
+  layout: RigLayout,
+): void {
+  const tail = spec.tail;
+  if (tail.segments <= 0 || tail.length <= 0) return;
+
+  const bodyH = layout.zHigh - layout.zHip;
+  const attachZ = layout.zHip + bodyH * tail.attachZFrac;
+  // Tail axis: backward (-X) plus upward tilt.
+  const dirX = -Math.cos(tail.upTilt);
+  const dirZ = Math.sin(tail.upTilt);
+  const tailLenW = tail.length * UNIT_SCALE;
+  const baseR = tail.baseRadius * UNIT_SCALE;
+  const tipR = baseR * tail.tipMul;
+
+  const primary = parseHsl(palette[tail.primaryShade]);
+  const band = parseHsl(palette[tail.bandShade]);
+
+  const N = tail.segments;
+  for (let i = 0; i < N; i++) {
+    const t0 = i / N;
+    const t1 = (i + 1) / N;
+    // Linear taper between baseR and tipR along the tail.
+    const r0 = baseR + (tipR - baseR) * t0;
+    const r1 = baseR + (tipR - baseR) * t1;
+    const x0 = dirX * tailLenW * t0;
+    const z0 = attachZ + dirZ * tailLenW * t0;
+    const x1 = dirX * tailLenW * t1;
+    const z1 = attachZ + dirZ * tailLenW * t1;
+    const color = i % 2 === 0 ? primary : band;
+    pushTaperedCylinder(
+      buf,
+      x0, 0, z0,
+      x1, 0, z1,
+      r0, r1, 8, color, BONE.spineLow,
+    );
+  }
 }
 
 /** Two tapered-cylinder arms anchored at the shoulder, skinned 100%
@@ -588,19 +635,22 @@ function emitArmsToBuf(
   const rA = spec.arms.radius * UNIT_SCALE;
   const rB = rA * spec.arms.tipMul;
   const armColor = parseHsl(palette[spec.arms.shadeKey]);
-  // Verts in arm-local frame: shoulder end at origin, tip at the
-  // pre-computed armTipX/Y/Z in the layout (same coords the hand bone
-  // is anchored at). +tipY for armL, -tipY for armR.
+  // Verts must be in MESH-LOCAL (≈ world) coords — Babylon skinning
+  // moves them around the bone's rest world position, not around the
+  // bone's local origin. So the shoulder vertex sits at the bone's
+  // rest world location.
+  const shoulderZ = layout.zHigh + layout.shoulderZRel;
+  const sY = layout.shoulderY;
   pushTaperedCylinder(
     buf,
-    0, 0, 0,
-    layout.armTipX, +layout.armTipY, layout.armTipZ,
+    /* shoulder */ 0, +sY, shoulderZ,
+    /* tip */ layout.armTipX, +sY + layout.armTipY, shoulderZ + layout.armTipZ,
     rA, rB, 8, armColor, BONE.armL,
   );
   pushTaperedCylinder(
     buf,
-    0, 0, 0,
-    layout.armTipX, -layout.armTipY, layout.armTipZ,
+    0, -sY, shoulderZ,
+    layout.armTipX, -sY - layout.armTipY, shoulderZ + layout.armTipZ,
     rA, rB, 8, armColor, BONE.armR,
   );
 }
