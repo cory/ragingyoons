@@ -384,7 +384,50 @@ class BoidSource {
     );
     this.decomp.head.thinInstanceCount = this.count;
     this.decomp.head.thinInstanceBufferUpdated("matrix");
-    if (this.furState) syncBoidFurShells(this.furState);
+    if (this.furState) {
+      // stepAnimate packed boids lod-descending, so a prefix of length
+      // cumGE[L] holds every boid with lod >= L. Shell-clone K (=
+      // furState.shells[K], with shellIndex K+1 in the material) renders
+      // boids whose lod is at least K+1 — i.e., the first cumGE[K+1]
+      // entries. Body keeps the full count because the lod-0 boids still
+      // need their skin layer (shell 0) drawn. Head shells mirror body
+      // shells so the fur reads as one continuous coat.
+      const lc = this.lodCounts;
+      const bodyShells = this.furState.shells;
+      const headShells = this.furState.headShells;
+      const cumGE = new Int32Array(lc.length + 1);
+      let acc = 0;
+      for (let L = lc.length - 1; L >= 0; L--) {
+        acc += lc[L];
+        cumGE[L] = acc;
+      }
+      for (let K = 0; K < bodyShells.length; K++) {
+        const want = Math.min(cumGE[K + 1] ?? 0, this.count);
+        const headShell = headShells[K];
+        if (want === 0) {
+          // Use setEnabled instead of thinInstanceCount=0. Setting
+          // count to 0 flips hasThinInstances false, which makes
+          // Babylon recompile the effect WITHOUT the INSTANCES define
+          // on the next isReady — producing a smaller-attribs pipeline
+          // that mismatches the bound buffers. setEnabled keeps the
+          // count stable AND skips the draw entirely.
+          bodyShells[K].setEnabled(false);
+          if (headShell) headShell.setEnabled(false);
+          continue;
+        }
+        bodyShells[K].setEnabled(true);
+        bodyShells[K].thinInstanceCount = want;
+        bodyShells[K].thinInstanceBufferUpdated("matrix");
+        bodyShells[K].thinInstanceBufferUpdated(
+          "bakedVertexAnimationSettingsInstanced",
+        );
+        if (headShell) {
+          headShell.setEnabled(true);
+          headShell.thinInstanceCount = want;
+          headShell.thinInstanceBufferUpdated("matrix");
+        }
+      }
+    }
     this.manager.time += dt;
   }
 
@@ -400,8 +443,10 @@ class BoidSource {
     if (on) {
       this.furState = attachBoidFurShells(
         this.decomp.body,
+        this.decomp.head,
         scene,
         this.bodyMatrixBuffer,
+        this.headMatrixBuffer,
         this.animBuffer,
         opts,
       );
@@ -415,6 +460,7 @@ class BoidSource {
   setFurVisible(v: boolean): void {
     if (!this.furState) return;
     for (const shell of this.furState.shells) shell.setEnabled(v);
+    for (const shell of this.furState.headShells) shell.setEnabled(v);
   }
 
   dispose(): void {
@@ -727,11 +773,9 @@ export class InstancedBoidsField {
   private furOpts: FurAttachOpts = {};
   /** LOD distance window. Boids with camera distance ≤ furLodNear get
    *  full fur (lod = shellCount-1); ≥ furLodFar get no fur clones (lod
-   *  = 0). Linear interp + round in between. World-space babylon meters.
-   *  Defaults are tuned for the arena's typical camera range (~8–15m
-   *  from boids); the UI sliders let the user dial. */
-  private furLodNear = 4.0;
-  private furLodFar = 12.0;
+   *  = 0). Linear interp + round in between. World-space babylon meters. */
+  private furLodNear = 6.0;
+  private furLodFar = 20.0;
 
   constructor(private scene: Scene, opts: InstancedBoidsFieldOpts = {}) {
     this.bounds = opts.bounds ?? 25;
@@ -1300,6 +1344,7 @@ export class InstancedBoidsField {
     for (const src of this.sources.values()) {
       src.count = 0;
       src.freeSlots.length = 0;
+      src.lodCounts.fill(0);
     }
 
     // Camera position drives "look at camera" mode. Same value for all
@@ -1309,15 +1354,42 @@ export class InstancedBoidsField {
     const camY = cam ? cam.globalPosition.y : 0;
     const camZ = cam ? cam.globalPosition.z : 0;
 
-    // LOD compute + boid sort intentionally disabled — the LOD-driven
-    // per-shell thinInstanceCount changes were churning Babylon's
-    // pipeline cache and tripping a "vertex buffer count > 8" device
-    // error on toggle. Re-enable when we move per-instance data into
-    // a storage buffer (which makes count-zero shells safe).
+    // Per-boid LOD from camera distance, then sort the boid list so
+    // each source's slot 0 holds the highest-lod boid. The packing
+    // loop below writes matrices into bodyMatrixBuffer in iteration
+    // order, so a sorted iteration order = a sorted matrix buffer,
+    // and BoidSource.flush gives each shell a prefix length.
+    if (this.furOn) {
+      const shellCount = Math.max(1, Math.min(16, Math.floor(this.furOpts.shellCount ?? 4)));
+      const maxLod = Math.max(0, shellCount - 1);
+      const lodNear = this.furLodNear;
+      const lodFar = Math.max(lodNear + 0.001, this.furLodFar);
+      const lodSpan = lodFar - lodNear;
+      for (const b of this.boids) {
+        const dx = b.pos.x - camX;
+        const dy = b.pos.y - camY;
+        const dz = -camZ;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        let t = (lodFar - dist) / lodSpan;
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+        b.lod = Math.round(t * maxLod);
+      }
+      // Stable bucket sort: cluster by source then descending lod.
+      this.boids.sort((a, b) => {
+        const ai = a.source.unit.id;
+        const bi = b.source.unit.id;
+        if (ai !== bi) return ai < bi ? -1 : 1;
+        return b.lod - a.lod;
+      });
+    } else {
+      for (const b of this.boids) b.lod = 0;
+    }
 
     for (const b of this.boids) {
       const slot = b.source.count++;
       b.slot = slot;
+      b.source.lodCounts[b.lod]++;
 
       // Animation params: (fromFrame, toFrame, offsetFrames, fps).
       // Mood-aware: pick the (currentGait, targetMood) bake range so

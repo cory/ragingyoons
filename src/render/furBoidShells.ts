@@ -44,12 +44,21 @@ export interface FurBoidState {
   /** Body mesh — shell 0 reuses this. We hold the ref so sync() can
    *  read its current thinInstanceCount. */
   body: Mesh;
-  /** Cloned meshes for shells 1..N-1. */
+  /** Head mesh — shell 0 reuses it the same way. Stored so flush can
+   *  set head shell counts in lockstep with body shell counts. */
+  head: Mesh;
+  /** Cloned BODY meshes for shells 1..N-1. */
   shells: Mesh[];
-  /** All fur materials (length = SHELL_COUNT, including shell 0's). */
+  /** Cloned HEAD meshes for shells 1..N-1. Mirrors `shells` so per-LOD
+   *  counts apply identically to head shells. */
+  headShells: Mesh[];
+  /** All fur materials (body skin + body shells 1..N-1 + head skin +
+   *  head shells 1..N-1). Used to dispose on detach. */
   furMaterials: ShaderMaterial[];
   /** Original material on body, restored on detach. */
   originalMaterial: Material | null;
+  /** Original material on head, restored on detach. */
+  originalHeadMaterial: Material | null;
 }
 
 function spacingFromLength(length: number, shellCount: number): number {
@@ -63,12 +72,15 @@ function clampShellCount(n: number | undefined): number {
 
 export function attachBoidFurShells(
   body: Mesh,
+  head: Mesh,
   scene: Scene,
   bodyMatrixBuffer: Float32Array,
+  headMatrixBuffer: Float32Array,
   animBuffer: Float32Array,
   opts: FurAttachOpts = {},
 ): FurBoidState {
   const originalMaterial = body.material;
+  const originalHeadMaterial = head.material;
 
   const shellCount = clampShellCount(opts.shellCount);
   const length = opts.furLength ?? DEFAULT_FUR_LENGTH;
@@ -77,8 +89,9 @@ export function attachBoidFurShells(
 
   const furMaterials: ShaderMaterial[] = [];
   const shells: Mesh[] = [];
+  const headShells: Mesh[] = [];
 
-  // Shell 0: opaque skin layer on the body itself.
+  // Shell 0 BODY: opaque skin layer.
   const skinMat = createFurBoidMaterial(scene, {
     shellIndex: 0,
     shellCount,
@@ -88,6 +101,21 @@ export function attachBoidFurShells(
   });
   body.material = skinMat;
   furMaterials.push(skinMat);
+
+  // Shell 0 HEAD: same shellIndex=0 but compiled against the rigid
+  // head (no skeleton, no VAT). The shader's #if NUM_BONE_INFLUENCERS>0
+  // / #ifdef BAKED_VERTEX_ANIMATION_TEXTURE gates produce a smaller
+  // attribute set for this compile (no matricesIndices/Weights, no
+  // bakedVertexAnimationSettingsInstanced).
+  const headSkinMat = createFurBoidMaterial(scene, {
+    shellIndex: 0,
+    shellCount,
+    shellSpacing,
+    noiseFreq,
+    driverMesh: head,
+  });
+  head.material = headSkinMat;
+  furMaterials.push(headSkinMat);
 
   for (let i = 1; i < shellCount; i++) {
     const shell = body.clone(`${body.name}_furshell${i}`, null, true, false);
@@ -145,28 +173,61 @@ export function attachBoidFurShells(
 
     furMaterials.push(mat);
     shells.push(shell);
+
+    // Matching HEAD shell. Rigid (no skeleton, no VAT manager), so the
+    // shader compile here is the simpler attribs-set variant. Same
+    // shellIndex / spacing as the body shell so the fur reads as one
+    // continuous coat across body+head.
+    const headShell = head.clone(`${head.name}_furshell${i}`, null, true, false);
+    if (headShell) {
+      headShell.makeGeometryUnique();
+      headShell.position.set(0, 0, 0);
+      headShell.rotation.set(0, 0, 0);
+      headShell.scaling.set(1, 1, 1);
+      headShell.alwaysSelectAsActiveMesh = true;
+      headShell.doNotSyncBoundingInfo = true;
+      headShell.isPickable = false;
+      headShell.thinInstanceSetBuffer("matrix", headMatrixBuffer, 16, false);
+      headShell.thinInstanceCount = Math.max(1, head.thinInstanceCount);
+      const headMat = createFurBoidMaterial(scene, {
+        shellIndex: i,
+        shellCount,
+        shellSpacing,
+        noiseFreq,
+        driverMesh: head,
+      });
+      headShell.material = headMat;
+      furMaterials.push(headMat);
+      headShells.push(headShell);
+    }
   }
 
-  return { body, shells, furMaterials, originalMaterial };
+  return { body, head, shells, headShells, furMaterials, originalMaterial, originalHeadMaterial };
 }
 
 export function detachBoidFurShells(state: FurBoidState): void {
   for (const shell of state.shells) shell.dispose();
+  for (const shell of state.headShells) shell.dispose();
   for (const mat of state.furMaterials) mat.dispose();
   state.body.material = state.originalMaterial;
+  state.head.material = state.originalHeadMaterial;
 }
 
-/** Mirror the body's thinInstanceCount + buffer-updated flags onto
- *  every shell. Each shell has its own GPU Buffer wrapping the shared
- *  Float32Array, so each needs its own dirty mark for the per-frame
- *  re-upload. Call once per frame, after the boid sim updates the
- *  body. */
+/** Mirror the body's thinInstanceCount onto every body+head shell.
+ *  Each shell has its own GPU Buffer wrapping the shared Float32Array,
+ *  so each needs its own dirty mark for the per-frame re-upload. Call
+ *  once per frame, after the boid sim updates the body. */
 export function syncBoidFurShells(state: FurBoidState): void {
-  const count = state.body.thinInstanceCount;
+  const bodyCount = state.body.thinInstanceCount;
   for (const shell of state.shells) {
-    shell.thinInstanceCount = count;
+    shell.thinInstanceCount = bodyCount;
     shell.thinInstanceBufferUpdated("matrix");
     shell.thinInstanceBufferUpdated("bakedVertexAnimationSettingsInstanced");
+  }
+  const headCount = state.head.thinInstanceCount;
+  for (const shell of state.headShells) {
+    shell.thinInstanceCount = headCount;
+    shell.thinInstanceBufferUpdated("matrix");
   }
 }
 
@@ -176,7 +237,11 @@ export function syncBoidFurShells(state: FurBoidState): void {
  *  changes to shellCount (which goes through a full re-attach). */
 export function updateBoidFurParams(state: FurBoidState, opts: FurAttachOpts): void {
   if (opts.furLength !== undefined) {
-    const spacing = spacingFromLength(opts.furLength, state.furMaterials.length);
+    // Each shell stack (body + head) has shellCount entries in
+    // furMaterials, so total length is 2 * shellCount. Recover the
+    // per-stack count to keep spacing consistent.
+    const perStack = Math.max(1, state.furMaterials.length / 2);
+    const spacing = spacingFromLength(opts.furLength, perStack);
     for (const mat of state.furMaterials) mat.setFloat("uShellSpacing", spacing);
   }
   if (opts.noiseFreq !== undefined) {

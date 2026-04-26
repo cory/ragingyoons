@@ -39,8 +39,10 @@ const VERTEX_SRC = /* wgsl */ `
 attribute position: vec3f;
 attribute normal: vec3f;
 attribute color: vec4f;
+#if NUM_BONE_INFLUENCERS>0
 attribute matricesIndices: vec4f;
 attribute matricesWeights: vec4f;
+#endif
 #ifdef INSTANCES
 attribute world0: vec4f;
 attribute world1: vec4f;
@@ -54,12 +56,16 @@ attribute bakedVertexAnimationSettingsInstanced: vec4f;
 uniform world: mat4x4f;
 uniform viewProjection: mat4x4f;
 uniform cameraPosition: vec3f;
+#ifdef BAKED_VERTEX_ANIMATION_TEXTURE
 uniform bakedVertexAnimationTime: f32;
+#endif
 uniform uShellIndex: f32;
 uniform uShellCount: f32;
 uniform uShellSpacing: f32;
 
+#ifdef BAKED_VERTEX_ANIMATION_TEXTURE
 var bakedVertexAnimationTexture: texture_2d<f32>;
+#endif
 
 varying vWorldPos: vec3f;
 varying vNormal: vec3f;
@@ -69,6 +75,7 @@ varying vLocalPos: vec3f;
 varying vColor: vec3f;
 varying vFurAmount: f32;
 
+#ifdef BAKED_VERTEX_ANIMATION_TEXTURE
 fn readMatrixFromVAT(smp: texture_2d<f32>, boneIndex: f32, frame: f32) -> mat4x4<f32> {
   let offset = i32(boneIndex) * 4;
   let frameUV = i32(frame);
@@ -78,6 +85,7 @@ fn readMatrixFromVAT(smp: texture_2d<f32>, boneIndex: f32, frame: f32) -> mat4x4
   let m3 = textureLoad(smp, vec2<i32>(offset + 3, frameUV), 0);
   return mat4x4<f32>(m0, m1, m2, m3);
 }
+#endif
 
 @vertex
 fn main(input: VertexInputs) -> FragmentInputs {

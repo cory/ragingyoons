@@ -397,11 +397,19 @@ async function main(): Promise<void> {
     if (btn) btn.classList.toggle("active", on);
   }
 
-  // Pause: freezes both walker and boid sim updates, but keeps the
-  // render loop running so the camera + UI remain interactive.
+  // Pause: freezes both walker and boid sim updates. We also skip
+  // scene.render() itself on paused frames unless something changed —
+  // otherwise JS submits GPU command buffers at full RAF speed (no
+  // CPU sim work to pace it), the WebGPU command queue floods past
+  // what the GPU can drain, and the OS compositor stalls. The result
+  // is the whole machine crawling at 5 fps even though Babylon's JS
+  // FPS counter happily reports 85+.
   let paused = false;
+  let pausedNeedsRender = true;
+  function markPausedDirty(): void { pausedNeedsRender = true; }
   function setPaused(on: boolean): void {
     paused = on;
+    pausedNeedsRender = true; // render the pause-moment frame at least
     const btn = document.getElementById("btnPause");
     if (btn) {
       btn.classList.toggle("active", on);
@@ -457,19 +465,31 @@ async function main(): Promise<void> {
     boidShellCount = Math.max(1, Math.min(16, Math.round(v)));
     // Shell count changes require rebuilding the shell stack (clones
     // = shellCount-1). Force a re-attach via setFur.
-    if (furOn) boidsField.setFur(true, boidFurOpts());
+    if (furOn) {
+      boidsField.setFur(true, boidFurOpts());
+      // While paused, no stepAnimate runs to populate the new shells'
+      // per-LOD counts — kick a single zero-dt step so the rebuilt
+      // shells get sorted+counted right away.
+      if (paused && viewMode === "boids") boidsField.stepAnimate(0);
+    }
   }
   // Fur LOD distance window — same babylon-meter scale used elsewhere.
-  let furLodNear = 4.0;
-  let furLodFar = 12.0;
+  let furLodNear = 6.0;
+  let furLodFar = 20.0;
   function setFurLodNear(v: number): void {
     furLodNear = v;
     if (furLodFar <= furLodNear) furLodFar = furLodNear + 0.5;
     boidsField.setFurLodRange(furLodNear, furLodFar);
+    // While paused, the boid step is skipped so LOD wouldn't otherwise
+    // refresh. Run a single zero-dt step here to re-sort the matrix
+    // buffers and update per-shell counts so the new range takes
+    // effect immediately.
+    if (paused && viewMode === "boids") boidsField.stepAnimate(0);
   }
   function setFurLodFar(v: number): void {
     furLodFar = Math.max(v, furLodNear + 0.5);
     boidsField.setFurLodRange(furLodNear, furLodFar);
+    if (paused && viewMode === "boids") boidsField.stepAnimate(0);
   }
   boidsField.setFurLodRange(furLodNear, furLodFar);
 
@@ -807,6 +827,25 @@ async function main(): Promise<void> {
   }
 
   const cam = scene.activeCamera as ArcRotateCamera;
+  // Camera input while paused needs to drive a redraw — but
+  // Camera.onViewMatrixChangedObservable only fires from inside
+  // scene.render(), so it's a deadlock if we use it as the redraw
+  // trigger. Hook the actual canvas DOM events instead. Pointer drag
+  // (rotate / pan), wheel (dolly), and key events all mark dirty so
+  // the next paused frame submits a render.
+  const markDirtyHandler = (): void => markPausedDirty();
+  canvas.addEventListener("pointerdown", markDirtyHandler);
+  canvas.addEventListener("pointermove", markDirtyHandler);
+  canvas.addEventListener("wheel", markDirtyHandler, { passive: true });
+  canvas.addEventListener("keydown", markDirtyHandler);
+  // Any sidebar input or button click can change visible state
+  // (sliders alter material uniforms or instance counts, buttons
+  // toggle modes/overlays).
+  const panelEl = document.getElementById("panel");
+  if (panelEl) {
+    panelEl.addEventListener("input", markDirtyHandler);
+    panelEl.addEventListener("click", markDirtyHandler);
+  }
 
   // Frame-time HUD with split metrics:
   //   total  — rolling 60-frame interval (drives fps + slow)
@@ -845,18 +884,12 @@ async function main(): Promise<void> {
     last = now;
     let flockMs = 0;
     let animMs = 0;
-    if (paused && viewMode === "boids") {
-      // Keep stepAnimate running with dt=0 so fur LOD recomputes when
-      // the user changes near/far or moves the camera while paused —
-      // sim state (positions, headings, phase) doesn't advance because
-      // dt=0 zeroes out every per-frame integration. stepFlock (the
-      // O(N²) sim work) is skipped, since paused frames don't need it.
-      const t0 = performance.now();
-      boidsField.stepAnimate(0);
-      animMs = performance.now() - t0;
-    } else if (paused) {
-      // Track mode: fur uniforms update directly via setFloat, so
-      // there's nothing per-frame to re-run.
+    if (paused) {
+      // Sim/animation updates skipped. LOD-driven fur counts are
+      // re-evaluated only when the user changes a slider that affects
+      // them (the slider handlers call boidsField.stepAnimate(0)
+      // directly). Running a zero-dt step every paused frame would
+      // burn CPU repacking unchanged matrices.
     } else if (viewMode === "track") {
       const t0 = performance.now();
       if (current) {
@@ -902,7 +935,13 @@ async function main(): Promise<void> {
       walkerAxes?.update(cam);
     }
     const drawStart = performance.now();
-    scene.render();
+    // When paused, only redraw if the user changed something visible
+    // (camera, slider, fur toggle). Otherwise the GPU command queue
+    // floods and the system stalls.
+    if (!paused || pausedNeedsRender) {
+      scene.render();
+      pausedNeedsRender = false;
+    }
     const drawEnd = performance.now();
 
     totalMsBuf[frameIdx] = rawDt * 1000;
