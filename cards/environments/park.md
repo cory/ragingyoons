@@ -6,6 +6,7 @@ color: mossy green
 vibe: forests, picnic areas, ponds
 synergy_theme: mobility / ambush
 cost_distribution: skews mid (cost 2-3 dominant)
+applies: [hungry, buggy]
 synergies:
   - threshold: 2
     effect: Park raccoons gain +move speed and +stealthiness (reduces enemy effective sensing range against them)
