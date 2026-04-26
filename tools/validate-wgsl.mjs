@@ -19,7 +19,7 @@
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const NAGA = `${process.env.HOME}/.cargo/bin/naga`;
 
@@ -35,7 +35,7 @@ const src = readFileSync(srcPath, "utf8");
 const blockRe = /\/\*\s*wgsl\s*\*\/\s*`([\s\S]*?)`/g;
 const blocks = [];
 let m;
-while ((m = blockRe.exec(src)) !== null) blocks.push(m[1]);
+while ((m = blockRe.exec(src)) !== null) blocks.push(substituteTemplateExprs(m[1], srcPath));
 
 if (blocks.length === 0) {
   console.error(`no /* wgsl */ blocks found in ${srcPath}`);
@@ -71,6 +71,56 @@ for (let i = 0; i < blocks.length; i++) {
 }
 
 process.exit(allOk ? 0 : 1);
+
+/**
+ * Resolve `${IDENT}` expressions inside a WGSL template literal by
+ * looking up `const IDENT = ...` declarations in the source file and,
+ * if needed, walking imports to resolve referenced identifiers.
+ *
+ * Handles: numeric literals, simple `IDENT + N` / `IDENT - N` arithmetic.
+ * Anything more complex is left alone (and naga will surface the
+ * resulting parse error).
+ */
+function substituteTemplateExprs(wgsl, srcPath) {
+  return wgsl.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, ident) => {
+    const v = resolveIdent(srcPath, ident);
+    return v === undefined ? whole : String(v);
+  });
+}
+
+function resolveIdent(filePath, ident, seen = new Set()) {
+  const key = `${filePath}::${ident}`;
+  if (seen.has(key)) return undefined;
+  seen.add(key);
+
+  const fileSrc = readFileSync(filePath, "utf8");
+  // `const IDENT = NUMBER;` — direct numeric literal.
+  const litRe = new RegExp(`(?:export\\s+)?const\\s+${ident}\\s*=\\s*(-?\\d+(?:\\.\\d+)?)\\s*;`);
+  const lit = litRe.exec(fileSrc);
+  if (lit) return Number(lit[1]);
+
+  // `const IDENT = OTHER (+|-) NUMBER;` — simple arithmetic on another ident.
+  const exprRe = new RegExp(`(?:export\\s+)?const\\s+${ident}\\s*=\\s*([A-Za-z_]\\w*)\\s*([+\\-])\\s*(\\d+)\\s*;`);
+  const expr = exprRe.exec(fileSrc);
+  if (expr) {
+    const other = resolveIdent(filePath, expr[1], seen) ?? resolveImported(filePath, expr[1], seen);
+    if (other === undefined) return undefined;
+    const n = Number(expr[3]);
+    return expr[2] === "+" ? other + n : other - n;
+  }
+  return undefined;
+}
+
+function resolveImported(filePath, ident, seen) {
+  const fileSrc = readFileSync(filePath, "utf8");
+  // `import { ..., IDENT, ... } from "PATH";` — find PATH then resolve.
+  const importRe = new RegExp(`import\\s*\\{[^}]*\\b${ident}\\b[^}]*\\}\\s*from\\s*["']([^"']+)["']`);
+  const im = importRe.exec(fileSrc);
+  if (!im) return undefined;
+  const rel = im[1];
+  const candidate = resolve(dirname(filePath), rel + (rel.endsWith(".ts") ? "" : ".ts"));
+  return resolveIdent(candidate, ident, seen);
+}
 
 /**
  * Translate Babylon's pseudo-WGSL into raw WGSL that naga can validate.

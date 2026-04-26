@@ -61,10 +61,17 @@ function pushVert(
   c: Color3,
   i0: number, w0: number,
   i1: number, w1: number,
+  furAmount: number = 1,
 ): number {
   const idx = buf.positions.length / 3;
   buf.positions.push(x, y, z);
-  buf.colors.push(c.r, c.g, c.b, 1);
+  // RGB carries the per-band raccoon palette (read by both the
+  // StandardMaterial and the fur ShaderMaterial). Alpha doubles as a
+  // per-vertex fur mask: 1 = grow fur normally, 0 = no shell offset
+  // and skip the noise alpha-cutout. Eyes set this to 0; everything
+  // else inherits the default 1. mesh.hasVertexAlpha stays false so
+  // this channel does not perturb existing opaque rendering.
+  buf.colors.push(c.r, c.g, c.b, furAmount);
   buf.bIdx.push(i0, i1, 0, 0);
   buf.bWt.push(w0, w1, 0, 0);
   return idx;
@@ -437,13 +444,15 @@ function pushEye(
 ): void {
   const segs = 14;
   // Disc lies in the YZ plane (normal = +X), offset slightly forward.
-  const center = pushVert(buf, cx, cy, cz, color, boneIdx, 1, 0, 0);
+  // furAmount = 0 so the fur material leaves these verts on the skin
+  // (no shell offset, no strand cutout) — eyes stay sharp under fur.
+  const center = pushVert(buf, cx, cy, cz, color, boneIdx, 1, 0, 0, 0);
   const ring: number[] = [];
   for (let i = 0; i < segs; i++) {
     const a = (i / segs) * Math.PI * 2;
     const dy = Math.cos(a) * radius;
     const dz = Math.sin(a) * radius;
-    ring.push(pushVert(buf, cx, cy + dy, cz + dz, color, boneIdx, 1, 0, 0));
+    ring.push(pushVert(buf, cx, cy + dy, cz + dz, color, boneIdx, 1, 0, 0, 0));
   }
   for (let i = 0; i < segs; i++) {
     const j = (i + 1) % segs;

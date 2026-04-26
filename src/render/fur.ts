@@ -1,24 +1,38 @@
 /**
- * Shell-fur material — v0, NO SKINNING.
+ * Shell-fur material.
  *
- * Adapted minimally from `paperGround.ts` (the proven WGSL
- * ShaderMaterial in this project): same shader-store registration,
- * same uniform pattern. The only changes are (a) the vertex stage
- * displaces position outward along the normal by shellIndex *
- * shellSpacing, and (b) the fragment stage alpha-cutouts against a 3D
- * noise sample so outer shells thin into wisps.
+ * Adapted from `paperGround.ts` with two layers added:
+ *   1. Vertex stage skins position+normal using bone influence
+ *      (2 influencers, matching mesh.numBoneInfluencers in raccoonMesh.ts),
+ *      then displaces along the skinned normal by shellIndex *
+ *      shellSpacing — so fur tracks the walker animation.
+ *   2. Fragment stage alpha-cutouts against a 3D noise sample so outer
+ *      shells thin into wisps.
  *
- * Skinning is intentionally not wired here — meshes will render in
- * rest pose with fur on. Once the fur look is validated, we adapt the
- * vertex stage to skin position+normal before applying the shell
- * offset (separate change, separate test).
+ * Skinning declarations: matricesIndices/matricesWeights/mBones are
+ * declared directly in this shader rather than via Babylon's
+ * `#include<bonesDeclaration>` chunk — the include path produced
+ * "struct member mBones not found" errors in our context. ShaderMaterial
+ * still auto-binds the bone vertex buffers when it sees a skeleton on
+ * the mesh (see ShaderMaterial.js "Bones" section), so we deliberately
+ * omit "matricesIndices"/"matricesWeights" from the constructor's
+ * attributes list to avoid a double-bind / location-collision.
+ *
+ * mBones is sized to NUM_BONES + 1 to match Babylon's `BonesPerMesh =
+ * skeleton.bones.length + 1` convention; the upload via
+ * `Skeleton.getTransformMatrices` writes NUM_BONES matrices and leaves
+ * the trailing slot zero (we never index it).
  */
 import {
+  type Mesh,
   type Scene,
   ShaderLanguage,
   ShaderMaterial,
 } from "@babylonjs/core";
 import { ShaderStore } from "@babylonjs/core/Engines/shaderStore";
+import { NUM_BONES } from "../rig/skeleton";
+
+const BONES_ARRAY_SIZE = NUM_BONES + 1;
 
 const VERTEX_NAME = "raccoonFurVertexShader";
 const FRAGMENT_NAME = "raccoonFurFragmentShader";
@@ -26,10 +40,14 @@ const FRAGMENT_NAME = "raccoonFurFragmentShader";
 const VERTEX_SRC = /* wgsl */ `
 attribute position: vec3f;
 attribute normal: vec3f;
+attribute color: vec4f;
+attribute matricesIndices: vec4f;
+attribute matricesWeights: vec4f;
 
 uniform world: mat4x4f;
 uniform viewProjection: mat4x4f;
 uniform cameraPosition: vec3f;
+uniform mBones: array<mat4x4f, ${BONES_ARRAY_SIZE}>;
 uniform uShellIndex: f32;
 uniform uShellCount: f32;
 uniform uShellSpacing: f32;
@@ -39,24 +57,43 @@ varying vNormal: vec3f;
 varying vShellT: f32;
 varying vViewDir: vec3f;
 varying vLocalPos: vec3f;
+varying vColor: vec3f;
+varying vFurAmount: f32;
 
 @vertex
 fn main(input: VertexInputs) -> FragmentInputs {
+  // 2-influencer skinning. Mesh's matricesIndices/Weights buffers are
+  // vec4 (Babylon-padded), but only the first 2 components carry data
+  // for our soft-skinned body / single-bone rigid parts.
+  let i0 = i32(vertexInputs.matricesIndices[0]);
+  let i1 = i32(vertexInputs.matricesIndices[1]);
+  let w0 = vertexInputs.matricesWeights[0];
+  let w1 = vertexInputs.matricesWeights[1];
+  let influence = uniforms.mBones[i0] * w0 + uniforms.mBones[i1] * w1;
+
+  let skinnedPos = (influence * vec4f(vertexInputs.position, 1.0)).xyz;
+  let skinnedNormal = normalize((influence * vec4f(vertexInputs.normal, 0.0)).xyz);
+
   let denom = max(1.0, uniforms.uShellCount - 1.0);
   let shellT = uniforms.uShellIndex / denom;
 
-  // Push outward along the mesh-local normal. Mesh-local space is fine
-  // here because no skinning yet — the rest-pose normals are the only
-  // normals we have.
-  let localPos = vertexInputs.position + vertexInputs.normal * (uniforms.uShellIndex * uniforms.uShellSpacing);
+  // color.a doubles as per-vertex fur mask (set in raccoonMesh.ts).
+  // Eyes get 0 → no shell offset, no cutout in the fragment stage →
+  // they render as flat discs across all shells (only visible from the
+  // innermost; outer shells stack on top so the eye stays sharp).
+  let furAmount = vertexInputs.color.a;
 
-  let worldPos = uniforms.world * vec4f(localPos, 1.0);
+  let offsetPos = skinnedPos + skinnedNormal * (uniforms.uShellIndex * uniforms.uShellSpacing * furAmount);
+
+  let worldPos = uniforms.world * vec4f(offsetPos, 1.0);
   vertexOutputs.position = uniforms.viewProjection * worldPos;
   vertexOutputs.vWorldPos = worldPos.xyz;
-  vertexOutputs.vNormal = (uniforms.world * vec4f(vertexInputs.normal, 0.0)).xyz;
+  vertexOutputs.vNormal = (uniforms.world * vec4f(skinnedNormal, 0.0)).xyz;
   vertexOutputs.vShellT = shellT;
   vertexOutputs.vViewDir = uniforms.cameraPosition - worldPos.xyz;
-  vertexOutputs.vLocalPos = vertexInputs.position;
+  vertexOutputs.vLocalPos = skinnedPos;
+  vertexOutputs.vColor = vertexInputs.color.rgb;
+  vertexOutputs.vFurAmount = furAmount;
 }
 `;
 
@@ -66,8 +103,9 @@ varying vNormal: vec3f;
 varying vShellT: f32;
 varying vViewDir: vec3f;
 varying vLocalPos: vec3f;
+varying vColor: vec3f;
+varying vFurAmount: f32;
 
-uniform uBaseColor: vec3f;
 uniform uNoiseFreq: f32;
 uniform uTipDarken: f32;
 uniform uRimColor: vec3f;
@@ -107,18 +145,22 @@ fn main(input: FragmentInputs) -> FragmentOutputs {
   let strand = noise3(fragmentInputs.vLocalPos * uniforms.uNoiseFreq);
 
   // Outer shells cull more aggressively → wispier fluff edge. Shell 0
-  // (vShellT = 0) is fully opaque (the skin underneath).
+  // (vShellT = 0) is fully opaque (the skin underneath). vFurAmount=0
+  // (eyes) skips the cutout entirely so eye discs render across every
+  // shell — they stay sharp under fur.
   let cutoff = fragmentInputs.vShellT * 0.9 + 0.05;
-  if (fragmentInputs.vShellT > 0.0 && strand < cutoff) {
+  if (fragmentInputs.vFurAmount > 0.5 && fragmentInputs.vShellT > 0.0 && strand < cutoff) {
     discard;
   }
 
   let L = normalize(vec3f(0.3, 0.4, 1.0));
   let wrap = pow(dot(N, L) * 0.5 + 0.5, 1.4);
-  let ao = mix(0.55, 1.0, fragmentInputs.vShellT);
-  let tip = 1.0 - uniforms.uTipDarken * fragmentInputs.vShellT;
+  // AO + tip darkening only affect actual fur — eyes (furAmount=0)
+  // keep their full vertex color across shells.
+  let ao = mix(mix(1.0, 0.55, fragmentInputs.vFurAmount), 1.0, fragmentInputs.vShellT);
+  let tip = 1.0 - uniforms.uTipDarken * fragmentInputs.vShellT * fragmentInputs.vFurAmount;
 
-  var col = uniforms.uBaseColor * (0.55 + 0.45 * wrap) * ao * tip;
+  var col = fragmentInputs.vColor * (0.55 + 0.45 * wrap) * ao * tip;
 
   let nv = clamp(dot(N, V), 0.0, 1.0);
   let fres = pow(1.0 - nv, 2.4);
@@ -141,8 +183,6 @@ export interface FurMaterialOpts {
   shellCount: number;
   /** World-space (babylon meters) spacing between adjacent shells. */
   shellSpacing: number;
-  /** RGB base color of the fur. Defaults to a warm raccoon brown. */
-  baseColor?: [number, number, number];
   /** Strand frequency in 1/(walker units of mesh-local position). Higher = finer. */
   noiseFreq?: number;
   /** Tip-darken amount in [0,1]; positive darkens, negative lightens. */
@@ -160,15 +200,18 @@ export function createFurMaterial(scene: Scene, opts: FurMaterialOpts): ShaderMa
     scene,
     "raccoonFur",
     {
+      // Bone vertex attributes (matricesIndices, matricesWeights) are
+      // auto-added by ShaderMaterial when it detects the mesh skeleton —
+      // listing them here would double-bind and break the pipeline.
       attributes: ["position", "normal"],
       uniforms: [
         "world",
         "viewProjection",
         "cameraPosition",
+        "mBones",
         "uShellIndex",
         "uShellCount",
         "uShellSpacing",
-        "uBaseColor",
         "uNoiseFreq",
         "uTipDarken",
         "uRimColor",
@@ -181,8 +224,6 @@ export function createFurMaterial(scene: Scene, opts: FurMaterialOpts): ShaderMa
   mat.setFloat("uShellIndex", opts.shellIndex);
   mat.setFloat("uShellCount", opts.shellCount);
   mat.setFloat("uShellSpacing", opts.shellSpacing);
-  const bc = opts.baseColor ?? [0.42, 0.36, 0.30];
-  mat.setColor3("uBaseColor", { r: bc[0], g: bc[1], b: bc[2] } as never);
   mat.setFloat("uNoiseFreq", opts.noiseFreq ?? 90.0);
   mat.setFloat("uTipDarken", opts.tipDarken ?? 0.18);
   const rc = opts.rimColor ?? [0.95, 0.9, 0.78];
@@ -190,6 +231,19 @@ export function createFurMaterial(scene: Scene, opts: FurMaterialOpts): ShaderMa
   mat.setFloat("uRimStrength", opts.rimStrength ?? 0.35);
 
   mat.backFaceCulling = true;
+
+  // Per-frame bone-matrix upload. ShaderMaterial doesn't auto-upload
+  // bones the way StandardMaterial does, so we hook onBindObservable
+  // and push the skeleton's transform matrices via the underlying
+  // Effect (Float32Array path — ShaderMaterial.setMatrices wants a
+  // Matrix[] copy).
+  mat.onBindObservable.add((mesh) => {
+    const skel = (mesh as Mesh).skeleton;
+    if (!skel) return;
+    const effect = mat.getEffect();
+    if (!effect) return;
+    effect.setMatrices("mBones", skel.getTransformMatrices(mesh as Mesh));
+  });
 
   return mat;
 }
