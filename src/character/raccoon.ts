@@ -487,44 +487,36 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
   const spec = deepCloneSpec(base);
 
   const arch = ARCH_SKEW[unit.archetype] ?? DEFAULT_SKEW;
-  const tierBoost = 1 + (unit.tier - 1) * 0.10; // tier 1=1.0, tier 3=1.20
-  // Independent vertical and horizontal scales so raccoons can be tall
-  // and skinny, short and fat, etc. — not just uniformly bigger/smaller.
-  const baseScale = arch.scale * tierBoost * (1 + range(rng, -0.12, 0.12));
-  const vertMul = arch.vert * (1 + range(rng, -0.18, 0.18));
-  const horizMul = arch.horiz * (1 + range(rng, -0.18, 0.18));
+  const tierBoost = 1 + (unit.tier - 1) * 0.12; // tier 1=1.0, tier 3=1.24
+  // Independent vertical and horizontal scales — wider RNG so raccoons
+  // visibly differ in height, girth, and overall size.
+  const baseScale = arch.scale * tierBoost * (1 + range(rng, -0.20, 0.20));
+  const vertMul = arch.vert * (1 + range(rng, -0.24, 0.24));
+  const horizMul = arch.horiz * (1 + range(rng, -0.22, 0.22));
 
-  // Asymmetry roll: most raccoons stay round (~76%), some are gently
-  // squeezed front-to-back into flat-wide, a few rare long-and-thin.
-  // Strength dialed in conservative — extreme asymmetry produces
-  // cartoony / frog-shaped raccoons. Only the BODY gets warped; head
-  // stays normal proportions so the face doesn't go pancake.
+  // Asymmetry: only "slightly wider than round" — no long-and-thin, no
+  // extreme pancake. Anything more aggressive started looking cartoony /
+  // frog-y. About 30% of raccoons are subtly wider than they are deep.
   let asymLen = 1;
   let asymWid = 1;
-  const asymRoll = rng();
-  if (asymRoll < 0.18) {
-    // Flat-and-wide: shorten X, expand Y a bit.
-    const k = range(rng, 0.18, 0.32);
-    asymLen = 1 - k;            // 0.68 .. 0.82
-    asymWid = 1 + k * 0.45;     // 1.08 .. 1.14
-  } else if (asymRoll < 0.24) {
-    // Long-and-thin: rarer.
-    const k = range(rng, 0.15, 0.28);
-    asymLen = 1 + k;
-    asymWid = 1 - k * 0.45;
+  if (rng() < 0.30) {
+    const k = range(rng, 0.04, 0.12);
+    asymLen = 1 - k * 0.5;       // 0.94 .. 0.98
+    asymWid = 1 + k;             // 1.04 .. 1.12
   }
-  // else: symmetric (~76%)
 
-  const lenMul = arch.bodyLen * horizMul * asymLen * (1 + range(rng, -0.10, 0.10));
-  const widMul = arch.bodyWid * horizMul * asymWid * (1 + range(rng, -0.10, 0.10));
+  const lenMul = arch.bodyLen * horizMul * asymLen * (1 + range(rng, -0.14, 0.14));
+  const widMul = arch.bodyWid * horizMul * asymWid * (1 + range(rng, -0.14, 0.14));
 
   const oldPeak = base.bodyPeak;
   const oldOverlap = base.bodyOverlap;
+  // Big spread on pear↔apple per unit so the flock has a real mix of
+  // bottom-heavy and top-heavy silhouettes.
   spec.bodyPeak = clamp(
-    oldPeak + arch.peakBias + range(rng, -0.05, 0.05),
-    0.15, 0.85,
+    oldPeak + arch.peakBias + range(rng, -0.18, 0.18),
+    0.18, 0.82,
   );
-  spec.bodyOverlap = clamp(oldOverlap + range(rng, -0.06, 0.06), 0, 0.85);
+  spec.bodyOverlap = clamp(oldOverlap + range(rng, -0.08, 0.08), 0, 0.85);
 
   // Reshape body radii: rescale by (new bell-curve mul) / (old bell-curve
   // mul) per band, so the silhouette tracks the new peak/overlap. Then
@@ -542,7 +534,10 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
     b.thickness *= baseScale * vertMul;
   }
 
-  const headScale = baseScale * arch.headMul * (1 + range(rng, -0.08, 0.08));
+  // Head/body ratio gets big spread — some raccoons are bobble-heads,
+  // others are pinheaded. Drives a lot of personality on its own.
+  const headRatio = arch.headMul * (1 + range(rng, -0.25, 0.30));
+  const headScale = baseScale * headRatio;
   for (const b of spec.head) {
     // Head stays roughly round — asymmetry is a body-only roll. A
     // pancake-wide head reads as frog/UFO instead of raccoon.
@@ -550,9 +545,10 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
     b.ry *= headScale * horizMul;
     b.thickness *= headScale * vertMul;
   }
-  spec.ears.size *= baseScale * arch.earMul * (1 + range(rng, -0.18, 0.18));
-  spec.ears.spread *= 1 + range(rng, -0.18, 0.18);
-  spec.ears.tilt += range(rng, -0.12, 0.12);
+  // Ears: wide range on size, spread, and tilt for distinct silhouettes.
+  spec.ears.size *= baseScale * arch.earMul * (1 + range(rng, -0.35, 0.45));
+  spec.ears.spread *= 1 + range(rng, -0.30, 0.30);
+  spec.ears.tilt += range(rng, -0.22, 0.22);
 
   spec.arms.length *= baseScale * arch.armLen * (1 + range(rng, -0.10, 0.10));
   spec.arms.radius *= baseScale * arch.armR * (1 + range(rng, -0.08, 0.08));
