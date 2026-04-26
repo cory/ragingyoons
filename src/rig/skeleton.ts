@@ -18,10 +18,11 @@ export const BONE = {
   armR: 7,
   handL: 8,
   handR: 9,
+  tail: 10,
 } as const;
 
 export type BoneIndex = (typeof BONE)[keyof typeof BONE];
-export const NUM_BONES = 10;
+export const NUM_BONES = 11;
 
 export interface RigLayout {
   legHeight: number;
@@ -40,6 +41,12 @@ export interface RigLayout {
   armTipX: number;
   armTipY: number;
   armTipZ: number;
+  /** Tail-bone rest position in mesh-local (= world) coords. The bone
+   *  is parented to spineLow; its local translation is computed from
+   *  these and spineLow's z. The driver pitches/rolls the bone per
+   *  frame for bouncy spring-tail motion. */
+  tailBaseX: number;
+  tailAttachZ: number;
 }
 
 export interface Rig {
@@ -56,6 +63,7 @@ export interface Rig {
     armR: Bone;
     handL: Bone;
     handR: Bone;
+    tail: Bone;
   };
 }
 
@@ -73,6 +81,8 @@ export function rigLayout(legHeight: number, bodyHeight: number): RigLayout {
     armTipX: 0,
     armTipY: 0,
     armTipZ: 0,
+    tailBaseX: 0,
+    tailAttachZ: 0,
   };
 }
 
@@ -143,13 +153,22 @@ export function createRig(scene: Scene, layout: RigLayout, footLateral: number):
     armR,
     Matrix.Translation(layout.armTipX, -layout.armTipY, layout.armTipZ),
   );
+  // Tail: child of spineLow, anchored at the tail base. Bone-local
+  // translation is the offset from spineLow's world rest position.
+  // The driver applies pitchY (bounce) and rollX (sway) per frame.
+  const tail = new Bone(
+    "tail",
+    skeleton,
+    spineLow,
+    Matrix.Translation(layout.tailBaseX, 0, layout.tailAttachZ - zLow),
+  );
 
   return {
     skeleton,
     layout,
     bones: {
       hip, spineLow, spineHigh, head, footL, footR,
-      armL, armR, handL, handR,
+      armL, armR, handL, handR, tail,
     },
   };
 }

@@ -545,6 +545,13 @@ function computeRaccoonLayout(spec: RaccoonSpec): RaccoonLayout {
   layout.armTipX = sinD * armLenW;
   layout.armTipY = cosD * sinS * armLenW;   // magnitude — sign per side
   layout.armTipZ = -cosD * cosS * armLenW;
+
+  // Tail base — same start-X as emitTailToBuf, stuffed into layout so
+  // the tail bone's rest position agrees with the geometry.
+  let maxRx = 0;
+  for (const b of spec.body) if (b.rx > maxRx) maxRx = b.rx;
+  layout.tailBaseX = -maxRx * UNIT_SCALE * 0.55;
+  layout.tailAttachZ = layout.zHip + bodyHeightWorld * spec.tail.attachZFrac;
   return { layout, footLateral, headHeightWorld };
 }
 
@@ -586,16 +593,12 @@ function emitTailToBuf(
   const tail = spec.tail;
   if (tail.segments <= 0 || tail.length <= 0) return;
 
-  const bodyH = layout.zHigh - layout.zHip;
-  const attachZ = layout.zHip + bodyH * tail.attachZFrac;
-
-  // The body silhouette extends well past x=0 in -X, so a tail starting
-  // at body center would be buried. Start the tail just inside the
-  // body's back surface (a fraction of the widest band) so the first
-  // segment crosses the silhouette and the rest pokes out clearly.
-  let maxRx = 0;
-  for (const b of spec.body) if (b.rx > maxRx) maxRx = b.rx;
-  const startX = -maxRx * UNIT_SCALE * 0.55;
+  // Tail base + attach come from the layout (set in computeRaccoonLayout)
+  // so geometry and the tail bone's rest position agree. Skinning to
+  // BONE.tail means the driver's per-frame pitch/roll on that bone
+  // pivots the entire tail around its base.
+  const startX = layout.tailBaseX;
+  const attachZ = layout.tailAttachZ;
 
   const dirX = -Math.cos(tail.upTilt);
   const dirZ = Math.sin(tail.upTilt);
@@ -621,7 +624,7 @@ function emitTailToBuf(
       buf,
       x0, 0, z0,
       x1, 0, z1,
-      r0, r1, 8, color, BONE.spineLow,
+      r0, r1, 8, color, BONE.tail,
     );
   }
 }

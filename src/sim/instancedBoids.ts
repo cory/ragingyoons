@@ -185,6 +185,7 @@ function bakeGaitVAT(
     Matrix.Translation(0, +layout.shoulderY, -shoulderZAbs),                  // armR
     Matrix.Translation(-layout.armTipX, -(layout.shoulderY + layout.armTipY), -handZAbs), // handL
     Matrix.Translation(-layout.armTipX, +(layout.shoulderY + layout.armTipY), -handZAbs), // handR
+    Matrix.Translation(-layout.tailBaseX, 0, -layout.tailAttachZ),            // tail
   ];
   const tmpMat = new Matrix();
 
@@ -814,7 +815,7 @@ export class InstancedBoidsField {
       }
     }
     const REFERENCE_MAX_R = 42;
-    const COMFORT = 2.0;
+    const COMFORT = 2.4; // +20% over the prior 2.0 baseline
     const sizeScale = maxR > 0 ? (maxR / REFERENCE_MAX_R) * COMFORT : 1;
     const sepR = traits.separateRadius * sizeScale;
     // Build the per-unit gait menu (sorted ascending by world speed). Each

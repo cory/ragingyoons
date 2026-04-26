@@ -144,7 +144,7 @@ export function updateDriver(
   const upperBounce = Math.sin(state.phase * 2) * ex.upperBounceGain;
 
   const layout = ch.rig.layout;
-  const { hip, spineLow, spineHigh, head, footL, footR, armL, armR, handL, handR } = ch.rig.bones;
+  const { hip, spineLow, spineHigh, head, footL, footR, armL, armR, handL, handR, tail } = ch.rig.bones;
 
   // Hip — bob translates +Z; pitchY (lean) + rollX (sway) applied locally.
   setBoneLocal(
@@ -221,6 +221,27 @@ export function updateDriver(
   // their TRS each frame keeps them anchored after any prior bake/edit.
   setBoneLocal(handL, layout.armTipX, +layout.armTipY, layout.armTipZ, 0, 0, 0);
   setBoneLocal(handR, layout.armTipX, -layout.armTipY, layout.armTipZ, 0, 0, 0);
+
+  // Tail bouncy spring: pitchY bobs the tip up/down at 2× stride
+  // frequency (one bob per step) with a phase lag so the tail trails
+  // the body's vertical motion. rollX adds a slow lateral sway so the
+  // tail wags while the boid walks. Both amplitudes scale with energy.
+  const TAIL_BOB_AMP = 0.22;
+  const TAIL_BOB_LAG = -1.1;       // rad of phase lag
+  const TAIL_SWAY_AMP = 0.18;
+  const TAIL_SWAY_FREQ = 0.55;
+  const energyGain = 1 + 0.5 * Math.max(0, ex.upperBounceGain * 25);
+  const tailPitch = TAIL_BOB_AMP * energyGain * Math.sin(state.phase * 2 + TAIL_BOB_LAG);
+  const tailRoll = TAIL_SWAY_AMP * Math.sin(state.slowTime * TAIL_SWAY_FREQ);
+  setBoneLocal(
+    tail,
+    layout.tailBaseX,
+    0,
+    layout.tailAttachZ - layout.zLow,
+    tailRoll,
+    tailPitch,
+    0,
+  );
 
   // World transform — circle in XY plane at z=0, CCW heading along
   // tangent. Skipped when the caller (e.g. boids) is placing the mesh.
