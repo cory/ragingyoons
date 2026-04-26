@@ -12,6 +12,7 @@
     "useUnknownInCatchVariables": true,
     "esModuleInterop": true,
     "isolatedModules": true,
+    "noEmit": true,
     "verbatimModuleSyntax": false,
     "skipLibCheck": true,
     "resolveJsonModule": true,

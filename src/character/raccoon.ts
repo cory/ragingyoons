@@ -293,9 +293,150 @@ export function generateRaccoon(seedStr: string, opts: GenerateRaccoonOpts = {})
   };
 }
 
+/** Wrap an existing Unit (its archetype, personality, palette, faction,
+ *  team membership, etc. are preserved) with a raccoon spec. This is
+ *  the standard way to "render this guy as a raccoon" — nothing about
+ *  the underlying identity changes. */
+export function asRaccoon(unit: Unit, spec: RaccoonSpec): Unit {
+  return {
+    ...unit,
+    kind: "raccoon",
+    raccoon: spec,
+  };
+}
+
 function pickRaccoonHue(rng: RNG): number {
   // Mostly cool grays + occasional warm browns. Saturation/lightness still
   // come from the palette pipeline downstream.
   if (chance(rng, 0.7)) return range(rng, 200, 240); // cool gray-blue
   return pick(rng, [22, 32, 42]); // warm sepia/brown
+}
+
+// ── Per-unit raccoon variation ─────────────────────────────────────
+// Each Unit has archetype / personality / tier / faction. Those fields
+// already encode "what kind of guy is this"; here we read them to bend
+// the slider-driven base spec into a per-unit shape so the roster +
+// flock visibly differ. RNG seeded by unit.id for determinism.
+
+interface ArchetypeSkew {
+  /** Multiplier on overall body+head+ear scale. */
+  scale: number;
+  /** Extra multiplier on head only (head/body ratio). */
+  headMul: number;
+  /** Multiplier on ear size. */
+  earMul: number;
+  /** Bias added to bodyPeak (− = pear, + = apple). */
+  peakBias: number;
+  /** Multiplier on body length (X) — < 1 stubby, > 1 lanky front-to-back. */
+  bodyLen: number;
+  /** Multiplier on body width (Y) — > 1 chunky lateral. */
+  bodyWid: number;
+}
+
+const ARCH_SKEW: Record<string, ArchetypeSkew> = {
+  // Big, thick, no-nonsense; smallish head, modest ears.
+  Warden:    { scale: 1.18, headMul: 0.92, earMul: 0.85, peakBias: 0.00,  bodyLen: 1.00, bodyWid: 1.08 },
+  // Lithe, slightly pear (heavy hips), small head, tall.
+  Striker:   { scale: 0.92, headMul: 1.00, earMul: 1.00, peakBias: -0.10, bodyLen: 0.96, bodyWid: 0.92 },
+  // Apple-shouldered, big head, big ears, on the small side.
+  Caster:    { scale: 0.95, headMul: 1.10, earMul: 1.30, peakBias: 0.14,  bodyLen: 0.94, bodyWid: 0.96 },
+  // Round and stout, central bulge, thicker laterally.
+  Beast:     { scale: 1.10, headMul: 1.00, earMul: 1.05, peakBias: -0.04, bodyLen: 1.04, bodyWid: 1.12 },
+  // Boxy, compressed front-to-back, small head, modest ears.
+  Construct: { scale: 1.06, headMul: 0.90, earMul: 0.80, peakBias: 0.00,  bodyLen: 0.94, bodyWid: 1.04 },
+  // Slight, tall and pear-y, oversized head and ears.
+  Specter:   { scale: 0.86, headMul: 1.18, earMul: 1.20, peakBias: 0.12,  bodyLen: 0.96, bodyWid: 0.92 },
+};
+
+const DEFAULT_SKEW: ArchetypeSkew = {
+  scale: 1, headMul: 1, earMul: 1, peakBias: 0, bodyLen: 1, bodyWid: 1,
+};
+
+const PERSONALITY_LOOK: Record<string, LookMix> = {
+  stoic:     { idle: 0.30, camera: 0.10, influence: 0.60 }, // tracks the action
+  manic:     { idle: 0.75, camera: 0.05, influence: 0.20 }, // jittery
+  drunk:     { idle: 0.85, camera: 0.05, influence: 0.10 }, // wandering gaze
+  weary:     { idle: 0.55, camera: 0.05, influence: 0.40 },
+  berserker: { idle: 0.20, camera: 0.10, influence: 0.70 }, // locks onto target
+  skittish:  { idle: 0.55, camera: 0.30, influence: 0.15 }, // checks the viewer
+  stalwart:  { idle: 0.25, camera: 0.20, influence: 0.55 },
+};
+
+const DEFAULT_LOOK: LookMix = { idle: 0.5, camera: 0.25, influence: 0.25 };
+
+function clamp(x: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, x));
+}
+
+function deepCloneSpec(spec: RaccoonSpec): RaccoonSpec {
+  return {
+    body: spec.body.map((b) => ({ ...b })),
+    head: spec.head.map((b) => ({ ...b })),
+    headOffset: spec.headOffset,
+    ears: { ...spec.ears },
+    eyes: { ...spec.eyes },
+    maskStrength: spec.maskStrength,
+    bodyOverlap: spec.bodyOverlap,
+    bodyPeak: spec.bodyPeak,
+    lookMix: { ...spec.lookMix },
+  };
+}
+
+/** Derive a per-unit raccoon spec from the slider-driven base spec.
+ *  Deterministic per unit (seeded by unit.id). Archetype + tier shape
+ *  proportions; personality picks lookMix; small RNG jitter adds variety.
+ *
+ *  Body band radii are RESHAPED to follow the bell curve at the biased
+ *  peak/overlap, so the silhouette bulges in the new place rather than
+ *  keeping the slider-base shape. */
+export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
+  const rng = makeRNG("rcn:" + unit.id);
+  const spec = deepCloneSpec(base);
+
+  const arch = ARCH_SKEW[unit.archetype] ?? DEFAULT_SKEW;
+  const tierBoost = 1 + (unit.tier - 1) * 0.06; // tier 1=1.0, tier 3=1.12
+  const baseScale = arch.scale * tierBoost * (1 + range(rng, -0.06, 0.06));
+  const lenMul = arch.bodyLen * (1 + range(rng, -0.08, 0.08));
+  const widMul = arch.bodyWid * (1 + range(rng, -0.06, 0.06));
+
+  const oldPeak = base.bodyPeak;
+  const oldOverlap = base.bodyOverlap;
+  spec.bodyPeak = clamp(
+    oldPeak + arch.peakBias + range(rng, -0.05, 0.05),
+    0.15, 0.85,
+  );
+  spec.bodyOverlap = clamp(oldOverlap + range(rng, -0.06, 0.06), 0, 0.85);
+
+  // Reshape body radii: rescale by (new bell-curve mul) / (old bell-curve
+  // mul) per band, so the silhouette tracks the new peak/overlap. Then
+  // apply per-unit baseScale + length/width multipliers.
+  const thicknesses = spec.body.map((b) => b.thickness);
+  const oldBandTs = bandFractionalZs(thicknesses, oldOverlap);
+  const newBandTs = bandFractionalZs(thicknesses, spec.bodyOverlap);
+  for (let i = 0; i < spec.body.length; i++) {
+    const oldMul = bodyRadiusMul(oldBandTs[i], oldPeak);
+    const newMul = bodyRadiusMul(newBandTs[i], spec.bodyPeak);
+    const reshape = newMul / Math.max(1e-6, oldMul);
+    const b = spec.body[i];
+    b.rx *= reshape * baseScale * lenMul;
+    b.ry *= reshape * baseScale * widMul;
+    b.thickness *= baseScale;
+  }
+
+  const headScale = baseScale * arch.headMul * (1 + range(rng, -0.05, 0.05));
+  for (const b of spec.head) {
+    b.rx *= headScale;
+    b.ry *= headScale;
+    b.thickness *= headScale;
+  }
+  spec.ears.size *= baseScale * arch.earMul * (1 + range(rng, -0.18, 0.18));
+  spec.ears.spread *= 1 + range(rng, -0.18, 0.18);
+  spec.ears.tilt += range(rng, -0.12, 0.12);
+
+  spec.eyes.spread *= 1 + range(rng, -0.10, 0.10);
+  spec.maskStrength = clamp(spec.maskStrength + range(rng, -0.18, 0.18), 0, 1);
+
+  spec.lookMix = PERSONALITY_LOOK[unit.personality] ?? DEFAULT_LOOK;
+
+  return spec;
 }

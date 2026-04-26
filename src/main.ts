@@ -17,10 +17,11 @@ import type { Unit } from "./character/generator";
 import { generateTeams, type Roster, type Team } from "./character/teams";
 import { buildCharacter, type CharacterMesh } from "./character/mesh";
 import {
+  asRaccoon,
   buildBodyBands,
   defaultRaccoonSpec,
-  generateRaccoon,
   RACCOON_DEFAULTS,
+  specFromUnit,
   type RaccoonSpec,
 } from "./character/raccoon";
 import { GAITS } from "./walker/gait";
@@ -196,10 +197,10 @@ async function main(): Promise<void> {
   const driver = makeDriverState("walk", presetMood("neutral"));
   const lookState = makeLookState();
 
-  // ── Raccoon mode ─────────────────────────────────────────────────
-  // When on, the active roster pick is rebuilt as a raccoon using the
-  // shared `raccoonControls` knobs. Sliders mutate `raccoonControls`
-  // and trigger a rebuild via activateUnit(activeIdx).
+  // ── Raccoon shape controls ───────────────────────────────────────
+  // Sliders edit the global recipe; activateUnit rebuilds the active
+  // mesh whenever a knob moves. Each roster pick keeps its palette and
+  // personality from the base unit; the mesh shape is slider-driven.
   interface RaccoonControls {
     bodyScale: number;
     bodyLength: number;  // x-axis (forward) stretch on body bands
@@ -211,9 +212,6 @@ async function main(): Promise<void> {
     earSpread: number;
     eyeSpread: number;
     mask: number;
-    lookIdle: number;
-    lookCamera: number;
-    lookInfluence: number;
   }
   const raccoonControls: RaccoonControls = {
     bodyScale: 1.0,
@@ -226,15 +224,11 @@ async function main(): Promise<void> {
     earSpread: 1.0,
     eyeSpread: 1.0,
     mask: 0.55,
-    lookIdle: 0.5,
-    lookCamera: 0.25,
-    lookInfluence: 0.25,
   };
-  let raccoonMode = false;
-  function specFromControls(c: RaccoonControls): RaccoonSpec {
+  /** Build the slider-driven base spec. Per-unit biases (archetype, tier,
+   *  personality) are layered on top by specFromUnit at activation time. */
+  function baseSpecFromControls(c: RaccoonControls): RaccoonSpec {
     const spec = defaultRaccoonSpec();
-    // Regenerate body bands so the bell-curve radius profile aligns with
-    // the actual band Z positions under the current overlap and peak.
     const thicknesses = RACCOON_DEFAULTS.bodyThick.map((t) => t * c.bodyScale);
     spec.body = buildBodyBands(
       thicknesses,
@@ -255,11 +249,6 @@ async function main(): Promise<void> {
     spec.maskStrength = c.mask;
     spec.bodyOverlap = c.bodyOverlap;
     spec.bodyPeak = c.bodyPeak;
-    spec.lookMix = {
-      idle: c.lookIdle,
-      camera: c.lookCamera,
-      influence: c.lookInfluence,
-    };
     return spec;
   }
 
@@ -267,6 +256,14 @@ async function main(): Promise<void> {
   let viewMode: ViewMode = "track";
   const boidsField = new InstancedBoidsField(scene, { bounds: WORLD_HALF_EXTENT });
   let boidCount = 60;
+
+  /** Build the unit list passed to the boid field. Each roster unit is
+   *  wrapped as a raccoon (per-unit biases applied) so the boid mesh
+   *  builder finds `unit.raccoon` populated. */
+  function raccoonifiedUnits(): Unit[] {
+    const baseSpec = baseSpecFromControls(raccoonControls);
+    return roster.units.map((u) => asRaccoon(u, specFromUnit(u, baseSpec)));
+  }
 
   function activateUnit(idx: number): void {
     if (idx < 0 || idx >= roster.units.length) return;
@@ -277,12 +274,8 @@ async function main(): Promise<void> {
     }
     activeIdx = idx;
     const baseUnit = roster.units[idx];
-    const unit = raccoonMode
-      ? generateRaccoon(`${seedCounter}_rcn_${idx}`, {
-          spec: specFromControls(raccoonControls),
-          palette: baseUnit.palette,
-        })
-      : baseUnit;
+    const baseSpec = baseSpecFromControls(raccoonControls);
+    const unit = asRaccoon(baseUnit, specFromUnit(baseUnit, baseSpec));
     updateCharacterCard(unit);
     setRosterActive(activeIdx);
     if (viewMode === "track") {
@@ -299,7 +292,7 @@ async function main(): Promise<void> {
     activateUnit(0);
     if (viewMode === "boids") {
       boidsField.dispose();
-      boidsField.setCount(boidCount, roster.units);
+      boidsField.setCount(boidCount, raccoonifiedUnits());
       const insp = document.getElementById("boidInspector");
       if (insp) insp.style.display = "none";
     }
@@ -324,7 +317,7 @@ async function main(): Promise<void> {
       }
       walkerAxes?.dispose();
       walkerAxes = null;
-      boidsField.setCount(boidCount, roster.units);
+      boidsField.setCount(boidCount, raccoonifiedUnits());
     }
   }
 
@@ -463,9 +456,6 @@ async function main(): Promise<void> {
     { key: "earSpread",     label: "ear sep",  min: 0.4, max: 1.6, step: 0.01 },
     { key: "eyeSpread",     label: "eye sep",  min: 0.3, max: 1.6, step: 0.01 },
     { key: "mask",          label: "mask",     min: 0.0, max: 1.0, step: 0.01 },
-    { key: "lookIdle",      label: "look idle",      min: 0, max: 1, step: 0.01 },
-    { key: "lookCamera",    label: "look camera",    min: 0, max: 1, step: 0.01 },
-    { key: "lookInfluence", label: "look center",    min: 0, max: 1, step: 0.01 },
   ];
   const raccoonSliderEls = new Map<keyof RaccoonControls, { input: HTMLInputElement; val: HTMLElement }>();
 
@@ -491,7 +481,7 @@ async function main(): Promise<void> {
         const v = parseFloat(input.value);
         raccoonControls[def.key] = v;
         val.textContent = v.toFixed(2);
-        if (raccoonMode && viewMode === "track") activateUnit(activeIdx);
+        if (viewMode === "track") activateUnit(activeIdx);
       });
     }
   }
@@ -506,21 +496,6 @@ async function main(): Promise<void> {
   }
   buildRaccoonSliders();
 
-  function setRaccoonMode(on: boolean): void {
-    raccoonMode = on;
-    const btn = document.getElementById("btnRaccoon");
-    if (btn) btn.classList.toggle("active", on);
-    // Reset look state so the new character doesn't inherit a stale yaw.
-    lookState.yaw = 0;
-    lookState.yawVel = 0;
-    lookState.yawTarget = 0;
-    lookState.modeTimer = 0.2;
-    lookState.glanceTimer = 0;
-    if (viewMode === "track") activateUnit(activeIdx);
-  }
-  const raccoonBtn = document.getElementById("btnRaccoon");
-  if (raccoonBtn) raccoonBtn.addEventListener("click", () => setRaccoonMode(!raccoonMode));
-
   const raccoonResetBtn = document.getElementById("btnRaccoonReset");
   if (raccoonResetBtn) {
     raccoonResetBtn.addEventListener("click", () => {
@@ -534,11 +509,8 @@ async function main(): Promise<void> {
       raccoonControls.earSpread = 1.0;
       raccoonControls.eyeSpread = 1.0;
       raccoonControls.mask = 0.55;
-      raccoonControls.lookIdle = 0.5;
-      raccoonControls.lookCamera = 0.25;
-      raccoonControls.lookInfluence = 0.25;
       syncRaccoonSliders();
-      if (raccoonMode && viewMode === "track") activateUnit(activeIdx);
+      if (viewMode === "track") activateUnit(activeIdx);
     });
   }
 
@@ -567,7 +539,7 @@ async function main(): Promise<void> {
     boidSlider.addEventListener("input", () => {
       boidCount = parseInt(boidSlider.value, 10);
       boidVal.textContent = String(boidCount);
-      if (viewMode === "boids") boidsField.setCount(boidCount, roster.units);
+      if (viewMode === "boids") boidsField.setCount(boidCount, raccoonifiedUnits());
     });
   }
 
@@ -677,25 +649,24 @@ async function main(): Promise<void> {
     if (viewMode === "track") {
       const t0 = performance.now();
       if (current) {
-        const lookMix = current.unit.raccoon?.lookMix;
-        let headYaw = 0;
-        if (lookMix) {
-          const camPos = cam.globalPosition;
-          headYaw = stepLook(
-            lookState,
-            {
-              cx: current.root.position.x,
-              cy: current.root.position.y,
-              heading: current.root.rotation.z,
-              camX: camPos.x,
-              camY: camPos.y,
-              influenceX: 0,
-              influenceY: 0,
-              mix: lookMix,
-            },
-            dt,
-          );
-        }
+        const lookMix = current.unit.raccoon?.lookMix ?? {
+          idle: 0.5, camera: 0.25, influence: 0.25,
+        };
+        const camPos = cam.globalPosition;
+        const headYaw = stepLook(
+          lookState,
+          {
+            cx: current.root.position.x,
+            cy: current.root.position.y,
+            heading: current.root.rotation.z,
+            camX: camPos.x,
+            camY: camPos.y,
+            influenceX: 0,
+            influenceY: 0,
+            mix: lookMix,
+          },
+          dt,
+        );
         updateDriver(current, driver, dt, {
           onPlant: printsOn
             ? (side, x, y, h) => footprints.addPrint(side, x, y, h)
