@@ -212,6 +212,9 @@ async function main(): Promise<void> {
     earSpread: number;
     eyeSpread: number;
     mask: number;
+    armLength: number;
+    armRadius: number;
+    armDroop: number;
   }
   const raccoonControls: RaccoonControls = {
     bodyScale: 1.0,
@@ -224,6 +227,9 @@ async function main(): Promise<void> {
     earSpread: 1.0,
     eyeSpread: 1.0,
     mask: 0.55,
+    armLength: 1.0,
+    armRadius: 1.0,
+    armDroop: 0.45,
   };
   /** Build the slider-driven base spec. Per-unit biases (archetype, tier,
    *  personality) are layered on top by specFromUnit at activation time. */
@@ -245,6 +251,9 @@ async function main(): Promise<void> {
     }
     spec.ears.size *= c.earSize;
     spec.ears.spread *= c.earSpread;
+    spec.arms.length *= c.armLength;
+    spec.arms.radius *= c.armRadius;
+    spec.arms.droop = c.armDroop;
     spec.eyes.spread *= c.eyeSpread;
     spec.maskStrength = c.mask;
     spec.bodyOverlap = c.bodyOverlap;
@@ -454,6 +463,9 @@ async function main(): Promise<void> {
     { key: "headScale",     label: "head",     min: 0.6, max: 1.6, step: 0.01 },
     { key: "earSize",       label: "ears",     min: 0.0, max: 2.0, step: 0.01 },
     { key: "earSpread",     label: "ear sep",  min: 0.4, max: 1.6, step: 0.01 },
+    { key: "armLength",     label: "arm len",  min: 0.0, max: 2.0, step: 0.01 },
+    { key: "armRadius",     label: "arm fat",  min: 0.3, max: 2.0, step: 0.01 },
+    { key: "armDroop",      label: "arm droop",min: 0.0, max: 1.4, step: 0.01 },
     { key: "eyeSpread",     label: "eye sep",  min: 0.3, max: 1.6, step: 0.01 },
     { key: "mask",          label: "mask",     min: 0.0, max: 1.0, step: 0.01 },
   ];
@@ -509,6 +521,9 @@ async function main(): Promise<void> {
       raccoonControls.earSpread = 1.0;
       raccoonControls.eyeSpread = 1.0;
       raccoonControls.mask = 0.55;
+      raccoonControls.armLength = 1.0;
+      raccoonControls.armRadius = 1.0;
+      raccoonControls.armDroop = 0.45;
       syncRaccoonSliders();
       if (viewMode === "track") activateUnit(activeIdx);
     });

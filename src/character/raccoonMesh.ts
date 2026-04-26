@@ -361,6 +361,72 @@ function pushCone(
   }
 }
 
+/** Tapered cylinder from A (radius rA) to B (radius rB). Both endpoints
+ *  rigid-skinned to the same bone. Produces a sausage-like tube with
+ *  capped ends — used for arms. */
+function pushTaperedCylinder(
+  buf: BuildBuffers,
+  ax: number, ay: number, az: number,
+  bx: number, by: number, bz: number,
+  rA: number, rB: number,
+  segments: number,
+  color: Color3,
+  boneIdx: number,
+): void {
+  let dx = bx - ax, dy = by - ay, dz = bz - az;
+  const dlen = Math.hypot(dx, dy, dz) || 1;
+  dx /= dlen; dy /= dlen; dz /= dlen;
+  // Pick a helper vector not parallel to the axis.
+  const hx = Math.abs(dz) < 0.9 ? 0 : 1;
+  const hy = 0;
+  const hz = Math.abs(dz) < 0.9 ? 1 : 0;
+  let ux = dy * hz - dz * hy;
+  let uy = dz * hx - dx * hz;
+  let uz = dx * hy - dy * hx;
+  const ulen = Math.hypot(ux, uy, uz) || 1;
+  ux /= ulen; uy /= ulen; uz /= ulen;
+  const vx = dy * uz - dz * uy;
+  const vy = dz * ux - dx * uz;
+  const vz = dx * uy - dy * ux;
+
+  const ringA: number[] = [];
+  const ringB: number[] = [];
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    ringA.push(
+      pushVert(
+        buf,
+        ax + ux * ca * rA + vx * sa * rA,
+        ay + uy * ca * rA + vy * sa * rA,
+        az + uz * ca * rA + vz * sa * rA,
+        color, boneIdx, 1, 0, 0,
+      ),
+    );
+    ringB.push(
+      pushVert(
+        buf,
+        bx + ux * ca * rB + vx * sa * rB,
+        by + uy * ca * rB + vy * sa * rB,
+        bz + uz * ca * rB + vz * sa * rB,
+        color, boneIdx, 1, 0, 0,
+      ),
+    );
+  }
+  // Side quads.
+  for (let i = 0; i < segments; i++) {
+    const j = (i + 1) % segments;
+    buf.indices.push(ringA[i], ringB[i], ringB[j]);
+    buf.indices.push(ringA[i], ringB[j], ringA[j]);
+  }
+  // Caps — fans from vert 0 of each ring. Convex polygon, no earcut needed.
+  for (let i = 1; i < segments - 1; i++) {
+    // A cap winds opposite to B cap so both face outward.
+    buf.indices.push(ringA[0], ringA[i + 1], ringA[i]);
+    buf.indices.push(ringB[0], ringB[i], ringB[i + 1]);
+  }
+}
+
 /** Forward-facing white disc, rigid-skinned to head bone. World coords. */
 function pushEye(
   buf: BuildBuffers,
@@ -455,6 +521,30 @@ function computeRaccoonLayout(spec: RaccoonSpec): RaccoonLayout {
   layout.height = layout.zHead + headHeightWorld;
   const avgBodyRy = spec.body.reduce((s, b) => s + b.ry, 0) / Math.max(1, spec.body.length);
   const footLateral = Math.max(avgBodyRy * 0.5, 14) * UNIT_SCALE;
+  // Shoulder anchors — body-local, used as the armL/armR bone rest
+  // positions and as the origins of arm-local geometry.
+  let maxRy = 0;
+  for (const b of spec.body) if (b.ry > maxRy) maxRy = b.ry;
+  const maxRyW = maxRy * UNIT_SCALE;
+  layout.shoulderY = maxRy * spec.arms.shoulderYFrac * UNIT_SCALE;
+  const shoulderZAbs = layout.zHip + bodyHeightWorld * spec.arms.shoulderZFrac;
+  layout.shoulderZRel = shoulderZAbs - layout.zHigh;
+
+  // Arm tip — same auto-spread math as emitArmsToBuf so geometry and
+  // hand-bone position agree.
+  const sinD = Math.sin(spec.arms.droop);
+  const cosD = Math.cos(spec.arms.droop);
+  const armLenW = spec.arms.length * UNIT_SCALE;
+  const ARM_CLEARANCE = 1.10;
+  const requiredOutward = ARM_CLEARANCE * maxRyW - layout.shoulderY;
+  const armForwardComp = cosD * armLenW;
+  let sinS = armForwardComp > 1e-6 ? requiredOutward / armForwardComp : 0;
+  if (sinS < 0) sinS = 0;
+  if (sinS > 0.87) sinS = 0.87;
+  const cosS = Math.sqrt(1 - sinS * sinS);
+  layout.armTipX = sinD * armLenW;
+  layout.armTipY = cosD * sinS * armLenW;   // magnitude — sign per side
+  layout.armTipZ = -cosD * cosS * armLenW;
   return { layout, footLateral, headHeightWorld };
 }
 
@@ -478,6 +568,40 @@ function emitBodyToBuf(
     (z) => bodySkin(z, layout),
     /* capTop */ false,
     /* capBottom */ true,
+  );
+  emitArmsToBuf(buf, spec, palette, layout);
+}
+
+/** Two tapered-cylinder arms anchored at the shoulder, skinned 100%
+ *  to the armL/armR bones so the driver can swing them per-frame in
+ *  counter-stride to the same-side leg. The arms auto-spread outward
+ *  so chonky raccoons don't swallow them in the body bulge.
+ *
+ *  Verts are emitted in BONE-LOCAL frame: origin = shoulder, so the
+ *  bone's pitchY rotates the arm around its shoulder anchor. */
+function emitArmsToBuf(
+  buf: BuildBuffers,
+  spec: RaccoonSpec,
+  palette: Unit["palette"],
+  layout: RigLayout,
+): void {
+  const rA = spec.arms.radius * UNIT_SCALE;
+  const rB = rA * spec.arms.tipMul;
+  const armColor = parseHsl(palette[spec.arms.shadeKey]);
+  // Verts in arm-local frame: shoulder end at origin, tip at the
+  // pre-computed armTipX/Y/Z in the layout (same coords the hand bone
+  // is anchored at). +tipY for armL, -tipY for armR.
+  pushTaperedCylinder(
+    buf,
+    0, 0, 0,
+    layout.armTipX, +layout.armTipY, layout.armTipZ,
+    rA, rB, 8, armColor, BONE.armL,
+  );
+  pushTaperedCylinder(
+    buf,
+    0, 0, 0,
+    layout.armTipX, -layout.armTipY, layout.armTipZ,
+    rA, rB, 8, armColor, BONE.armR,
   );
 }
 

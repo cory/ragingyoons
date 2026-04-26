@@ -14,9 +14,14 @@ export const BONE = {
   head: 3,
   footL: 4,
   footR: 5,
+  armL: 6,
+  armR: 7,
+  handL: 8,
+  handR: 9,
 } as const;
 
 export type BoneIndex = (typeof BONE)[keyof typeof BONE];
+export const NUM_BONES = 10;
 
 export interface RigLayout {
   legHeight: number;
@@ -26,6 +31,15 @@ export interface RigLayout {
   zLow: number;
   zHigh: number;
   zHead: number;
+  /** Lateral offset (world units) of the shoulder anchors from spine. */
+  shoulderY: number;
+  /** Z of the shoulder relative to spineHigh's z (negative = below). */
+  shoulderZRel: number;
+  /** Hand-bone offset from its parent arm bone, in arm-local frame.
+   *  Y-magnitude (handL gets +armTipY, handR gets -armTipY). */
+  armTipX: number;
+  armTipY: number;
+  armTipZ: number;
 }
 
 export interface Rig {
@@ -38,6 +52,10 @@ export interface Rig {
     head: Bone;
     footL: Bone;
     footR: Bone;
+    armL: Bone;
+    armR: Bone;
+    handL: Bone;
+    handR: Bone;
   };
 }
 
@@ -50,6 +68,11 @@ export function rigLayout(legHeight: number, bodyHeight: number): RigLayout {
     zLow: legHeight + bodyHeight * 0.25,
     zHigh: legHeight + bodyHeight * 0.65,
     zHead: legHeight + bodyHeight * 0.95,
+    shoulderY: 0,         // raccoon mesh fills these in
+    shoulderZRel: 0,
+    armTipX: 0,
+    armTipY: 0,
+    armTipZ: 0,
   };
 }
 
@@ -90,11 +113,44 @@ export function createRig(scene: Scene, layout: RigLayout, footLateral: number):
     hip,
     Matrix.Translation(0, -footLateral, -zHip),
   );
+  // Arms: child of spineHigh, anchored at the shoulder. Per-frame the
+  // driver applies pitchY (rotation around the lateral axis) so the
+  // arms swing forward / back in counter-stride to the same-side leg.
+  const armL = new Bone(
+    "armL",
+    skeleton,
+    spineHigh,
+    Matrix.Translation(0, +layout.shoulderY, layout.shoulderZRel),
+  );
+  const armR = new Bone(
+    "armR",
+    skeleton,
+    spineHigh,
+    Matrix.Translation(0, -layout.shoulderY, layout.shoulderZRel),
+  );
+  // Hands: child of arms, anchored at the arm tip. No animation today
+  // — they just ride the arm swing — but they're attachment points for
+  // future props (held items).
+  const handL = new Bone(
+    "handL",
+    skeleton,
+    armL,
+    Matrix.Translation(layout.armTipX, +layout.armTipY, layout.armTipZ),
+  );
+  const handR = new Bone(
+    "handR",
+    skeleton,
+    armR,
+    Matrix.Translation(layout.armTipX, -layout.armTipY, layout.armTipZ),
+  );
 
   return {
     skeleton,
     layout,
-    bones: { hip, spineLow, spineHigh, head, footL, footR },
+    bones: {
+      hip, spineLow, spineHigh, head, footL, footR,
+      armL, armR, handL, handR,
+    },
   };
 }
 

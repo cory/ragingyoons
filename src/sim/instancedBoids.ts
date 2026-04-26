@@ -49,7 +49,7 @@ import {
   presetMood,
   strideAmp0,
 } from "../walker/mood";
-import { createRig, type RigLayout } from "../rig/skeleton";
+import { createRig, NUM_BONES, type RigLayout } from "../rig/skeleton";
 import { UNIT_SCALE } from "../scale";
 import {
   type BoidTraits,
@@ -86,7 +86,6 @@ const FINE_CELL = 2;
 /** Per-instance world-space scale applied to each rendered boid. Keeps
  *  the totem characters visually compact in the flock view. */
 const BOID_RENDER_SCALE = 0.5;
-const NUM_BONES = 6;
 
 const GAIT_LIST = ["walk", "run", "shuffle"] as const;
 type GaitName = (typeof GAIT_LIST)[number];
@@ -169,13 +168,23 @@ function bakeGaitVAT(
   };
   const ds = makeDriverState("walk", presetMood("neutral"));
 
+  // World-rest position of each bone is just translation (no rotation
+  // in the rest pose). invBind is its negation — multiplied by the
+  // bone's animated absolute matrix to get the deformation matrix
+  // baked into the VAT.
+  const shoulderZAbs = layout.zHigh + layout.shoulderZRel;
+  const handZAbs = shoulderZAbs + layout.armTipZ;
   const invBind: Matrix[] = [
-    Matrix.Translation(0, 0, -layout.zHip),
-    Matrix.Translation(0, 0, -layout.zLow),
-    Matrix.Translation(0, 0, -layout.zHigh),
-    Matrix.Translation(0, 0, -layout.zHead),
-    Matrix.Translation(0, -footLateral, 0),
-    Matrix.Translation(0, +footLateral, 0),
+    Matrix.Translation(0, 0, -layout.zHip),                                  // hip
+    Matrix.Translation(0, 0, -layout.zLow),                                   // spineLow
+    Matrix.Translation(0, 0, -layout.zHigh),                                  // spineHigh
+    Matrix.Translation(0, 0, -layout.zHead),                                  // head
+    Matrix.Translation(0, -footLateral, 0),                                   // footL
+    Matrix.Translation(0, +footLateral, 0),                                   // footR
+    Matrix.Translation(0, -layout.shoulderY, -shoulderZAbs),                  // armL
+    Matrix.Translation(0, +layout.shoulderY, -shoulderZAbs),                  // armR
+    Matrix.Translation(-layout.armTipX, -(layout.shoulderY + layout.armTipY), -handZAbs), // handL
+    Matrix.Translation(-layout.armTipX, +(layout.shoulderY + layout.armTipY), -handZAbs), // handR
   ];
   const tmpMat = new Matrix();
 

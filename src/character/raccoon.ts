@@ -38,6 +38,23 @@ export interface RaccoonBand {
   shadeKey: ShadeKey;
 }
 
+export interface RaccoonArms {
+  /** Arm length in walker units (shoulder → tip). */
+  length: number;
+  /** Radius at the shoulder end (walker units). Tip is `radius * tipMul`. */
+  radius: number;
+  /** Tip radius as a fraction of shoulder radius. <1 = tapered. */
+  tipMul: number;
+  /** Forward droop in radians. 0 = straight down, π/4 ≈ 45° forward. */
+  droop: number;
+  /** Lateral shoulder offset as a fraction of the body's max ry. */
+  shoulderYFrac: number;
+  /** Vertical shoulder height as a fraction of body height (0..1). */
+  shoulderZFrac: number;
+  /** Shade key for arm color. */
+  shadeKey: ShadeKey;
+}
+
 export interface RaccoonEars {
   /** Cone height (walker units). */
   size: number;
@@ -72,6 +89,7 @@ export interface RaccoonSpec {
   /** Vertical gap between top of body and bottom of head stack (walker units). */
   headOffset: number;
   ears: RaccoonEars;
+  arms: RaccoonArms;
   eyes: RaccoonEyes;
   /** Strength of dark face mask shading on the eye band, 0..1. */
   maskStrength: number;
@@ -107,6 +125,13 @@ export const RACCOON_DEFAULTS = {
   earSize: 13,
   earSpread: 0.82,
   earTilt: 0.3,
+  // Arms — short tapered cylinders that hang forward-down from upper body.
+  armLength: 22,
+  armRadius: 5.5,
+  armTipMul: 0.65,
+  armDroop: 0.45,
+  armShoulderYFrac: 0.78,
+  armShoulderZFrac: 0.86,
   eyeSize: 3.8,
   eyeSpread: 0.55,
   // > 1 sits the disc just outside the band surface to avoid z-fight.
@@ -179,6 +204,15 @@ export function defaultRaccoonSpec(): RaccoonSpec {
       size: D.earSize,
       spread: D.earSpread,
       tilt: D.earTilt,
+      shadeKey: "primaryDark",
+    },
+    arms: {
+      length: D.armLength,
+      radius: D.armRadius,
+      tipMul: D.armTipMul,
+      droop: D.armDroop,
+      shoulderYFrac: D.armShoulderYFrac,
+      shoulderZFrac: D.armShoulderZFrac,
       shadeKey: "primaryDark",
     },
     eyes: {
@@ -331,25 +365,32 @@ interface ArchetypeSkew {
   bodyLen: number;
   /** Multiplier on body width (Y) — > 1 chunky lateral. */
   bodyWid: number;
+  /** Multiplier on arm length. */
+  armLen: number;
+  /** Multiplier on arm radius. */
+  armR: number;
+  /** Bias added to arm droop (radians). */
+  armDroopBias: number;
 }
 
 const ARCH_SKEW: Record<string, ArchetypeSkew> = {
-  // Big, thick, no-nonsense; smallish head, modest ears.
-  Warden:    { scale: 1.18, headMul: 0.92, earMul: 0.85, peakBias: 0.00,  bodyLen: 1.00, bodyWid: 1.08 },
-  // Lithe, slightly pear (heavy hips), small head, tall.
-  Striker:   { scale: 0.92, headMul: 1.00, earMul: 1.00, peakBias: -0.10, bodyLen: 0.96, bodyWid: 0.92 },
-  // Apple-shouldered, big head, big ears, on the small side.
-  Caster:    { scale: 0.95, headMul: 1.10, earMul: 1.30, peakBias: 0.14,  bodyLen: 0.94, bodyWid: 0.96 },
-  // Round and stout, central bulge, thicker laterally.
-  Beast:     { scale: 1.10, headMul: 1.00, earMul: 1.05, peakBias: -0.04, bodyLen: 1.04, bodyWid: 1.12 },
-  // Boxy, compressed front-to-back, small head, modest ears.
-  Construct: { scale: 1.06, headMul: 0.90, earMul: 0.80, peakBias: 0.00,  bodyLen: 0.94, bodyWid: 1.04 },
-  // Slight, tall and pear-y, oversized head and ears.
-  Specter:   { scale: 0.86, headMul: 1.18, earMul: 1.20, peakBias: 0.12,  bodyLen: 0.96, bodyWid: 0.92 },
+  // Big, thick, no-nonsense; smallish head, modest ears, beefy arms.
+  Warden:    { scale: 1.18, headMul: 0.92, earMul: 0.85, peakBias: 0.00,  bodyLen: 1.00, bodyWid: 1.08, armLen: 1.05, armR: 1.20, armDroopBias: -0.05 },
+  // Lithe, slightly pear, lanky arms.
+  Striker:   { scale: 0.92, headMul: 1.00, earMul: 1.00, peakBias: -0.10, bodyLen: 0.96, bodyWid: 0.92, armLen: 1.20, armR: 0.85, armDroopBias: 0.05 },
+  // Apple-shouldered, oversized head and ears, dainty arms tucked forward.
+  Caster:    { scale: 0.95, headMul: 1.10, earMul: 1.30, peakBias: 0.14,  bodyLen: 0.94, bodyWid: 0.96, armLen: 0.95, armR: 0.85, armDroopBias: 0.20 },
+  // Round and stout, stubby chunky arms.
+  Beast:     { scale: 1.10, headMul: 1.00, earMul: 1.05, peakBias: -0.04, bodyLen: 1.04, bodyWid: 1.12, armLen: 0.95, armR: 1.10, armDroopBias: -0.08 },
+  // Boxy, compressed front-to-back, blocky arms straight down.
+  Construct: { scale: 1.06, headMul: 0.90, earMul: 0.80, peakBias: 0.00,  bodyLen: 0.94, bodyWid: 1.04, armLen: 1.00, armR: 1.15, armDroopBias: -0.20 },
+  // Slight, tall, oversized head, long thin arms hanging.
+  Specter:   { scale: 0.86, headMul: 1.18, earMul: 1.20, peakBias: 0.12,  bodyLen: 0.96, bodyWid: 0.92, armLen: 1.30, armR: 0.78, armDroopBias: -0.05 },
 };
 
 const DEFAULT_SKEW: ArchetypeSkew = {
   scale: 1, headMul: 1, earMul: 1, peakBias: 0, bodyLen: 1, bodyWid: 1,
+  armLen: 1, armR: 1, armDroopBias: 0,
 };
 
 const PERSONALITY_LOOK: Record<string, LookMix> = {
@@ -374,6 +415,7 @@ function deepCloneSpec(spec: RaccoonSpec): RaccoonSpec {
     head: spec.head.map((b) => ({ ...b })),
     headOffset: spec.headOffset,
     ears: { ...spec.ears },
+    arms: { ...spec.arms },
     eyes: { ...spec.eyes },
     maskStrength: spec.maskStrength,
     bodyOverlap: spec.bodyOverlap,
@@ -432,6 +474,10 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
   spec.ears.size *= baseScale * arch.earMul * (1 + range(rng, -0.18, 0.18));
   spec.ears.spread *= 1 + range(rng, -0.18, 0.18);
   spec.ears.tilt += range(rng, -0.12, 0.12);
+
+  spec.arms.length *= baseScale * arch.armLen * (1 + range(rng, -0.10, 0.10));
+  spec.arms.radius *= baseScale * arch.armR * (1 + range(rng, -0.08, 0.08));
+  spec.arms.droop += arch.armDroopBias + range(rng, -0.06, 0.06);
 
   spec.eyes.spread *= 1 + range(rng, -0.10, 0.10);
   spec.maskStrength = clamp(spec.maskStrength + range(rng, -0.18, 0.18), 0, 1);

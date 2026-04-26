@@ -144,7 +144,7 @@ export function updateDriver(
   const upperBounce = Math.sin(state.phase * 2) * ex.upperBounceGain;
 
   const layout = ch.rig.layout;
-  const { hip, spineLow, spineHigh, head, footL, footR } = ch.rig.bones;
+  const { hip, spineLow, spineHigh, head, footL, footR, armL, armR, handL, handR } = ch.rig.bones;
 
   // Hip — bob translates +Z; pitchY (lean) + rollX (sway) applied locally.
   setBoneLocal(
@@ -207,6 +207,20 @@ export function updateDriver(
     0,
     0,
   );
+
+  // Arms — counter-stride. Each arm pitches around its own Y axis so
+  // the tip swings forward/back through the shoulder. Positive pitchY
+  // moves the tip in -X (back); we want the arm BACK when same-side
+  // leg is FORWARD, so pitch = +k * footStride.
+  const ARM_SWING_K = 0.028; // per walker-unit of stride amplitude
+  const armPitchL = ARM_SWING_K * footLeft.x;
+  const armPitchR = ARM_SWING_K * footRight.x;
+  setBoneLocal(armL, 0, +layout.shoulderY, layout.shoulderZRel, 0, armPitchL, 0);
+  setBoneLocal(armR, 0, -layout.shoulderY, layout.shoulderZRel, 0, armPitchR, 0);
+  // Hands: rest at the arm tip, no extra animation today. Resetting
+  // their TRS each frame keeps them anchored after any prior bake/edit.
+  setBoneLocal(handL, layout.armTipX, +layout.armTipY, layout.armTipZ, 0, 0, 0);
+  setBoneLocal(handR, layout.armTipX, -layout.armTipY, layout.armTipZ, 0, 0, 0);
 
   // World transform — circle in XY plane at z=0, CCW heading along
   // tangent. Skipped when the caller (e.g. boids) is placing the mesh.
