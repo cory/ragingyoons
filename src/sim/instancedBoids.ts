@@ -29,13 +29,19 @@ import {
   Vector4,
   VertexData,
 } from "@babylonjs/core";
-import { buildCharacter, type CharacterMesh } from "../character/mesh";
+import { type CharacterMesh } from "../character/mesh";
+import {
+  buildRaccoonDecomposed,
+  type DecomposedRaccoon,
+} from "../character/raccoonMesh";
 import type { Unit } from "../character/generator";
+import type { LookMix } from "../character/raccoon";
 import {
   type DriverState,
   makeDriverState,
   updateDriver,
 } from "../walker/driver";
+import { type LookState, makeLookState, stepLook } from "../walker/look";
 import { GAITS } from "../walker/gait";
 import {
   type Mood,
@@ -205,29 +211,40 @@ function bakeGaitVAT(
 
 class BoidSource {
   unit: Unit;
-  ch: CharacterMesh;
+  decomp: DecomposedRaccoon;
   capacity: number;
   count = 0;
   freeSlots: number[] = [];
-  matrixBuffer: Float32Array;
+  /** Body+legs matrix per instance — drives the VAT-skinned mesh. */
+  bodyMatrixBuffer: Float32Array;
+  /** Head matrix per instance — drives the rigid head mesh. */
+  headMatrixBuffer: Float32Array;
   animBuffer: Float32Array;
   manager: BakedVertexAnimationManager;
   gaitMoodRanges: GaitMoodRanges;
+  /** Body-local Z (in world units) of the head bone's rest position. */
+  headOffsetZ: number;
 
   constructor(unit: Unit, scene: Scene, capacity: number) {
     this.unit = unit;
     this.capacity = capacity;
-    const ch = buildCharacter(unit, scene);
-    this.ch = ch;
+    // Body+legs as a skinned VAT-bakeable mesh; head as a rigid mesh
+    // whose per-instance matrix is computed each frame on the CPU. Lets
+    // each boid yaw its head independently of the baked body animation.
+    const decomp = buildRaccoonDecomposed(unit, scene);
+    this.decomp = decomp;
+    this.headOffsetZ = decomp.headOffsetZ;
 
-    // Bake one VAT for this unit; its skeleton's rest layout determines
-    // the inverse bind matrices used during the bake.
-    const tex = bakeGaitVAT(scene, ch.rig.layout, ch.footLateral);
+    // Bake one VAT for this unit's body; its skeleton's rest layout
+    // determines the inverse bind matrices used during the bake. The
+    // head bone is still in the skeleton — but no body verts skin to it,
+    // so its baked transform has no visible effect on the body mesh.
+    const tex = bakeGaitVAT(scene, decomp.rig.layout, decomp.footLateral);
 
     const manager = new BakedVertexAnimationManager(scene);
     manager.texture = tex;
     manager.animationParameters = new Vector4(0, FRAMES_PER_GAIT - 1, 0, 30);
-    ch.root.bakedVertexAnimationManager = manager;
+    decomp.body.bakedVertexAnimationManager = manager;
     this.manager = manager;
 
     // Pre-compute (gait, mood) frame ranges and neutral-world-speed fps.
@@ -251,27 +268,38 @@ class BoidSource {
     }
     this.gaitMoodRanges = ranges;
 
-    // ThinInstance buffers.
-    this.matrixBuffer = new Float32Array(capacity * 16);
+    // ThinInstance buffers — one for the VAT body (matrix + anim params),
+    // one for the rigid head (matrix only).
+    this.bodyMatrixBuffer = new Float32Array(capacity * 16);
+    this.headMatrixBuffer = new Float32Array(capacity * 16);
     for (let i = 0; i < capacity; i++) {
       const o = i * 16;
-      this.matrixBuffer[o + 0] = 1;
-      this.matrixBuffer[o + 5] = 1;
-      this.matrixBuffer[o + 10] = 1;
-      this.matrixBuffer[o + 15] = 1;
+      this.bodyMatrixBuffer[o + 0] = 1;
+      this.bodyMatrixBuffer[o + 5] = 1;
+      this.bodyMatrixBuffer[o + 10] = 1;
+      this.bodyMatrixBuffer[o + 15] = 1;
+      this.headMatrixBuffer[o + 0] = 1;
+      this.headMatrixBuffer[o + 5] = 1;
+      this.headMatrixBuffer[o + 10] = 1;
+      this.headMatrixBuffer[o + 15] = 1;
     }
     this.animBuffer = new Float32Array(capacity * 4);
 
-    ch.root.thinInstanceSetBuffer("matrix", this.matrixBuffer, 16, false);
-    ch.root.thinInstanceSetBuffer(
+    decomp.body.thinInstanceSetBuffer("matrix", this.bodyMatrixBuffer, 16, false);
+    decomp.body.thinInstanceSetBuffer(
       "bakedVertexAnimationSettingsInstanced",
       this.animBuffer,
       4,
       false,
     );
-    ch.root.thinInstanceCount = 0;
-    ch.root.alwaysSelectAsActiveMesh = true;
-    ch.root.doNotSyncBoundingInfo = true;
+    decomp.body.thinInstanceCount = 0;
+    decomp.body.alwaysSelectAsActiveMesh = true;
+    decomp.body.doNotSyncBoundingInfo = true;
+
+    decomp.head.thinInstanceSetBuffer("matrix", this.headMatrixBuffer, 16, false);
+    decomp.head.thinInstanceCount = 0;
+    decomp.head.alwaysSelectAsActiveMesh = true;
+    decomp.head.doNotSyncBoundingInfo = true;
   }
 
   allocSlot(): number {
@@ -285,18 +313,21 @@ class BoidSource {
   }
 
   flush(dt: number): void {
-    this.ch.root.thinInstanceCount = this.count;
-    this.ch.root.thinInstanceBufferUpdated("matrix");
-    this.ch.root.thinInstanceBufferUpdated(
+    this.decomp.body.thinInstanceCount = this.count;
+    this.decomp.body.thinInstanceBufferUpdated("matrix");
+    this.decomp.body.thinInstanceBufferUpdated(
       "bakedVertexAnimationSettingsInstanced",
     );
+    this.decomp.head.thinInstanceCount = this.count;
+    this.decomp.head.thinInstanceBufferUpdated("matrix");
     this.manager.time += dt;
   }
 
   dispose(): void {
     this.manager.texture?.dispose();
-    this.ch.root.dispose(false, true);
-    this.ch.rig.skeleton.dispose();
+    this.decomp.body.dispose(false, true);
+    this.decomp.head.dispose(false, true);
+    this.decomp.rig.skeleton.dispose();
   }
 }
 
@@ -544,6 +575,11 @@ export interface InstancedBoid {
    *  boid's actual achieved speed (not its intent), so a unit pinned in
    *  a cluster animates at its real pace. */
   gaitChoices: { name: GaitName; defaultSpeed: number }[];
+  /** Per-boid head look state — drives independent head yaw on top of
+   *  the VAT-baked body animation. Stepped each frame in stepAnimate. */
+  lookState: LookState;
+  /** Personality-derived mix of idle/camera/influence look weights. */
+  lookMix: LookMix;
 }
 
 export interface InstancedBoidsFieldOpts {
@@ -766,6 +802,8 @@ export class InstancedBoidsField {
       chasingMood: unit.moods.chasing as PRESETS_LOOKUP,
       chasedMood: unit.moods.chased as PRESETS_LOOKUP,
       gaitChoices,
+      lookState: makeLookState(),
+      lookMix: unit.raccoon?.lookMix ?? { idle: 0.5, camera: 0.25, influence: 0.25 },
     });
   }
 
@@ -775,7 +813,10 @@ export class InstancedBoidsField {
   }
 
   setVisible(v: boolean): void {
-    for (const src of this.sources.values()) src.ch.root.setEnabled(v);
+    for (const src of this.sources.values()) {
+      src.decomp.body.setEnabled(v);
+      src.decomp.head.setEnabled(v);
+    }
   }
 
   dispose(): void {
@@ -1057,6 +1098,12 @@ export class InstancedBoidsField {
       src.freeSlots.length = 0;
     }
 
+    // Camera position drives "look at camera" mode. Same value for all
+    // boids this frame; cached once to avoid per-boid lookup.
+    const cam = this.scene.activeCamera;
+    const camX = cam ? cam.globalPosition.x : 0;
+    const camY = cam ? cam.globalPosition.y : 0;
+
     for (const b of this.boids) {
       const slot = b.source.count++;
       b.slot = slot;
@@ -1067,12 +1114,40 @@ export class InstancedBoidsField {
       const cosY = Math.cos(b.heading);
       const sinY = Math.sin(b.heading);
       const s = BOID_RENDER_SCALE;
-      const mb = b.source.matrixBuffer;
+      const mb = b.source.bodyMatrixBuffer;
       const mOff = slot * 16;
       mb[mOff +  0] = cosY * s; mb[mOff +  1] = sinY * s; mb[mOff +  2] = 0; mb[mOff +  3] = 0;
       mb[mOff +  4] = -sinY * s; mb[mOff +  5] = cosY * s; mb[mOff +  6] = 0; mb[mOff +  7] = 0;
       mb[mOff +  8] = 0;        mb[mOff +  9] = 0;        mb[mOff + 10] = s; mb[mOff + 11] = 0;
       mb[mOff + 12] = b.pos.x; mb[mOff + 13] = b.pos.y; mb[mOff + 14] = 0; mb[mOff + 15] = 1;
+
+      // Head matrix: same xy world position as body, lifted to the
+      // head bone's rest height (scaled), rotated by (heading + look-yaw)
+      // around Z. Head verts are in head-local frame, so multiplying by
+      // this matrix places them at the right world spot with the right
+      // independent yaw on top of body heading.
+      const headYaw = stepLook(
+        b.lookState,
+        {
+          cx: b.pos.x,
+          cy: b.pos.y,
+          heading: b.heading,
+          camX,
+          camY,
+          influenceX: 0,
+          influenceY: 0,
+          mix: b.lookMix,
+        },
+        dt,
+      );
+      const cosH = Math.cos(b.heading + headYaw);
+      const sinH = Math.sin(b.heading + headYaw);
+      const headZ = b.source.headOffsetZ * s;
+      const hb = b.source.headMatrixBuffer;
+      hb[mOff +  0] = cosH * s; hb[mOff +  1] = sinH * s; hb[mOff +  2] = 0; hb[mOff +  3] = 0;
+      hb[mOff +  4] = -sinH * s; hb[mOff +  5] = cosH * s; hb[mOff +  6] = 0; hb[mOff +  7] = 0;
+      hb[mOff +  8] = 0;         hb[mOff +  9] = 0;         hb[mOff + 10] = s; hb[mOff + 11] = 0;
+      hb[mOff + 12] = b.pos.x;   hb[mOff + 13] = b.pos.y;   hb[mOff + 14] = headZ; hb[mOff + 15] = 1;
 
       // Animation params: (fromFrame, toFrame, offsetFrames, fps).
       // Mood-aware: pick the (currentGait, targetMood) bake range so

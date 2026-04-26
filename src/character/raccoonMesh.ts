@@ -15,7 +15,7 @@ import {
   VertexData,
 } from "@babylonjs/core";
 import earcut from "earcut";
-import { BONE, createRig, rigLayout, type RigLayout } from "../rig/skeleton";
+import { BONE, createRig, rigLayout, type Rig, type RigLayout } from "../rig/skeleton";
 import { UNIT_SCALE } from "../scale";
 import { darken, lerpColor, parseHsl } from "./color";
 import type { Unit } from "./generator";
@@ -433,51 +433,37 @@ function resolveBands(bands: RaccoonBand[], palette: Unit["palette"]): BandResol
   }));
 }
 
-export function buildRaccoon(unit: Unit, scene: Scene): CharacterMesh {
-  const spec = unit.raccoon!;
-  const palette = unit.palette;
+// ── Shared raccoon mesh assembly ───────────────────────────────────
 
-  // Heights in walker units → world. Both stacks shrink under blending
-  // because adjacent band ellipsoids overlap.
-  const bodyHeightW = blendedExtent(
-    spec.body.map((b) => b.thickness),
-    spec.bodyOverlap,
-  );
-  const headHeightW = blendedExtent(
-    spec.head.map((b) => b.thickness),
-    HEAD_OVERLAP,
-  );
+interface RaccoonLayout {
+  layout: RigLayout;
+  footLateral: number;
+  headHeightWorld: number;
+}
+
+function computeRaccoonLayout(spec: RaccoonSpec): RaccoonLayout {
+  const bodyHeightW = blendedExtent(spec.body.map((b) => b.thickness), spec.bodyOverlap);
+  const headHeightW = blendedExtent(spec.head.map((b) => b.thickness), HEAD_OVERLAP);
   const bodyHeightWorld = bodyHeightW * UNIT_SCALE;
   const headHeightWorld = headHeightW * UNIT_SCALE;
   const headOffsetWorld = spec.headOffset * UNIT_SCALE;
   const legHeightWorld = bodyHeightWorld * 0.55;
-
-  // Custom layout: zHigh sits at body top (no head influence in the body
-  // skin), zHead is above body so the head can yaw freely.
   const layout = rigLayout(legHeightWorld, bodyHeightWorld);
-  // Reposition the spine joints + head bone for the raccoon: spine joints
-  // live inside the body, head bone sits above the body top.
   layout.zLow = layout.zHip + bodyHeightWorld * 0.4;
-  layout.zHigh = layout.zHip + bodyHeightWorld;       // top of body
-  layout.zHead = layout.zHigh + headOffsetWorld;       // above body top
+  layout.zHigh = layout.zHip + bodyHeightWorld;
+  layout.zHead = layout.zHigh + headOffsetWorld;
   layout.height = layout.zHead + headHeightWorld;
-
-  // Foot lateral spacing — derived from AVERAGE body ry, not band 0's
-  // ry, so legs stay the same shape across the pear↔apple slider (which
-  // would otherwise make band 0's radius swing wildly).
-  const avgBodyRy =
-    spec.body.reduce((s, b) => s + b.ry, 0) / Math.max(1, spec.body.length);
+  const avgBodyRy = spec.body.reduce((s, b) => s + b.ry, 0) / Math.max(1, spec.body.length);
   const footLateral = Math.max(avgBodyRy * 0.5, 14) * UNIT_SCALE;
+  return { layout, footLateral, headHeightWorld };
+}
 
-  const rig = createRig(scene, layout, footLateral);
-  const buf = newBuffers();
-
-  // ── Body stack ──────────────────────────────────────────────────
-  // Body is the smooth-max union of overlapping ellipsoids — gives a
-  // continuous bulgy silhouette where each band reads as a 3D bulge,
-  // not a stacked disc. The first band has a flat bottom so legs attach
-  // to a full disc; the topmost ring tapers to a near-point where the
-  // head sits above with a small visible neck.
+function emitBodyToBuf(
+  buf: BuildBuffers,
+  spec: RaccoonSpec,
+  palette: Unit["palette"],
+  layout: RigLayout,
+): void {
   const bodyBands = resolveBands(spec.body, palette);
   const bodyRings = buildBlendedChain(
     bodyBands,
@@ -493,15 +479,21 @@ export function buildRaccoon(unit: Unit, scene: Scene): CharacterMesh {
     /* capTop */ false,
     /* capBottom */ true,
   );
+}
 
-  // ── Head stack ──────────────────────────────────────────────────
-  // Head verts are rigid-skinned to the head bone. The head bone's rest
-  // position is at world (0,0,zHead); a vertex emitted at world z = zHead
-  // + dz appears at that location and rotates with the bone around its
-  // origin. We emit them in world coordinates so the rest pose is correct,
-  // and let bone yaw (set by the driver) rotate the entire head stack.
+/** Emit head bands, eyes, and ears. `headBaseZ` is the world z of the
+ *  head bone's rest position — pass `layout.zHead` for the combined
+ *  in-world mesh, or `0` for a head-local mesh that gets per-instance
+ *  positioned by the caller. `boneIdx` is what the head verts skin
+ *  to (BONE.head for skinned; arbitrary for rigid since no skeleton). */
+function emitHeadToBuf(
+  buf: BuildBuffers,
+  spec: RaccoonSpec,
+  palette: Unit["palette"],
+  headBaseZ: number,
+  boneIdx: number,
+): void {
   const headBands = resolveBands(spec.head, palette);
-  // Apply mask shading to the eye band so it reads as a raccoon mask.
   if (
     spec.maskStrength > 0 &&
     spec.eyes.bandIdx >= 0 &&
@@ -511,13 +503,9 @@ export function buildRaccoon(unit: Unit, scene: Scene): CharacterMesh {
     const idx = spec.eyes.bandIdx;
     headBands[idx].color = lerpColor(headBands[idx].color, dark, spec.maskStrength);
   }
-  // Head also uses smoothMax-blended ellipsoids (50% overlap so the top
-  // and bottom bands each sink halfway into the mask band). Pinches at
-  // top AND bottom — no flat disc — so head reads as one continuous egg
-  // and the bottom curves cleanly above the body's neck gap.
   const headRings = buildBlendedChain(
     headBands,
-    layout.zHead,
+    headBaseZ,
     HEAD_OVERLAP,
     /* flatBottom */ false,
     HEAD_RING_COUNT,
@@ -525,76 +513,58 @@ export function buildRaccoon(unit: Unit, scene: Scene): CharacterMesh {
   emitRingsAndSides(
     buf,
     headRings,
-    () => ({ i0: BONE.head, w0: 1, i1: 0, w1: 0 }),
+    () => ({ i0: boneIdx, w0: 1, i1: 0, w1: 0 }),
     /* capTop */ false,
     /* capBottom */ false,
   );
 
-  // ── Eyes ────────────────────────────────────────────────────────
-  // Two small white discs on the front of the eye band. Eye-band center
-  // z comes from the blended layout (overlap-aware), not cumulative
-  // thickness.
-  const headCenters = bandCenters(
-    spec.head.map((b) => b.thickness),
-    HEAD_OVERLAP,
-  );
+  const headCenters = bandCenters(spec.head.map((b) => b.thickness), HEAD_OVERLAP);
   const eyeBandMidW = headCenters[spec.eyes.bandIdx];
   const eyeBand = spec.head[spec.eyes.bandIdx];
-  const eyeWorld = {
-    x: eyeBand.xOffset * UNIT_SCALE + eyeBand.rx * spec.eyes.forward * UNIT_SCALE,
-    yMag: eyeBand.ry * spec.eyes.spread * UNIT_SCALE,
-    z: layout.zHead + eyeBandMidW * UNIT_SCALE,
-    r: spec.eyes.size * UNIT_SCALE,
-  };
+  const eyeX = eyeBand.xOffset * UNIT_SCALE + eyeBand.rx * spec.eyes.forward * UNIT_SCALE;
+  const eyeYmag = eyeBand.ry * spec.eyes.spread * UNIT_SCALE;
+  const eyeZ = headBaseZ + eyeBandMidW * UNIT_SCALE;
+  const eyeR = spec.eyes.size * UNIT_SCALE;
   const eyeWhite = new Color3(0.97, 0.96, 0.93);
-  const pupil = darken(eyeWhite, 0.95); // near-black
-  // Whites first (slightly bigger), pupil discs in front (slightly forward)
-  // so they composite properly even with backface culling off.
-  pushEye(buf, eyeWorld.x, +eyeWorld.yMag, eyeWorld.z, eyeWorld.r, eyeWhite, BONE.head);
-  pushEye(buf, eyeWorld.x, -eyeWorld.yMag, eyeWorld.z, eyeWorld.r, eyeWhite, BONE.head);
-  const pr = eyeWorld.r * 0.55;
-  const pf = eyeWorld.r * 0.18; // push forward so pupil sits in front of white
-  pushEye(buf, eyeWorld.x + pf, +eyeWorld.yMag, eyeWorld.z, pr, pupil, BONE.head);
-  pushEye(buf, eyeWorld.x + pf, -eyeWorld.yMag, eyeWorld.z, pr, pupil, BONE.head);
+  const pupil = darken(eyeWhite, 0.95);
+  pushEye(buf, eyeX, +eyeYmag, eyeZ, eyeR, eyeWhite, boneIdx);
+  pushEye(buf, eyeX, -eyeYmag, eyeZ, eyeR, eyeWhite, boneIdx);
+  const pr = eyeR * 0.55;
+  const pf = eyeR * 0.18;
+  pushEye(buf, eyeX + pf, +eyeYmag, eyeZ, pr, pupil, boneIdx);
+  pushEye(buf, eyeX + pf, -eyeYmag, eyeZ, pr, pupil, boneIdx);
 
-  // ── Ears ────────────────────────────────────────────────────────
-  // Cones sitting on the upper-rear surface of the cap band. With the
-  // head smoothMax-blended, the apex is a near-point — basing ears there
-  // would float them in midair. Sit them 40% above cap-band center where
-  // the silhouette still has substantial width.
   const lastIdx = spec.head.length - 1;
   const lastHalfW = spec.head[lastIdx].thickness / 2;
   const EAR_UP_FRAC = 0.4;
   const earZWalker = headCenters[lastIdx] + lastHalfW * EAR_UP_FRAC;
   const earFactor = Math.sqrt(Math.max(0, 1 - EAR_UP_FRAC * EAR_UP_FRAC));
-  const earBaseZ = layout.zHead + earZWalker * UNIT_SCALE;
-  const earBaseY =
-    spec.head[lastIdx].ry * earFactor * spec.ears.spread * UNIT_SCALE;
+  const earBaseZ = headBaseZ + earZWalker * UNIT_SCALE;
+  const earBaseY = spec.head[lastIdx].ry * earFactor * spec.ears.spread * UNIT_SCALE;
   const earLen = spec.ears.size * UNIT_SCALE;
   const earBaseR = spec.ears.size * 0.45 * UNIT_SCALE;
   const earColor = shadeColor(palette, spec.ears.shadeKey);
-  const t = spec.ears.tilt;
-  // Direction: outward (±Y) by sin(t), upward by cos(t).
-  pushCone(
-    buf,
-    0, +earBaseY, earBaseZ,
-    0, +Math.sin(t), Math.cos(t),
-    earLen, earBaseR, 5,
-    earColor, BONE.head,
-  );
-  pushCone(
-    buf,
-    0, -earBaseY, earBaseZ,
-    0, -Math.sin(t), Math.cos(t),
-    earLen, earBaseR, 5,
-    earColor, BONE.head,
-  );
+  const tilt = spec.ears.tilt;
+  pushCone(buf, 0, +earBaseY, earBaseZ, 0, +Math.sin(tilt), Math.cos(tilt), earLen, earBaseR, 5, earColor, boneIdx);
+  pushCone(buf, 0, -earBaseY, earBaseZ, 0, -Math.sin(tilt), Math.cos(tilt), earLen, earBaseR, 5, earColor, boneIdx);
+}
 
-  // ── Legs ────────────────────────────────────────────────────────
-  buildLegs(buf, layout, footLateral, parseHsl(palette.primaryDark));
+function makeRaccoonMaterial(scene: Scene, name: string): StandardMaterial {
+  const mat = new StandardMaterial(`mat_${name}`, scene);
+  mat.diffuseColor = new Color3(1, 1, 1);
+  mat.specularColor = new Color3(0, 0, 0);
+  mat.emissiveColor = new Color3(0, 0, 0);
+  mat.backFaceCulling = false;
+  return mat;
+}
 
-  // ── Finalize mesh ───────────────────────────────────────────────
-  const mesh = new Mesh(`raccoon_${unit.id}`, scene);
+function finalizeSkinnedMesh(
+  scene: Scene,
+  name: string,
+  buf: BuildBuffers,
+  skeleton: import("@babylonjs/core").Skeleton,
+): Mesh {
+  const mesh = new Mesh(name, scene);
   const vd = new VertexData();
   vd.positions = buf.positions;
   vd.indices = buf.indices;
@@ -603,24 +573,82 @@ export function buildRaccoon(unit: Unit, scene: Scene): CharacterMesh {
   vd.matricesWeights = buf.bWt;
   VertexData.ComputeNormals(buf.positions, buf.indices, (vd.normals = []));
   vd.applyToMesh(mesh, true);
-
-  mesh.skeleton = rig.skeleton;
+  mesh.skeleton = skeleton;
   mesh.numBoneInfluencers = 2;
-
-  const mat = new StandardMaterial(`mat_${unit.id}`, scene);
-  mat.diffuseColor = new Color3(1, 1, 1);
-  mat.specularColor = new Color3(0, 0, 0);
-  mat.emissiveColor = new Color3(0, 0, 0);
-  mat.backFaceCulling = false;
+  mesh.material = makeRaccoonMaterial(scene, name);
   mesh.useVertexColors = true;
   mesh.hasVertexAlpha = false;
-  mesh.material = mat;
+  return mesh;
+}
+
+function finalizeRigidMesh(scene: Scene, name: string, buf: BuildBuffers): Mesh {
+  const mesh = new Mesh(name, scene);
+  const vd = new VertexData();
+  vd.positions = buf.positions;
+  vd.indices = buf.indices;
+  vd.colors = buf.colors;
+  VertexData.ComputeNormals(buf.positions, buf.indices, (vd.normals = []));
+  vd.applyToMesh(mesh, true);
+  mesh.material = makeRaccoonMaterial(scene, name);
+  mesh.useVertexColors = true;
+  mesh.hasVertexAlpha = false;
+  return mesh;
+}
+
+/** Body+legs (skinned, with skeleton) + head (rigid, in head-local
+ *  frame) — boids drive the head per-instance for independent yaw,
+ *  while the body is VAT-bakeable. */
+export interface DecomposedRaccoon {
+  body: Mesh;
+  head: Mesh;
+  rig: Rig;
+  unit: Unit;
+  height: number;
+  footLateral: number;
+  /** World z (in body-root local frame) of the head bone's rest position. */
+  headOffsetZ: number;
+  /** Z extent of the head stack in world units. */
+  headHeightWorld: number;
+}
+
+export function buildRaccoonDecomposed(unit: Unit, scene: Scene): DecomposedRaccoon {
+  const spec = unit.raccoon!;
+  const palette = unit.palette;
+  const { layout, footLateral, headHeightWorld } = computeRaccoonLayout(spec);
+  const rig = createRig(scene, layout, footLateral);
+
+  const bodyBuf = newBuffers();
+  emitBodyToBuf(bodyBuf, spec, palette, layout);
+  buildLegs(bodyBuf, layout, footLateral, parseHsl(palette.primaryDark));
+  const body = finalizeSkinnedMesh(scene, `rcn_body_${unit.id}`, bodyBuf, rig.skeleton);
+
+  const headBuf = newBuffers();
+  emitHeadToBuf(headBuf, spec, palette, /* headBaseZ */ 0, /* boneIdx */ 0);
+  const head = finalizeRigidMesh(scene, `rcn_head_${unit.id}`, headBuf);
 
   return {
-    root: mesh,
+    body,
+    head,
     rig,
     unit,
     height: layout.height,
     footLateral,
+    headOffsetZ: layout.zHead,
+    headHeightWorld,
   };
+}
+
+export function buildRaccoon(unit: Unit, scene: Scene): CharacterMesh {
+  const spec = unit.raccoon!;
+  const palette = unit.palette;
+  const { layout, footLateral } = computeRaccoonLayout(spec);
+  const rig = createRig(scene, layout, footLateral);
+
+  const buf = newBuffers();
+  emitBodyToBuf(buf, spec, palette, layout);
+  emitHeadToBuf(buf, spec, palette, /* headBaseZ */ layout.zHead, /* boneIdx */ BONE.head);
+  buildLegs(buf, layout, footLateral, parseHsl(palette.primaryDark));
+
+  const mesh = finalizeSkinnedMesh(scene, `raccoon_${unit.id}`, buf, rig.skeleton);
+  return { root: mesh, rig, unit, height: layout.height, footLateral };
 }
