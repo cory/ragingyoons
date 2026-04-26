@@ -9,10 +9,10 @@ import {
   HemisphericLight,
   MeshBuilder,
   type Scene,
-  StandardMaterial,
   Vector3,
 } from "@babylonjs/core";
 import type { CharacterMesh } from "../character/mesh";
+import { createPaperGroundMaterial } from "./paperGround";
 
 const PAPER = new Color3(0.937, 0.914, 0.863); // #EFE9DC
 const INK = new Color4(0.10, 0.094, 0.082, 1);
@@ -39,11 +39,16 @@ export function applyVellum(scene: Scene, opts: VellumOpts): void {
     { radius: groundR, tessellation: 96 },
     scene,
   );
-  const gm = new StandardMaterial("groundMat", scene);
-  gm.diffuseColor = new Color3(PAPER.r * 0.97, PAPER.g * 0.97, PAPER.b * 0.97);
-  gm.specularColor = new Color3(0, 0, 0);
-  gm.emissiveColor = new Color3(0, 0, 0);
-  ground.material = gm;
+  // First slice of the paper-textures port: WGSL ShaderMaterial with
+  // anisotropic fiber noise + Fresnel rim. Replaces the StandardMaterial
+  // baseline so we can validate the WGSL pipeline before pushing the
+  // same machinery into the character material.
+  ground.material = createPaperGroundMaterial(scene, {
+    base: new Color3(PAPER.r * 0.97, PAPER.g * 0.97, PAPER.b * 0.97),
+    fiberFreq: [4.0, 0.4],
+    fiberAmp: 1.4,
+    rimStrength: 0.5,
+  });
   ground.position.z = -0.001;
 
   // Track ring on the XY plane.

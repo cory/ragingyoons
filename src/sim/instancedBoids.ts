@@ -64,9 +64,12 @@ const CONTEXT_HYSTERESIS = 30;
  *  is-chased, friend-count) loop. Only kicks in inside dense clusters —
  *  prevents O(k²) blow-up when a cell list packs full. */
 const MAX_FINE_NEIGHBORS = 32;
-/** Per-pair cap on separation contribution so a near-overlap can't dump
- *  a huge impulse in a single frame. */
-const MAX_SEP_PAIR_K = 20;
+/** Per-pair cap on the separation impulse MAGNITUDE (m/s² scale, before
+ *  sepWeight). Capping the magnitude — not the per-component factor —
+ *  keeps super-close pairs at maximum force instead of having impulse
+ *  decay back to zero as dist→0 (which is what happens if you cap the
+ *  factor and then multiply by ox/oy whose own magnitudes shrink). */
+const MAX_SEP_PAIR_FORCE = 40;
 
 /** Coarse grid cell size — used for align/cohere aggregates and per-faction
  *  chase aggregates. Larger cells = cheaper aggregate sampling. */
@@ -872,12 +875,25 @@ export class InstancedBoidsField {
             // Effective separation distance = max of the two personal-space
             // radii. Symmetric: a small Specter near a large Construct feels
             // the Construct's radius too, so they don't pack into each other.
+            //
+            // Force law: cubic 1/r^3 pressure ((pairR/dist)^3 - 1 in
+            // factor form, which gives |F| = pairR^3/dist^2 - dist).
+            //   dist=pairR        |F| = 0           (touch, no force)
+            //   dist=pairR/2      |F| = 3.5*pairR   (half-radius compression)
+            //   dist=pairR/4      |F| = 15.75*pairR (deep)
+            //   dist→0            |F| → ∞           (capped at MAX_SEP_PAIR_FORCE)
+            // We cap the impulse MAGNITUDE rather than the per-component
+            // factor so super-close pairs stay at the cap instead of
+            // having force decay toward zero (which a factor-cap would
+            // produce, since |F| = dist * factor).
             const pairR = bSepR > o.separateR ? bSepR : o.separateR;
-            if (od2 < pairR * pairR) {
-              const dist = Math.sqrt(od2);
-              const denom = dist > 0.05 ? dist : 0.05;
-              let k2 = (pairR - dist) / denom;
-              if (k2 > MAX_SEP_PAIR_K) k2 = MAX_SEP_PAIR_K;
+            const pairR2 = pairR * pairR;
+            if (od2 < pairR2) {
+              const od2Floor = od2 > 0.0025 ? od2 : 0.0025;
+              const distSafe = Math.sqrt(od2Floor);
+              let mag = (pairR2 * pairR) / od2Floor - distSafe;
+              if (mag > MAX_SEP_PAIR_FORCE) mag = MAX_SEP_PAIR_FORCE;
+              const k2 = mag / distSafe;
               sx -= ox * k2; sy -= oy * k2;
             }
             if (od2 < bAlignR2 && o.archetype === bArch) friendsNearby++;
