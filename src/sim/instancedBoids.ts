@@ -185,7 +185,17 @@ function bakeGaitVAT(
     Matrix.Translation(0, +layout.shoulderY, -shoulderZAbs),                  // armR
     Matrix.Translation(-layout.armTipX, -(layout.shoulderY + layout.armTipY), -handZAbs), // handL
     Matrix.Translation(-layout.armTipX, +(layout.shoulderY + layout.armTipY), -handZAbs), // handR
-    Matrix.Translation(-layout.tailBaseX, 0, -layout.tailAttachZ),            // tail
+    Matrix.Translation(-layout.tailBaseX, 0, -layout.tailAttachZ),            // tail (root)
+    Matrix.Translation(
+      -(layout.tailBaseX + layout.tailSegOffsetX),
+      0,
+      -(layout.tailAttachZ + layout.tailSegOffsetZ),
+    ), // tail1
+    Matrix.Translation(
+      -(layout.tailBaseX + 2 * layout.tailSegOffsetX),
+      0,
+      -(layout.tailAttachZ + 2 * layout.tailSegOffsetZ),
+    ), // tail2
   ];
   const tmpMat = new Matrix();
 

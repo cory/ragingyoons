@@ -552,6 +552,14 @@ function computeRaccoonLayout(spec: RaccoonSpec): RaccoonLayout {
   for (const b of spec.body) if (b.rx > maxRx) maxRx = b.rx;
   layout.tailBaseX = -maxRx * UNIT_SCALE * 0.55;
   layout.tailAttachZ = layout.zHip + bodyHeightWorld * spec.tail.attachZFrac;
+  // Tail segment offsets — child bones in the chain step this far
+  // along the tail axis. Tail axis = (-cos tilt, 0, sin tilt) with the
+  // chain split into three equal pieces.
+  const tailDirX = -Math.cos(spec.tail.upTilt);
+  const tailDirZ = Math.sin(spec.tail.upTilt);
+  const tailSegLenW = (spec.tail.length / 3) * UNIT_SCALE;
+  layout.tailSegOffsetX = tailDirX * tailSegLenW;
+  layout.tailSegOffsetZ = tailDirZ * tailSegLenW;
   return { layout, footLateral, headHeightWorld };
 }
 
@@ -620,11 +628,19 @@ function emitTailToBuf(
     const x1 = startX + dirX * tailLenW * t1;
     const z1 = attachZ + dirZ * tailLenW * t1;
     const color = i % 2 === 0 ? primary : band;
+    // 3-bone chain — assign each segment to a bone by its midpoint t.
+    // tail (root) handles the first third, tail1 the middle, tail2 the
+    // tip. Compounding bone rotations curve the tail into an arc.
+    const tMid = (t0 + t1) * 0.5;
+    const segBone =
+      tMid < 1 / 3 ? BONE.tail :
+      tMid < 2 / 3 ? BONE.tail1 :
+      BONE.tail2;
     pushTaperedCylinder(
       buf,
       x0, 0, z0,
       x1, 0, z1,
-      r0, r1, 8, color, BONE.tail,
+      r0, r1, 8, color, segBone,
     );
   }
 }

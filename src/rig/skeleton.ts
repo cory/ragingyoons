@@ -19,10 +19,12 @@ export const BONE = {
   handL: 8,
   handR: 9,
   tail: 10,
+  tail1: 11,
+  tail2: 12,
 } as const;
 
 export type BoneIndex = (typeof BONE)[keyof typeof BONE];
-export const NUM_BONES = 11;
+export const NUM_BONES = 13;
 
 export interface RigLayout {
   legHeight: number;
@@ -47,6 +49,11 @@ export interface RigLayout {
    *  frame for bouncy spring-tail motion. */
   tailBaseX: number;
   tailAttachZ: number;
+  /** World-units offset along the tail axis from one tail bone to the
+   *  next (tail0→tail1, tail1→tail2). Used as each child bone's local
+   *  rest translation so the chain runs along the tail. */
+  tailSegOffsetX: number;
+  tailSegOffsetZ: number;
 }
 
 export interface Rig {
@@ -64,6 +71,8 @@ export interface Rig {
     handL: Bone;
     handR: Bone;
     tail: Bone;
+    tail1: Bone;
+    tail2: Bone;
   };
 }
 
@@ -83,6 +92,8 @@ export function rigLayout(legHeight: number, bodyHeight: number): RigLayout {
     armTipZ: 0,
     tailBaseX: 0,
     tailAttachZ: 0,
+    tailSegOffsetX: 0,
+    tailSegOffsetZ: 0,
   };
 }
 
@@ -153,14 +164,28 @@ export function createRig(scene: Scene, layout: RigLayout, footLateral: number):
     armR,
     Matrix.Translation(layout.armTipX, -layout.armTipY, layout.armTipZ),
   );
-  // Tail: child of spineLow, anchored at the tail base. Bone-local
-  // translation is the offset from spineLow's world rest position.
-  // The driver applies pitchY (bounce) and rollX (sway) per frame.
+  // Tail: 3-bone chain so the tail curves into an arc rather than
+  // pivoting rigidly. tail0 is rooted at the tail base under spineLow;
+  // tail1 and tail2 are each translated one segment along the tail
+  // axis. The driver pitches and rolls each bone with successive
+  // phase lags for a wave / spring feel that compounds down the chain.
   const tail = new Bone(
     "tail",
     skeleton,
     spineLow,
     Matrix.Translation(layout.tailBaseX, 0, layout.tailAttachZ - zLow),
+  );
+  const tail1 = new Bone(
+    "tail1",
+    skeleton,
+    tail,
+    Matrix.Translation(layout.tailSegOffsetX, 0, layout.tailSegOffsetZ),
+  );
+  const tail2 = new Bone(
+    "tail2",
+    skeleton,
+    tail1,
+    Matrix.Translation(layout.tailSegOffsetX, 0, layout.tailSegOffsetZ),
   );
 
   return {
@@ -168,7 +193,7 @@ export function createRig(scene: Scene, layout: RigLayout, footLateral: number):
     layout,
     bones: {
       hip, spineLow, spineHigh, head, footL, footR,
-      armL, armR, handL, handR, tail,
+      armL, armR, handL, handR, tail, tail1, tail2,
     },
   };
 }

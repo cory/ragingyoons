@@ -144,7 +144,7 @@ export function updateDriver(
   const upperBounce = Math.sin(state.phase * 2) * ex.upperBounceGain;
 
   const layout = ch.rig.layout;
-  const { hip, spineLow, spineHigh, head, footL, footR, armL, armR, handL, handR, tail } = ch.rig.bones;
+  const { hip, spineLow, spineHigh, head, footL, footR, armL, armR, handL, handR, tail, tail1, tail2 } = ch.rig.bones;
 
   // Hip — bob translates +Z; pitchY (lean) + rollX (sway) applied locally.
   setBoneLocal(
@@ -222,25 +222,40 @@ export function updateDriver(
   setBoneLocal(handL, layout.armTipX, +layout.armTipY, layout.armTipZ, 0, 0, 0);
   setBoneLocal(handR, layout.armTipX, -layout.armTipY, layout.armTipZ, 0, 0, 0);
 
-  // Tail bouncy spring: pitchY bobs the tip up/down at 2× stride
-  // frequency (one bob per step) with a phase lag so the tail trails
-  // the body's vertical motion. rollX adds a slow lateral sway so the
-  // tail wags while the boid walks. Both amplitudes scale with energy.
-  const TAIL_BOB_AMP = 0.22;
-  const TAIL_BOB_LAG = -1.1;       // rad of phase lag
-  const TAIL_SWAY_AMP = 0.18;
+  // Tail bouncy spring — 3-bone chain. Each successive bone's pitch
+  // and roll lag a little behind the previous one so a wave travels
+  // from the base out to the tip. Combined with the chain rotation
+  // compounding, the tail visibly arcs and ripples instead of pivoting
+  // rigidly. Amplitudes scale with the energy-driven upper bounce.
+  const TAIL_BOB_AMP = 0.20;
+  const TAIL_BOB_LAG = -0.9;
+  const TAIL_BOB_DELAY = 0.55;     // rad of additional lag per chain link
+  const TAIL_SWAY_AMP = 0.16;
   const TAIL_SWAY_FREQ = 0.55;
+  const TAIL_SWAY_DELAY = 0.45;
   const energyGain = 1 + 0.5 * Math.max(0, ex.upperBounceGain * 25);
-  const tailPitch = TAIL_BOB_AMP * energyGain * Math.sin(state.phase * 2 + TAIL_BOB_LAG);
-  const tailRoll = TAIL_SWAY_AMP * Math.sin(state.slowTime * TAIL_SWAY_FREQ);
+  const bobBase = state.phase * 2 + TAIL_BOB_LAG;
+  const swayBase = state.slowTime * TAIL_SWAY_FREQ;
+  const tailPitch0 = TAIL_BOB_AMP * energyGain * Math.sin(bobBase);
+  const tailPitch1 = TAIL_BOB_AMP * energyGain * Math.sin(bobBase - TAIL_BOB_DELAY);
+  const tailPitch2 = TAIL_BOB_AMP * energyGain * Math.sin(bobBase - 2 * TAIL_BOB_DELAY);
+  const tailRoll0 = TAIL_SWAY_AMP * Math.sin(swayBase);
+  const tailRoll1 = TAIL_SWAY_AMP * Math.sin(swayBase - TAIL_SWAY_DELAY);
+  const tailRoll2 = TAIL_SWAY_AMP * Math.sin(swayBase - 2 * TAIL_SWAY_DELAY);
   setBoneLocal(
     tail,
-    layout.tailBaseX,
-    0,
-    layout.tailAttachZ - layout.zLow,
-    tailRoll,
-    tailPitch,
-    0,
+    layout.tailBaseX, 0, layout.tailAttachZ - layout.zLow,
+    tailRoll0, tailPitch0, 0,
+  );
+  setBoneLocal(
+    tail1,
+    layout.tailSegOffsetX, 0, layout.tailSegOffsetZ,
+    tailRoll1, tailPitch1, 0,
+  );
+  setBoneLocal(
+    tail2,
+    layout.tailSegOffsetX, 0, layout.tailSegOffsetZ,
+    tailRoll2, tailPitch2, 0,
   );
 
   // World transform — circle in XY plane at z=0, CCW heading along
