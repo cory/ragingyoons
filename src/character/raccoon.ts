@@ -166,7 +166,7 @@ export const RACCOON_DEFAULTS = {
   eyeBandIdx: 1,
   maskStrength: 0.55,
   bodyPeakDefault: 0.5,
-  bodyOverlapDefault: 0.55,
+  bodyOverlapDefault: 0.65,
   // Bell curve params for body bulge profile.
   bodyRadiusPeak: 0.85,
   bodyRadiusEdge: 0.46,
@@ -555,8 +555,11 @@ export function specFromUnit(unit: Unit, base: RaccoonSpec): RaccoonSpec {
   spec.arms.radius *= baseScale * arch.armR * (1 + range(rng, -0.08, 0.08));
   spec.arms.droop += arch.armDroopBias + range(rng, -0.06, 0.06);
 
-  spec.tail.length *= baseScale * arch.tailLen * (1 + range(rng, -0.18, 0.18));
-  spec.tail.baseRadius *= baseScale * arch.tailR * (1 + range(rng, -0.15, 0.15));
+  // Tail size tracks the body's actual horizontal extent — pancake-flat
+  // raccoons get pancake-wide tails too, instead of a tiny stub.
+  const bodyHorizExtent = baseScale * horizMul * Math.max(asymLen, asymWid);
+  spec.tail.length *= bodyHorizExtent * arch.tailLen * (1 + range(rng, -0.18, 0.18));
+  spec.tail.baseRadius *= bodyHorizExtent * arch.tailR * (1 + range(rng, -0.15, 0.15));
   spec.tail.upTilt += arch.tailTiltBias + range(rng, -0.10, 0.10);
 
   spec.eyes.spread *= 1 + range(rng, -0.10, 0.10);

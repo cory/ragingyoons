@@ -220,7 +220,7 @@ async function main(): Promise<void> {
     bodyScale: 1.0,
     bodyLength: 1.0,
     bodyWidth: 1.0,
-    bodyOverlap: 0.55,
+    bodyOverlap: 0.65,
     bodyPeak: 0.5,
     headScale: 1.0,
     earSize: 1.0,
@@ -514,7 +514,7 @@ async function main(): Promise<void> {
       raccoonControls.bodyScale = 1.0;
       raccoonControls.bodyLength = 1.0;
       raccoonControls.bodyWidth = 1.0;
-      raccoonControls.bodyOverlap = 0.55;
+      raccoonControls.bodyOverlap = 0.65;
       raccoonControls.bodyPeak = 0.5;
       raccoonControls.headScale = 1.0;
       raccoonControls.earSize = 1.0;

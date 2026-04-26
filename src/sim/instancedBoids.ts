@@ -802,16 +802,20 @@ export class InstancedBoidsField {
 
     const traits = traitsFor(unit.archetype);
     // Per-unit personal-space radius — scales with the actual body
-    // width so chonky raccoons enforce more spacing and tiny ones
-    // enforce less. Reference is the slider-default body max ry (~41
-    // walker units). Comfort margin baked into the constant.
-    let maxRy = 0;
+    // size so chonky raccoons enforce more spacing and tiny ones
+    // enforce less. Use max(rx, ry) so both pancake-flat and long-and-
+    // thin variants get an honest radius. Generous comfort margin
+    // because arms + tail extend visibly past the body silhouette.
+    let maxR = 0;
     if (unit.raccoon) {
-      for (const b of unit.raccoon.body) if (b.ry > maxRy) maxRy = b.ry;
+      for (const b of unit.raccoon.body) {
+        if (b.rx > maxR) maxR = b.rx;
+        if (b.ry > maxR) maxR = b.ry;
+      }
     }
-    const REFERENCE_MAX_RY = 41;
-    const COMFORT = 1.30;
-    const sizeScale = maxRy > 0 ? (maxRy / REFERENCE_MAX_RY) * COMFORT : 1;
+    const REFERENCE_MAX_R = 42;
+    const COMFORT = 2.0;
+    const sizeScale = maxR > 0 ? (maxR / REFERENCE_MAX_R) * COMFORT : 1;
     const sepR = traits.separateRadius * sizeScale;
     // Build the per-unit gait menu (sorted ascending by world speed). Each
     // frame we'll snap to the gait whose natural speed is closest to the

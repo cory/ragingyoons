@@ -100,7 +100,7 @@ interface BandResolved {
 
 // Blending tuning. Smoothness and ring count are global; overlap is
 // per-stack (body uses spec.bodyOverlap, head uses HEAD_OVERLAP).
-const BODY_SMOOTH_K = 3.0;        // walker units. larger = softer joins
+const BODY_SMOOTH_K = 5.5;        // walker units. larger = softer joins
 const BODY_RING_COUNT = 56;
 const HEAD_RING_COUNT = 40;
 /** Top and bottom head bands each overlap 50% into the mask band. */
