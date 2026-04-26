@@ -31,6 +31,7 @@ import { makeLookState, stepLook } from "./walker/look";
 import { applyInkEdges, applyVellum, applyWorldBounds } from "./render/vellum";
 import { createAxes } from "./render/axes";
 import { FootprintTrail } from "./render/footprints";
+import { attachFurShells, detachFurShells, type FurState } from "./render/furShells";
 import { InstancedBoidsField } from "./sim/instancedBoids";
 import { WORLD_R_BABYLON } from "./scale";
 
@@ -277,6 +278,15 @@ async function main(): Promise<void> {
   function activateUnit(idx: number): void {
     if (idx < 0 || idx >= roster.units.length) return;
     if (current) {
+      // Fur shells are children of current.root and the fur materials
+      // are root.material — both get disposed by the recursive +
+      // material-disposing dispose() below. Only the original (pre-fur)
+      // StandardMaterial we stashed in furState is orphaned, so dispose
+      // it explicitly to avoid leaking GPU buffers across activations.
+      if (furState) {
+        furState.originalMaterial?.dispose();
+        furState = null;
+      }
       current.root.dispose(false, true);
       current.rig.skeleton.dispose();
       current = null;
@@ -292,6 +302,7 @@ async function main(): Promise<void> {
       if (inkOn) applyInkEdges(ch);
       current = ch;
       attachWalkerAxes();
+      if (furOn) furState = attachFurShells(ch, scene);
     }
   }
 
@@ -320,6 +331,10 @@ async function main(): Promise<void> {
       activateUnit(activeIdx);
     } else {
       if (current) {
+        if (furState) {
+          furState.originalMaterial?.dispose();
+          furState = null;
+        }
         current.root.dispose(false, true);
         current.rig.skeleton.dispose();
         current = null;
@@ -372,6 +387,24 @@ async function main(): Promise<void> {
       else current.root.disableEdgesRendering();
     }
     const btn = document.getElementById("btnInk");
+    if (btn) btn.classList.toggle("active", on);
+  }
+
+  // Shell fur (off by default). Track-mode only; boids rebuild their
+  // own decomposed meshes via the instanced field.
+  let furOn = false;
+  let furState: FurState | null = null;
+  function setFur(on: boolean): void {
+    furOn = on;
+    if (current && viewMode === "track") {
+      if (on && !furState) {
+        furState = attachFurShells(current, scene);
+      } else if (!on && furState) {
+        detachFurShells(current, furState);
+        furState = null;
+      }
+    }
+    const btn = document.getElementById("btnFur");
     if (btn) btn.classList.toggle("active", on);
   }
 
@@ -561,6 +594,11 @@ async function main(): Promise<void> {
   const inkBtn = document.getElementById("btnInk");
   if (inkBtn) {
     inkBtn.addEventListener("click", () => setInk(!inkOn));
+  }
+
+  const furBtn = document.getElementById("btnFur");
+  if (furBtn) {
+    furBtn.addEventListener("click", () => setFur(!furOn));
   }
 
   // Debug overlay: per-boid separation-radius rings.
