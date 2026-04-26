@@ -6,6 +6,7 @@ color: seafoam blue
 vibe: piers, boardwalks, bait shops
 synergy_theme: ranged / splash
 cost_distribution: skews expensive (cost 3-4 dominant)
+applies: [sandy, wet]
 synergies:
   - threshold: 2
     effect: Coastal raccoons gain +attack range
