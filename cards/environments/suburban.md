@@ -6,6 +6,7 @@ color: warm tan
 vibe: manicured lawns, garages, kiddie pools
 synergy_theme: defense / homefield
 cost_distribution: skews mid (cost 2-3 dominant)
+applies: [bored, lonely]
 synergies:
   - threshold: 2
     effect: Suburban bins gain +HP
