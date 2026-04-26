@@ -128,21 +128,35 @@ function lerpMood(m: Mood, target: Mood, k: number): void {
   m.stance    += (target.stance    - m.stance)    * k;
 }
 
+interface BakedAnim {
+  /** RGBA32F vertex animation texture, same layout as before. */
+  tex: RawTexture;
+  /** Head bone's body-local translation per frame (3 floats per frame:
+   *  x, y, z). Indexed as `frameIdx*3 + axis`. Used to make the rigid
+   *  head mesh follow the body's animated head bone (bob + sway). */
+  headTranslations: Float32Array;
+}
+
 /**
  * Bake every (gait, mood) pair into a vertex-animation texture by
  * procedurally driving a temporary skeleton at evenly-spaced phase samples.
  * Frame layout: gait g, mood m, frame f → row = (g·MOODS + m)·FRAMES + f.
  * Texture: width = bones × 4 RGBA texels, height = total frames, RGBA32F.
+ *
+ * Also records the head bone's body-local position per frame so callers
+ * can move a separate (rigid) head mesh in lock-step with the body
+ * without re-running the driver.
  */
 function bakeGaitVAT(
   scene: Scene,
   layout: RigLayout,
   footLateral: number,
-): RawTexture {
+): BakedAnim {
   const totalFrames = FRAMES_PER_GAIT * GAIT_LIST.length * NUM_MOODS;
   const W = NUM_BONES * 4;
   const H = totalFrames;
   const buf = new Float32Array(W * H * 4);
+  const headTranslations = new Float32Array(totalFrames * 3);
 
   const tmpRig = createRig(scene, layout, footLateral);
   const stubRoot = new TransformNode("vatStub", scene);
@@ -188,6 +202,13 @@ function bakeGaitVAT(
           const mm = tmpMat.m;
           for (let i = 0; i < 16; i++) buf[base + i] = mm[i];
         }
+        // Head bone's body-local translation = its absolute matrix's
+        // translation column (skeleton root sits at body-local origin).
+        const headT = bones[3].getAbsoluteMatrix().getTranslation();
+        const tOff = frameIdx * 3;
+        headTranslations[tOff + 0] = headT.x;
+        headTranslations[tOff + 1] = headT.y;
+        headTranslations[tOff + 2] = headT.z;
       }
     }
   }
@@ -206,7 +227,7 @@ function bakeGaitVAT(
   tex.wrapU = Texture.CLAMP_ADDRESSMODE;
   tex.wrapV = Texture.CLAMP_ADDRESSMODE;
   tex.name = "vatBake";
-  return tex;
+  return { tex, headTranslations };
 }
 
 class BoidSource {
@@ -224,6 +245,11 @@ class BoidSource {
   gaitMoodRanges: GaitMoodRanges;
   /** Body-local Z (in world units) of the head bone's rest position. */
   headOffsetZ: number;
+  /** Per-(gait,mood,frame) head bone translation in body-local frame.
+   *  Sampled per boid each frame so the rigid head mesh tracks the
+   *  body's animated head bone (bob + spine sway) instead of sitting
+   *  static at the rest position. 3 floats per frame: x, y, z. */
+  headTranslations: Float32Array;
 
   constructor(unit: Unit, scene: Scene, capacity: number) {
     this.unit = unit;
@@ -239,7 +265,9 @@ class BoidSource {
     // determines the inverse bind matrices used during the bake. The
     // head bone is still in the skeleton — but no body verts skin to it,
     // so its baked transform has no visible effect on the body mesh.
-    const tex = bakeGaitVAT(scene, decomp.rig.layout, decomp.footLateral);
+    const baked = bakeGaitVAT(scene, decomp.rig.layout, decomp.footLateral);
+    const tex = baked.tex;
+    this.headTranslations = baked.headTranslations;
 
     const manager = new BakedVertexAnimationManager(scene);
     manager.texture = tex;
@@ -580,6 +608,11 @@ export interface InstancedBoid {
   lookState: LookState;
   /** Personality-derived mix of idle/camera/influence look weights. */
   lookMix: LookMix;
+  /** World position of the boid's current "interesting point" — feeds
+   *  into the head-look "influence" mode. Updated each frame in
+   *  stepFlock from the fine-grid neighbor scan; defaults to (0,0). */
+  influenceX: number;
+  influenceY: number;
 }
 
 export interface InstancedBoidsFieldOpts {
@@ -804,6 +837,8 @@ export class InstancedBoidsField {
       gaitChoices,
       lookState: makeLookState(),
       lookMix: unit.raccoon?.lookMix ?? { idle: 0.5, camera: 0.25, influence: 0.25 },
+      influenceX: 0,
+      influenceY: 0,
     });
   }
 
@@ -894,6 +929,11 @@ export class InstancedBoidsField {
       let isChased = false;
       let friendsNearby = 0;
       let processed = 0;
+      // Nearest neighbor (wrapped world coords) — used as the head-look
+      // "influence" point in stepAnimate. Tracked here because we're
+      // already iterating the fine-grid neighbors anyway.
+      let nearestD2 = Infinity;
+      let nearestX = 0, nearestY = 0;
       fineLoop: for (let dy = -1; dy <= 1; dy++) {
         let cy = fcj + dy;
         if (cy < 0) cy += fN; else if (cy >= fN) cy -= fN;
@@ -913,6 +953,11 @@ export class InstancedBoidsField {
             const od2 = ox * ox + oy * oy;
             if (od2 < 1e-6) continue;
             processed++;
+            if (od2 < nearestD2) {
+              nearestD2 = od2;
+              nearestX = bx + ox;
+              nearestY = by + oy;
+            }
             // Effective separation distance = max of the two personal-space
             // radii. Symmetric: a small Specter near a large Construct feels
             // the Construct's radius too, so they don't pack into each other.
@@ -947,10 +992,27 @@ export class InstancedBoidsField {
         }
       }
 
+      // Commit the head-look influence point. Nearest neighbor when
+      // available, world center otherwise. (Chase target gets priority
+      // a few lines down if the boid is actively chasing something.)
+      if (nearestD2 < Infinity) {
+        b.influenceX = nearestX;
+        b.influenceY = nearestY;
+      } else {
+        b.influenceX = 0;
+        b.influenceY = 0;
+      }
+
       // ─ Coarse-grid 5×5 per-faction chase aggregates (~15 m reach). ─
       let isChasing = false;
       if (bChaseEnabled) {
         let hx = 0, hy = 0;
+        // Strongest hostile aggregate target — used as the look-influence
+        // point when this boid is actively chasing. "Strongest" = highest
+        // `rel * cnt / dd` (the same magnitude that drives chase impulse).
+        let chaseTargetW = 0;
+        let chaseTargetX = 0;
+        let chaseTargetY = 0;
         for (let dy = -2; dy <= 2; dy++) {
           let cy = ccj + dy;
           if (cy < 0) cy += cN; else if (cy >= cN) cy -= cN;
@@ -975,11 +1037,24 @@ export class InstancedBoidsField {
               const dd = Math.sqrt(dd2);
               const k2 = (rel * cnt) / dd;
               hx += ddx * k2; hy += ddy * k2;
-              if (rel > 0) isChasing = true;
+              if (rel > 0) {
+                isChasing = true;
+                if (k2 > chaseTargetW) {
+                  chaseTargetW = k2;
+                  chaseTargetX = bx + ddx;
+                  chaseTargetY = by + ddy;
+                }
+              }
             }
           }
         }
         fx += hx * t.chaseWeight; fy += hy * t.chaseWeight;
+        // Chasing overrides the nearest-neighbor influence — the
+        // raccoon locks onto its prey.
+        if (isChasing && chaseTargetW > 0) {
+          b.influenceX = chaseTargetX;
+          b.influenceY = chaseTargetY;
+        }
       }
 
       // Clamp self-directed acceleration (align / cohere / chase) to the
@@ -1108,6 +1183,17 @@ export class InstancedBoidsField {
       const slot = b.source.count++;
       b.slot = slot;
 
+      // Animation params: (fromFrame, toFrame, offsetFrames, fps).
+      // Mood-aware: pick the (currentGait, targetMood) bake range so
+      // posture/cadence carry the boid's emotional state.
+      //
+      // We integrate the per-instance phase ourselves and send fps=0,
+      // so the shader renders frame = (offset % range) + from. This
+      // decouples the displayed frame from the global manager time —
+      // a per-frame fps wobble (which is unavoidable since speedMul
+      // tracks vel magnitude) no longer time-warps the playhead.
+      const range = b.source.gaitMoodRanges[b.currentGait as GaitName][b.targetMood];
+
       // World matrix: rotation around Z by heading + translation, with
       // a uniform render scale so the totem characters sit visually
       // small in the boid view. Babylon matrix is column-major in m[].
@@ -1121,11 +1207,10 @@ export class InstancedBoidsField {
       mb[mOff +  8] = 0;        mb[mOff +  9] = 0;        mb[mOff + 10] = s; mb[mOff + 11] = 0;
       mb[mOff + 12] = b.pos.x; mb[mOff + 13] = b.pos.y; mb[mOff + 14] = 0; mb[mOff + 15] = 1;
 
-      // Head matrix: same xy world position as body, lifted to the
-      // head bone's rest height (scaled), rotated by (heading + look-yaw)
-      // around Z. Head verts are in head-local frame, so multiplying by
-      // this matrix places them at the right world spot with the right
-      // independent yaw on top of body heading.
+      // Head matrix. Track the body's animated head bone (bob + sway)
+      // by sampling the per-frame head translation baked in BoidSource.
+      // Then layer the per-boid look-yaw on top so each raccoon turns
+      // its head independently of body heading.
       const headYaw = stepLook(
         b.lookState,
         {
@@ -1134,31 +1219,35 @@ export class InstancedBoidsField {
           heading: b.heading,
           camX,
           camY,
-          influenceX: 0,
-          influenceY: 0,
+          influenceX: b.influenceX,
+          influenceY: b.influenceY,
           mix: b.lookMix,
         },
         dt,
       );
+      // Sample head bone translation for the current frame. Floor the
+      // phase — at 60 fps the per-frame jump is sub-pixel.
+      const frameInt = b.phase | 0;
+      const tOff = (range.from + frameInt) * 3;
+      const headT = b.source.headTranslations;
+      const hLocX = headT[tOff + 0];
+      const hLocY = headT[tOff + 1];
+      const hLocZ = headT[tOff + 2];
+      // Rotate body-local head offset by body heading (already-cached
+      // cosY/sinY), scale, and add to boid world pos.
+      const wOffX = (cosY * hLocX - sinY * hLocY) * s;
+      const wOffY = (sinY * hLocX + cosY * hLocY) * s;
+      const wOffZ = hLocZ * s;
       const cosH = Math.cos(b.heading + headYaw);
       const sinH = Math.sin(b.heading + headYaw);
-      const headZ = b.source.headOffsetZ * s;
       const hb = b.source.headMatrixBuffer;
       hb[mOff +  0] = cosH * s; hb[mOff +  1] = sinH * s; hb[mOff +  2] = 0; hb[mOff +  3] = 0;
       hb[mOff +  4] = -sinH * s; hb[mOff +  5] = cosH * s; hb[mOff +  6] = 0; hb[mOff +  7] = 0;
       hb[mOff +  8] = 0;         hb[mOff +  9] = 0;         hb[mOff + 10] = s; hb[mOff + 11] = 0;
-      hb[mOff + 12] = b.pos.x;   hb[mOff + 13] = b.pos.y;   hb[mOff + 14] = headZ; hb[mOff + 15] = 1;
-
-      // Animation params: (fromFrame, toFrame, offsetFrames, fps).
-      // Mood-aware: pick the (currentGait, targetMood) bake range so
-      // posture/cadence carry the boid's emotional state.
-      //
-      // We integrate the per-instance phase ourselves and send fps=0,
-      // so the shader renders frame = (offset % range) + from. This
-      // decouples the displayed frame from the global manager time —
-      // a per-frame fps wobble (which is unavoidable since speedMul
-      // tracks vel magnitude) no longer time-warps the playhead.
-      const range = b.source.gaitMoodRanges[b.currentGait as GaitName][b.targetMood];
+      hb[mOff + 12] = b.pos.x + wOffX;
+      hb[mOff + 13] = b.pos.y + wOffY;
+      hb[mOff + 14] = wOffZ;
+      hb[mOff + 15] = 1;
       const currentSpeed = Math.hypot(b.vel.x, b.vel.y);
       const speedMul = currentSpeed / b.defaultSpeed;
       const desiredFps = range.baseFps * speedMul;
