@@ -27,6 +27,7 @@ import { FORMATIONS, type FormationId } from "@sim/formations.js";
 import { MemoryLogger } from "@sim/log.js";
 import { DOCTRINE_KNOBS, type DoctrineKnobs } from "@sim/doctrines.js";
 import { loadContentFromApi } from "./sim-bridge.js";
+import { NumField } from "./NumField";
 
 interface Knobset {
   id: string;
@@ -464,8 +465,8 @@ export function CompareView() {
                     onChange={(v) => updateCell(i, { shapeUnit: v })} />
                   <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
                     <span style={{ width: 40, color: "#aaa" }}>count</span>
-                    <input type="number" value={cell.shapeCount}
-                      onChange={(e) => updateCell(i, { shapeCount: Math.max(1, Math.min(500, Number(e.target.value))) })}
+                    <NumField value={cell.shapeCount} min={1} max={500} int
+                      onChange={(n) => updateCell(i, { shapeCount: n })}
                       style={{ flexGrow: 1, background: "#1a1a1a", color: "#ddd", border: "1px solid #333", borderRadius: 3, padding: "2px 4px" }} />
                   </label>
                   <SelectField label="form" value={cell.shapeFormation}
@@ -487,10 +488,10 @@ export function CompareView() {
               />
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 <span style={{ width: 40, color: "#aaa" }}>seed</span>
-                <input
-                  type="number"
+                <NumField
                   value={cell.seed}
-                  onChange={(e) => updateCell(i, { seed: Number(e.target.value) })}
+                  int
+                  onChange={(n) => updateCell(i, { seed: n })}
                   style={{ flexGrow: 1, background: "#1a1a1a", color: "#ddd", border: "1px solid #333", borderRadius: 3, padding: "2px 4px" }}
                 />
               </label>

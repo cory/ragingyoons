@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { NumField as SharedNumField } from "./NumField";
 
 interface Iteration {
   /** Generation index (0 = initial random pop). */
@@ -258,10 +259,9 @@ function NumField({ label, value, onChange }: { label: string; value: number; on
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#aaa" }}>
       {label}
-      <input
-        type="number"
+      <SharedNumField
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={onChange}
         style={{ width: 70, padding: "3px 5px", background: "#1a1a1a", color: "#ddd", border: "1px solid #333", borderRadius: 3 }}
       />
     </label>

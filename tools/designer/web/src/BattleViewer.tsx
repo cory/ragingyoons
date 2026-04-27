@@ -26,6 +26,7 @@ import {
 } from "@sim/index.js";
 import { MemoryLogger } from "@sim/log.js";
 import { loadContentFromApi, type ViewerBattle, type ViewerFrame } from "./sim-bridge.js";
+import { NumField } from "./NumField";
 
 const CANVAS_W = 720;
 const CANVAS_H = 720;
@@ -720,15 +721,15 @@ export function BattleViewer(): JSX.Element {
         </label>
         <label>
           seed
-          <input type="number" value={opts.startSeed} onChange={(e) => setOpts({ ...opts, startSeed: Number(e.target.value) })} style={{ width: 100 }} />
+          <NumField int value={opts.startSeed} onChange={(n) => setOpts({ ...opts, startSeed: n })} style={{ width: 100 }} />
         </label>
         <label>
           count
-          <input type="number" min={1} max={50} value={opts.count} onChange={(e) => setOpts({ ...opts, count: Math.max(1, Math.min(50, Number(e.target.value))) })} style={{ width: 60 }} />
+          <NumField int min={1} max={50} value={opts.count} onChange={(n) => setOpts({ ...opts, count: n })} style={{ width: 60 }} />
         </label>
         <label>
           ticks
-          <input type="number" min={100} max={5000} value={opts.ticks} onChange={(e) => setOpts({ ...opts, ticks: Number(e.target.value) })} style={{ width: 80 }} />
+          <NumField int min={100} max={5000} value={opts.ticks} onChange={(n) => setOpts({ ...opts, ticks: n })} style={{ width: 80 }} />
         </label>
         <button onClick={runBattles} disabled={running} className="bv-run">
           {running ? "running…" : "run"}
