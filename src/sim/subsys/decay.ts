@@ -10,7 +10,7 @@
  * Tuning intent (v0a):
  *   - Battles should be ~95% conclusive at 1000 ticks (~67s sim).
  *   - Combat-driven outcomes are still preferred; decay is a backstop.
- *   - Decay starts at 30s (tick 450) so the first ~30s plays out as
+ *   - Decay starts at 45s (tick 675) so the first ~45s plays out as
  *     a pure combat round before the floor starts moving.
  *   - 5%/sec of max HP → an unfought bin dies in 20s. With even some
  *     focus-fire, bins die in 10-15s of decay → 95% conclusive at 1000.
@@ -24,7 +24,7 @@ import type { ContentBundle } from "../content.js";
 import type { Logger } from "../log.js";
 import { MAX_GARRISON_SLOTS, SECONDS_PER_TICK, type BattleState } from "../state.js";
 
-export const SUDDEN_DEATH_TICK = 450;
+export const SUDDEN_DEATH_TICK = 675;
 export const DECAY_FRAC_PER_SEC = 0.05;
 
 export function decayTick(state: BattleState, content: ContentBundle, log: Logger): void {

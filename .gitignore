@@ -7,3 +7,4 @@ dist/
 
 # Sim observability output (NDJSON event logs)
 logs/
+lab/

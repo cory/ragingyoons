@@ -14,6 +14,7 @@
     "sim:batch": "tsx tools/sim-runner/batch.ts",
     "sim:ab": "tsx tools/sim-runner/tactic-ab.ts",
     "sim:sens": "tsx tools/sim-runner/sensitivity.ts",
+    "sim:lab": "tsx tools/sim-runner/lab.ts",
     "test": "tsx --test 'tests/**/*.test.ts'"
   },
   "dependencies": {
