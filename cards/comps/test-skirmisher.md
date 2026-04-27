@@ -7,9 +7,7 @@ synergies:
   - Tinkerers 2 — rage bonus
 bins:
   - id: park-tinkerer-archer-glowfly
-    count: 2
-  - id: park-tinkerer-cavalry-boatman
-    count: 2
+    count: 4
 ---
 
 # Notes
