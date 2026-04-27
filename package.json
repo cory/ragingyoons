@@ -7,14 +7,25 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "validate-wgsl": "node tools/validate-wgsl.mjs src/render/fur.ts"
+    "validate-wgsl": "node tools/validate-wgsl.mjs src/render/fur.ts && node tools/validate-wgsl.mjs src/render/furBoid.ts",
+    "sim:smoke": "tsx tools/sim-runner/run.ts",
+    "sim:check": "tsx tools/sim-runner/check.ts",
+    "sim:probe": "tsx tools/sim-runner/probe.ts",
+    "sim:batch": "tsx tools/sim-runner/batch.ts",
+    "sim:ab": "tsx tools/sim-runner/tactic-ab.ts",
+    "sim:sens": "tsx tools/sim-runner/sensitivity.ts",
+    "test": "tsx --test 'tests/**/*.test.ts'"
   },
   "dependencies": {
     "@babylonjs/core": "^9.4.1",
-    "earcut": "^3.0.2"
+    "earcut": "^3.0.2",
+    "js-yaml": "^4.1.0"
   },
   "devDependencies": {
     "@types/earcut": "^3.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   }

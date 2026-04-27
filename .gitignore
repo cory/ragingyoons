@@ -4,3 +4,6 @@ dist/
 .DS_Store
 .vite/
 *.tsbuildinfo
+
+# Sim observability output (NDJSON event logs)
+logs/

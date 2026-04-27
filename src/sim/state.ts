@@ -1,0 +1,492 @@
+/**
+ * BattleState — typed-array (structure-of-arrays) state for the sim.
+ *
+ * Determinism contract: state is mutated only inside `tick.ts` and its
+ * subsystems. Setup helpers below are also allowed to mutate (they
+ * build the initial state). Read access from outside should go through
+ * `snapshot()` (added later) for clarity.
+ */
+
+import type { ContentBundle, CompDef, UnitDef } from "./content.js";
+import {
+  CURIOSITY_TO_IDX,
+  ENV_TO_IDX,
+  ROLE_TO_IDX,
+} from "./content.js";
+import { type RngState, makeRng } from "./rng.js";
+import { applyBinHpSynergies, populateSynergyCounts } from "./subsys/synergy.js";
+import { composeTactics, type TacticOverrideMap, type TacticProfile } from "./tactics.js";
+
+/** Cap on simultaneously-tracked entities. Generous for v0; tighten later. */
+export const MAX_BINS = 32;
+export const MAX_RACS = 512;
+export const MAX_ATKS = 1024;
+/** Garrison slots per bin for the per-slot respawn timer table. */
+export const MAX_GARRISON_SLOTS = 8;
+
+export const TICK_RATE_HZ = 15;
+export const SECONDS_PER_TICK = 1 / TICK_RATE_HZ;
+
+export type Owner = 0 | 1;
+
+export interface StatusInstance {
+  /** Status id. */
+  id: string;
+  /** Remaining duration in seconds. */
+  remaining: number;
+  /** Source raccoon id, or -1 if environmental. */
+  src: number;
+  /** Time until next DoT tick (seconds), if applicable. */
+  nextTickIn: number;
+}
+
+export interface BattleConfig {
+  /** Seed for the RNG. */
+  seed: number;
+  /** Globally unique id for this battle (for log correlation). */
+  battleId: string;
+  /** Comp ids for player A and player B. */
+  compA: string;
+  compB: string;
+  /** Battlefield bounds (x, y in meters). */
+  bounds: { w: number; h: number };
+  /** Logging verbosity (interpreted by the logger). */
+  verbosity: "events" | "events+snapshots" | "silent";
+  /** Optional per-role tactic overrides per side. Layered over the
+   *  defaults in `tactics.ts`. Used by the A/B harness to swap a
+   *  role's behavior on one side and measure the winrate delta. */
+  tacticsA?: TacticOverrideMap;
+  tacticsB?: TacticOverrideMap;
+}
+
+export interface BinTable {
+  count: number;
+  id: Int32Array;
+  owner: Uint8Array;
+  unitIdIdx: Int32Array; // index into state.unitIdTable
+  /** Cached env / curiosity indices for fast synergy threshold counting. */
+  envIdx: Uint8Array;
+  curIdx: Uint8Array;
+  hp: Float32Array;
+  hpMax: Float32Array;
+  x: Float32Array;
+  y: Float32Array;
+  starTier: Uint8Array;
+  garrisonCap: Uint8Array;
+  /** Slot respawn timers, packed [bin][slot]. -1 = slot empty (spawn now). */
+  slotRespawnT: Float32Array;
+  /** raccoon id occupying each slot, packed [bin][slot]. -1 = empty. */
+  slotOccupant: Int32Array;
+  alive: Uint8Array;
+}
+
+export interface RacTable {
+  count: number;
+  id: Int32Array;
+  owner: Uint8Array;
+  sourceBinId: Int32Array;
+  /** Packed bin*MAX_GARRISON_SLOTS+slot, so on death we can mark the
+   *  slot empty and start its respawn timer in O(1). */
+  sourceSlotIdx: Int32Array;
+  unitIdIdx: Int32Array;
+  role: Uint8Array;
+  env: Uint8Array;
+  cur: Uint8Array;
+  hp: Float32Array;
+  hpMax: Float32Array;
+  rage: Float32Array;
+  rageCap: Float32Array;
+  x: Float32Array;
+  y: Float32Array;
+  vx: Float32Array;
+  vy: Float32Array;
+  facing: Float32Array;
+  /** Previous-tick facing — used to detect rapid rotation for the
+   *  "no-attack while spinning" rule. Boids writes facing every tick;
+   *  before the write, the old value is copied into prevFacing. */
+  prevFacing: Float32Array;
+  targetId: Int32Array;
+  /** 0 = no target, 1 = rac, 2 = bin. Pairs with targetId. */
+  targetKind: Uint8Array;
+  attackCooldown: Float32Array;
+  /** Sparse — most raccoons have empty status list. */
+  statuses: StatusInstance[][];
+  alive: Uint8Array;
+  /** Effective (post-status, post-synergy) stats. Recomputed each tick
+   *  by status.ts. Boids reads effSpeed; combat reads effDamage /
+   *  effRange / effAttackRate / effArmor; damage application multiplies
+   *  incoming damage by dmgTakenMul. HP multiplier is applied at spawn
+   *  time (see spawn.ts) since rebasing live max HP mid-battle is
+   *  fragile (current HP > new max edge cases). */
+  effSpeed: Float32Array;
+  effDamage: Float32Array;
+  effRange: Float32Array;
+  effAttackRate: Float32Array;
+  effArmor: Float32Array;
+  dmgTakenMul: Float32Array;
+  /** Surrounded damage multiplier — set by boidsTick each tick from
+   *  positional context (enemies in ≥3 of 4 cardinal quadrants).
+   *  Multiplied into incoming damage in combat.applyRacDamage. */
+  surroundedDamageMul: Float32Array;
+  /** Per-rac dirty flag — set when statuses change or the rac's side
+   *  synergy state transitions, cleared after recomputeEffectiveStats.
+   *  Lets statusTick skip the recompute for the common case of "no
+   *  status applied or expired since last recompute, no synergy
+   *  flipped." Saves ~half of statusTick on big battles. */
+  statsDirty: Uint8Array;
+}
+
+/** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
+ *  velocity is set at spawn from source→target direction at that
+ *  instant. Each tick projectile.ts advances each one and does a
+ *  swept-segment hit test against any alive rac (skipping the source)
+ *  and any alive bin. First hit (lowest segment-t) takes the damage —
+ *  including friendly fire, which is the *point*: a tank in front of an
+ *  archer eats the arrow and the archer learns to be in the back row. */
+export interface AtkTable {
+  count: number;
+  id: Int32Array;
+  sourceRacId: Int32Array;
+  /** Owner of the firing raccoon. Not strictly needed for collision
+   *  (friendly fire is on) but kept for o11y attribution after the
+   *  source dies. */
+  sourceOwner: Uint8Array;
+  kindIdx: Uint8Array; // tbd enum
+  damage: Float32Array;
+  appliesStatusIds: string[][];
+  x: Float32Array;
+  y: Float32Array;
+  vx: Float32Array;
+  vy: Float32Array;
+  /** Hit radius for collision (entity radius + projectile radius). */
+  radius: Float32Array;
+  ttl: Float32Array;
+  alive: Uint8Array;
+}
+
+export interface BattleState {
+  tick: number;
+  rng: RngState;
+  battleId: string;
+  contentVersion: string;
+  seed: number;
+  bounds: { w: number; h: number };
+  /** Side-by-side string interning for unit ids. unitIdIdx fields index here. */
+  unitIdTable: string[];
+  bin: BinTable;
+  rac: RacTable;
+  atk: AtkTable;
+  /** Monotonic id counters. */
+  nextBinId: number;
+  nextRacId: number;
+  nextAtkId: number;
+  winner: -1 | 0 | 1;
+  endReason: "last-raccoon" | "all-bins" | "timeout" | "tiebreak" | "draw" | null;
+  /** Per-side per-role tactic profile, set at setup. Subsystems read
+   *  `tacticPerSide[owner][role]` for behavior knobs (boid weights,
+   *  kite distances, target rethink cadence, rage rates). */
+  tacticPerSide: TacticProfile[][];
+  /** Synergy scratch state. Populated by synergyTick; read by status
+   *  recompute. Typed loosely to avoid a circular import. */
+  _synergy?: import("./subsys/synergy.js").SynergyState;
+  /** Boid influence fields, lazily allocated on first use of boidsTick.
+   *  Reused across ticks (zero+rebuild per tick). */
+  _boidFields?: import("./fields.js").BoidFields;
+  /** Per-tick rac spatial grid, rebuilt at the top of each tick by
+   *  tick.ts. Shared by combat (in-range enemy scan) and target
+   *  (nearest enemy). Replaces the O(N²) inner loops those subsystems
+   *  used to do. */
+  _racGrid?: import("./grid.js").SpatialGrid;
+  /** id → row index lookup tables. Maintained by spawn/death code paths
+   *  so findRacRowById / findBinRowById are O(1) instead of O(N). */
+  racRowById: Map<number, number>;
+  binRowById: Map<number, number>;
+}
+
+function emptyBins(): BinTable {
+  return {
+    count: 0,
+    id: new Int32Array(MAX_BINS),
+    owner: new Uint8Array(MAX_BINS),
+    unitIdIdx: new Int32Array(MAX_BINS),
+    envIdx: new Uint8Array(MAX_BINS),
+    curIdx: new Uint8Array(MAX_BINS),
+    hp: new Float32Array(MAX_BINS),
+    hpMax: new Float32Array(MAX_BINS),
+    x: new Float32Array(MAX_BINS),
+    y: new Float32Array(MAX_BINS),
+    starTier: new Uint8Array(MAX_BINS),
+    garrisonCap: new Uint8Array(MAX_BINS),
+    slotRespawnT: new Float32Array(MAX_BINS * MAX_GARRISON_SLOTS),
+    slotOccupant: new Int32Array(MAX_BINS * MAX_GARRISON_SLOTS),
+    alive: new Uint8Array(MAX_BINS),
+  };
+}
+
+function emptyRacs(): RacTable {
+  return {
+    count: 0,
+    id: new Int32Array(MAX_RACS),
+    owner: new Uint8Array(MAX_RACS),
+    sourceBinId: new Int32Array(MAX_RACS),
+    sourceSlotIdx: new Int32Array(MAX_RACS),
+    unitIdIdx: new Int32Array(MAX_RACS),
+    role: new Uint8Array(MAX_RACS),
+    env: new Uint8Array(MAX_RACS),
+    cur: new Uint8Array(MAX_RACS),
+    hp: new Float32Array(MAX_RACS),
+    hpMax: new Float32Array(MAX_RACS),
+    rage: new Float32Array(MAX_RACS),
+    rageCap: new Float32Array(MAX_RACS),
+    x: new Float32Array(MAX_RACS),
+    y: new Float32Array(MAX_RACS),
+    vx: new Float32Array(MAX_RACS),
+    vy: new Float32Array(MAX_RACS),
+    facing: new Float32Array(MAX_RACS),
+    prevFacing: new Float32Array(MAX_RACS),
+    targetId: new Int32Array(MAX_RACS),
+    targetKind: new Uint8Array(MAX_RACS),
+    attackCooldown: new Float32Array(MAX_RACS),
+    statuses: Array.from({ length: MAX_RACS }, () => []),
+    alive: new Uint8Array(MAX_RACS),
+    effSpeed: new Float32Array(MAX_RACS),
+    effDamage: new Float32Array(MAX_RACS),
+    effRange: new Float32Array(MAX_RACS),
+    effAttackRate: new Float32Array(MAX_RACS),
+    effArmor: new Float32Array(MAX_RACS),
+    dmgTakenMul: new Float32Array(MAX_RACS),
+    surroundedDamageMul: new Float32Array(MAX_RACS),
+    statsDirty: new Uint8Array(MAX_RACS),
+  };
+}
+
+function emptyAtks(): AtkTable {
+  return {
+    count: 0,
+    id: new Int32Array(MAX_ATKS),
+    sourceRacId: new Int32Array(MAX_ATKS),
+    sourceOwner: new Uint8Array(MAX_ATKS),
+    kindIdx: new Uint8Array(MAX_ATKS),
+    damage: new Float32Array(MAX_ATKS),
+    appliesStatusIds: Array.from({ length: MAX_ATKS }, () => []),
+    x: new Float32Array(MAX_ATKS),
+    y: new Float32Array(MAX_ATKS),
+    vx: new Float32Array(MAX_ATKS),
+    vy: new Float32Array(MAX_ATKS),
+    radius: new Float32Array(MAX_ATKS),
+    ttl: new Float32Array(MAX_ATKS),
+    alive: new Uint8Array(MAX_ATKS),
+  };
+}
+
+/** v0a slot layout: 2×2 = 4 bins per player, mirrored across the y-axis.
+ *  Player 0 at +x, player 1 at -x. */
+function placementForOwner(idx: number, owner: Owner, bounds: { w: number; h: number }) {
+  const col = idx % 2;
+  const row = Math.floor(idx / 2);
+  const sign = owner === 0 ? 1 : -1;
+  const x = sign * (bounds.w * 0.30 + col * bounds.w * 0.10);
+  const y = (row - 0.5) * bounds.h * 0.30;
+  return { x, y };
+}
+
+/** Build a battle state from two comp ids. Uses the FIRST four bins listed
+ *  in each comp (expanding by `count`), so a comp with [{rabble, 3}] gives
+ *  three Rabble bins; we cap at 4 per side. */
+export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleState {
+  const compA = content.comps.get(cfg.compA);
+  const compB = content.comps.get(cfg.compB);
+  if (!compA) throw new Error(`unknown comp "${cfg.compA}"`);
+  if (!compB) throw new Error(`unknown comp "${cfg.compB}"`);
+
+  const state: BattleState = {
+    tick: 0,
+    rng: makeRng(cfg.seed),
+    battleId: cfg.battleId,
+    contentVersion: content.version,
+    seed: cfg.seed,
+    bounds: cfg.bounds,
+    unitIdTable: [],
+    bin: emptyBins(),
+    rac: emptyRacs(),
+    atk: emptyAtks(),
+    nextBinId: 1,
+    nextRacId: 1,
+    nextAtkId: 1,
+    winner: -1,
+    endReason: null,
+    tacticPerSide: composeTactics(cfg.tacticsA, cfg.tacticsB),
+    racRowById: new Map(),
+    binRowById: new Map(),
+  };
+
+  placeComp(state, content, compA, 0);
+  placeComp(state, content, compB, 1);
+
+  // Populate synergy counts and apply bin-side stat mods (Suburban-2
+  // bin HP) at setup so the very first damage_apply event sees the
+  // correct bin HP. Synchronous import via a top-level statement at
+  // file head (see imports above).
+  populateSynergyCounts(state);
+  applyBinHpSynergies(state);
+
+  return state;
+}
+
+function placeComp(state: BattleState, content: ContentBundle, comp: CompDef, owner: Owner): void {
+  const bins: { unit: UnitDef }[] = [];
+  for (const ref of comp.bins) {
+    const u = content.units.get(ref.id);
+    if (!u) continue; // already validated at load, defensive
+    for (let k = 0; k < ref.count && bins.length < 4; k++) bins.push({ unit: u });
+  }
+  for (let i = 0; i < bins.length; i++) {
+    const u = bins[i].unit;
+    const slot = state.bin.count;
+    const { x, y } = placementForOwner(i, owner, state.bounds);
+    const unitIdIdx = internUnitId(state, u.id);
+    state.bin.id[slot] = state.nextBinId++;
+    state.bin.owner[slot] = owner;
+    state.bin.unitIdIdx[slot] = unitIdIdx;
+    state.bin.envIdx[slot] = ENV_TO_IDX[u.environment];
+    state.bin.curIdx[slot] = CURIOSITY_TO_IDX[u.curiosity];
+    state.bin.hp[slot] = u.bin.hp;
+    state.bin.hpMax[slot] = u.bin.hp;
+    state.bin.x[slot] = x;
+    state.bin.y[slot] = y;
+    state.bin.starTier[slot] = 1;
+    state.bin.garrisonCap[slot] = Math.min(u.bin.garrison_cap, MAX_GARRISON_SLOTS);
+    for (let s = 0; s < MAX_GARRISON_SLOTS; s++) {
+      state.bin.slotRespawnT[slot * MAX_GARRISON_SLOTS + s] = 0;
+      state.bin.slotOccupant[slot * MAX_GARRISON_SLOTS + s] = -1;
+    }
+    state.bin.alive[slot] = 1;
+    state.bin.count = slot + 1;
+    state.binRowById.set(state.bin.id[slot], slot);
+    // Pre-mark role/env/cur indices for whatever subsystem wants them later.
+    void ROLE_TO_IDX[u.role];
+    void ENV_TO_IDX[u.environment];
+    void CURIOSITY_TO_IDX[u.curiosity];
+  }
+}
+
+function internUnitId(state: BattleState, unitId: string): number {
+  let idx = state.unitIdTable.indexOf(unitId);
+  if (idx < 0) {
+    idx = state.unitIdTable.length;
+    state.unitIdTable.push(unitId);
+  }
+  return idx;
+}
+
+/** Emit one `bin_spawn` event per bin currently in state. Call once after
+ *  `setupBattle` (and after the caller's own `battle_start`) so the log
+ *  has a registry of bin ids to attribute later events to. */
+export function logSetupEvents(state: BattleState, log: import("./log.js").Logger): void {
+  for (let i = 0; i < state.bin.count; i++) {
+    log.emit("bin_spawn", {
+      bin_id: state.bin.id[i],
+      owner: state.bin.owner[i],
+      unit_id: state.unitIdTable[state.bin.unitIdIdx[i]],
+      hp: state.bin.hp[i],
+      x: state.bin.x[i],
+      y: state.bin.y[i],
+      garrison_cap: state.bin.garrisonCap[i],
+      star_tier: state.bin.starTier[i],
+    });
+  }
+}
+
+/** Read-only summary used for tick_summary log events and quick UI checks.
+ *
+ * Includes spatial aggregates (centroid distance, min enemy pair distance)
+ * so o11y can verify "things are moving / engaging" without per-tick
+ * position dumps. */
+export function summarize(state: BattleState): {
+  bins_alive_a: number;
+  bins_alive_b: number;
+  racs_alive_a: number;
+  racs_alive_b: number;
+  centroid_dist: number;
+  min_enemy_dist: number;
+} {
+  let ba = 0,
+    bb = 0,
+    ra = 0,
+    rb = 0;
+  for (let i = 0; i < state.bin.count; i++) {
+    if (!state.bin.alive[i]) continue;
+    if (state.bin.owner[i] === 0) ba++;
+    else bb++;
+  }
+  let aSumX = 0,
+    aSumY = 0,
+    bSumX = 0,
+    bSumY = 0;
+  for (let i = 0; i < state.rac.count; i++) {
+    if (!state.rac.alive[i]) continue;
+    if (state.rac.owner[i] === 0) {
+      ra++;
+      aSumX += state.rac.x[i];
+      aSumY += state.rac.y[i];
+    } else {
+      rb++;
+      bSumX += state.rac.x[i];
+      bSumY += state.rac.y[i];
+    }
+  }
+  let centroidDist = -1;
+  if (ra > 0 && rb > 0) {
+    const dx = aSumX / ra - bSumX / rb;
+    const dy = aSumY / ra - bSumY / rb;
+    centroidDist = Math.hypot(dx, dy);
+  }
+  let minEnemy = -1;
+  if (ra > 0 && rb > 0) {
+    let best = Infinity;
+    for (let i = 0; i < state.rac.count; i++) {
+      if (!state.rac.alive[i] || state.rac.owner[i] !== 0) continue;
+      for (let j = 0; j < state.rac.count; j++) {
+        if (!state.rac.alive[j] || state.rac.owner[j] !== 1) continue;
+        const dx = state.rac.x[i] - state.rac.x[j];
+        const dy = state.rac.y[i] - state.rac.y[j];
+        const d2 = dx * dx + dy * dy;
+        if (d2 < best) best = d2;
+      }
+    }
+    minEnemy = Math.sqrt(best);
+  }
+  return {
+    bins_alive_a: ba,
+    bins_alive_b: bb,
+    racs_alive_a: ra,
+    racs_alive_b: rb,
+    centroid_dist: centroidDist,
+    min_enemy_dist: minEnemy,
+  };
+}
+
+/** Returns the row index of an alive raccoon by its id, or -1.
+ *  O(1) via state.racRowById; the map is updated on spawn (in
+ *  spawn.ts) and on death (in spawn.ts:freeRacSlot / combat.ts:
+ *  markRacDead). Falls back to -1 if the id isn't tracked or the row
+ *  is no longer alive. */
+export function findRacRowById(state: BattleState, id: number): number {
+  if (id < 0) return -1;
+  const row = state.racRowById.get(id);
+  if (row === undefined) return -1;
+  if (!state.rac.alive[row]) return -1;
+  return row;
+}
+
+export function findBinRowById(state: BattleState, id: number): number {
+  if (id < 0) return -1;
+  const row = state.binRowById.get(id);
+  if (row === undefined) return -1;
+  if (!state.bin.alive[row]) return -1;
+  return row;
+}
+
+export const TARGET_KIND_NONE = 0;
+export const TARGET_KIND_RAC = 1;
+export const TARGET_KIND_BIN = 2;
