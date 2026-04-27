@@ -360,40 +360,41 @@ function drawFrame(ctx: CanvasRenderingContext2D, frame: ViewerFrame): void {
     ctx.lineWidth = 1;
   }
 
-  // Raccoons: shape by role + HP bar above. Optional doctrine ring
-  // (outline color = doctrine), team-id shading, and a thick dark
-  // ring for racs in contact mode (locked-shields).
+  // Raccoons: shape by role + HP bar above.
+  // Visual encoding choices (kept minimal — image legibility wins
+  // over information density):
+  //   - role = shape (square/triangle/diamond/circle)
+  //   - side = fill color (blue/red)
+  //   - team parity = fill saturation (so bounding overwatch shows
+  //     as flickering shade alternation between halves of a fire
+  //     team — no extra ring)
+  //   - contact = single subtle dark dot above the unit (synaspismos
+  //     marker); no full outer ring
+  //   - doctrine = small ring on a few "leader" units only (every
+  //     5th rac), so it's identifiable without coating every unit
   for (const r of frame.racs) {
     const [cx, cy] = worldToCanvas(r.x, r.y);
     const c = SIDE_COLORS[r.owner];
-    // Contact ring: thick dark outline = synaspismos / engaged.
-    if (r.contact) {
-      ctx.strokeStyle = "#000a";
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 7, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.lineWidth = 1;
-    }
-    // Doctrine outline ring — only drawn for non-default doctrines
-    // so the viewer stays clean for vanilla matchups.
-    if (r.doctrineIdx > 0) {
-      ctx.strokeStyle = DOCTRINE_RING[r.doctrineIdx] ?? "transparent";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.lineWidth = 1;
-    }
-    // Per-team shading: alternate fill brightness for adjacent teams
-    // so bounding overwatch (team-A advances, team-B halts) is
-    // visually distinct.
+    // Per-team alternate fill shading for non-default doctrines.
     let fill = c.rac;
     if (r.doctrineIdx > 1 && r.teamId % 2 === 1) {
-      // Slightly darker shade for odd-team. Hex-ish blend.
       fill = r.owner === 0 ? "#5a86c0" : "#c05a5a";
     }
     drawRoleShape(ctx, r.role, cx, cy, fill);
+    // Doctrine indicator: only on every 5th rac (sparse), small ring.
+    if (r.doctrineIdx > 0 && r.id % 5 === 0) {
+      ctx.strokeStyle = DOCTRINE_RING[r.doctrineIdx] ?? "transparent";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    // Contact marker: tiny dark dot above the unit, not a full ring.
+    if (r.contact) {
+      ctx.fillStyle = "#000c";
+      ctx.fillRect(cx - 1, cy - 8, 2, 2);
+    }
     drawHpBar(ctx, cx, cy, r.hp, r.hpMax, 10);
   }
 

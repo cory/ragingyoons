@@ -34,9 +34,9 @@ import {
   isValidFormationId,
 } from "../formations.js";
 import {
-  DOCTRINE_TEAM_SIZE,
   DOCTRINE_TO_IDX,
   doctrineFor,
+  teamSizeFor,
 } from "../doctrines.js";
 import type { Logger } from "../log.js";
 import { rngRange } from "../rng.js";
@@ -136,7 +136,7 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
       // skirmisher, line). Sub-team grouping is doctrine-specific.
       const doctrineId = doctrineFor(unit.environment, unit.curiosity);
       const doctrineIdx = DOCTRINE_TO_IDX[doctrineId];
-      const teamSize = DOCTRINE_TEAM_SIZE[doctrineId];
+      const teamSize = teamSizeFor(doctrineIdx);
       // Forward direction: side-0 bins are at +x and want enemies at
       // -x, so forward (toward enemy) is -1 along x. side-1 mirrors.
       const forward = owner === 0 ? -1 : 1;

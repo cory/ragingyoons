@@ -49,9 +49,9 @@ import {
   type FormationId,
 } from "../../src/sim/formations.js";
 import {
-  DOCTRINE_TEAM_SIZE,
   DOCTRINE_TO_IDX,
   doctrineFor,
+  teamSizeFor,
 } from "../../src/sim/doctrines.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -261,8 +261,9 @@ function placeRac(
   // lab it's good enough that consecutive-placed racs of the same
   // unit get the same teamId for the first few then increment.
   const dId = doctrineFor(unit.environment, unit.curiosity);
-  state.rac.doctrineIdx[slot] = DOCTRINE_TO_IDX[dId];
-  state.rac.teamId[slot] = Math.floor(slot / DOCTRINE_TEAM_SIZE[dId]);
+  const dIdx = DOCTRINE_TO_IDX[dId];
+  state.rac.doctrineIdx[slot] = dIdx;
+  state.rac.teamId[slot] = Math.floor(slot / teamSizeFor(dIdx));
   state.rac.sourceBinId[slot] = -1;
   state.rac.sourceSlotIdx[slot] = -1;
   state.rac.count = slot + 1;

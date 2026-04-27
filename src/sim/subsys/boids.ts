@@ -40,7 +40,7 @@ import {
   findRacRowById,
 } from "../state.js";
 import { allocBoidFields, buildBoidFields, sampleField } from "../fields.js";
-import { doctrineMovementMod } from "../doctrines.js";
+import { computeDoctrineMod } from "../doctrines.js";
 
 /** Step (meters) used for central-difference gradient of the density
  *  field. Smaller = sharper response to local density variation; too
@@ -98,15 +98,45 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     let sepX = -gradX * sepK;
     let sepY = -gradY * sepK;
 
-    // ---- Doctrine modulation: per-tick rhythm pattern. ----
-    // Fire teams bound forward in alternation; skirmishers sprint
-    // and halt; phalanx and default doctrines pass through unchanged.
-    // Multipliers apply to the formation's seek/cohesion coefficients.
-    const dMod = doctrineMovementMod(
-      state.rac.doctrineIdx[i],
-      state.rac.teamId[i],
-      state.tick,
-    );
+    // ---- Doctrine modulation: phase-based behavior. ----
+    // Compute "in attack range" = rac's target is alive and within
+    // effRange. This drives contact-phase strategies (hold and fight,
+    // kite, harass-disengage). The 8m formation-contact flag
+    // (state.rac.contact[i]) is separate and drives synaspismos
+    // tightening.
+    let inAttackRangeForDoctrine = false;
+    {
+      const myR = state.rac.effRange[i];
+      const myR2 = myR * myR;
+      const tid = state.rac.targetId[i];
+      const tk = state.rac.targetKind[i];
+      if (tk === TARGET_KIND_RAC && tid >= 0) {
+        const tRow = state.racRowById.get(tid);
+        if (tRow !== undefined && state.rac.alive[tRow]) {
+          const dx = state.rac.x[tRow] - state.rac.x[i];
+          const dy = state.rac.y[tRow] - state.rac.y[i];
+          if (dx * dx + dy * dy <= myR2) inAttackRangeForDoctrine = true;
+        }
+      } else if (tk === TARGET_KIND_BIN && tid >= 0) {
+        const tRow = state.binRowById.get(tid);
+        if (tRow !== undefined && state.bin.alive[tRow]) {
+          const dx = state.bin.x[tRow] - state.rac.x[i];
+          const dy = state.bin.y[tRow] - state.rac.y[i];
+          if (dx * dx + dy * dy <= myR2) inAttackRangeForDoctrine = true;
+        }
+      }
+    }
+    const dMod = computeDoctrineMod({
+      state,
+      fields,
+      i,
+      myOwner: state.rac.owner[i] as 0 | 1,
+      myX: state.rac.x[i],
+      myY: state.rac.y[i],
+      teamId: state.rac.teamId[i],
+      tick: state.tick,
+      inAttackRange: inAttackRangeForDoctrine,
+    });
 
     // ---- Leadership: per-rac boldness in [0,1) from id hash. -------
     // Roughly 20% of units come out highly bold (commit-to-mission),
@@ -203,7 +233,12 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       if (tdist <= myRange) inCombat = true;
     }
 
-    if (tgtFound && !inCombat) {
+    // Doctrine seekDirOverride: when set, ignore target seek and use
+    // the override direction (retreat to bin, rush to fight, flank).
+    if (dMod.seekDirOverride) {
+      seekX = dMod.seekDirOverride.dx * seekKEff;
+      seekY = dMod.seekDirOverride.dy * seekKEff;
+    } else if (tgtFound && !inCombat) {
       const tdx = tgtX - myX;
       const tdy = tgtY - myY;
       const td2 = tdx * tdx + tdy * tdy;
@@ -321,7 +356,19 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     if (dE > SURROUND_THRESHOLD) qCount++;
     if (dW > SURROUND_THRESHOLD) qCount++;
     const surrounded = qCount >= 3;
-    state.rac.surroundedDamageMul[i] = surrounded ? SURROUND_DMG_MUL : 1;
+    // Support bonus: friendly density at this rac's position confers
+    // a damage-taken reduction (rear ranks supporting front ranks —
+    // the phalanx mechanic). Profile-controlled per role/formation.
+    // Combines multiplicatively with surrounded penalty: a phalanx
+    // that's surrounded is still tougher than a lone unit surrounded,
+    // because rear ranks still help.
+    let dmgMul = surrounded ? SURROUND_DMG_MUL : 1;
+    if (profile.supportBonusMax > 0) {
+      const friendlyHere = sampleField(fields, fields.sideDensity[myOwner], myX, myY);
+      const supportFrac = Math.min(1, Math.max(0, friendlyHere / profile.supportBonusFullAt));
+      dmgMul *= 1 - profile.supportBonusMax * supportFrac;
+    }
+    state.rac.surroundedDamageMul[i] = dmgMul;
 
     // ---- Velocity: maxV when intent is committed, else damp. ----
     // Strong intent (force magnitude above threshold) → travel at

@@ -161,16 +161,19 @@ export const FORMATIONS: FormationDef[] = [
     contactOverride: {
       // SYNASPISMOS — the dense locked-shield formation that received
       // charges. Cohesion dominates separation hard; speed near zero
-      // (we're holding the line, not advancing); damage taken much
-      // reduced (shields up). Boids' stop-in-combat already pins
-      // infantry; this just *visually* tightens the block while it
-      // fights.
+      // (we're holding the line, not advancing); support bonus jumps
+      // because rear ranks lapping shields over front ranks IS the
+      // phalanx mechanic. Stop-in-combat already pins infantry; this
+      // just *visually* tightens the block while it fights, and the
+      // support bonus makes them mechanically tough.
       separationK: 0.4,
       cohesionK: 3.0,
       alignmentK: 3.0,
       speedMul: 0.2,
       targetSeekK: 0.8,
       flankBiasK: 0.0,
+      supportBonusMax: 0.55, // phalanx peak: 55% damage reduction at full rear-rank support
+      supportBonusFullAt: 4,
     },
   },
 

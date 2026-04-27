@@ -87,6 +87,20 @@ export interface TacticProfile {
    *  diverging approach paths (cavalry flanks, infantry stays in
    *  rough line). */
   flankBiasK: number;
+
+  // ---- Support bonus ("rear ranks support front ranks") ----
+  /** Maximum damage-taken reduction granted by friendly support
+   *  density. 0 disables. The Greek phalanx's frontal invulnerability
+   *  came from the rear ranks pressing forward and the back-rank
+   *  shields lapping over the front; mechanically, friendly density
+   *  around a rac reduces the damage it takes. Phalanx infantry
+   *  should set this high (~0.4 = 40% reduction at high density);
+   *  archers/cavalry don't benefit (they're not a shield wall). */
+  supportBonusMax: number;
+  /** Friendly density at this rac's position needed to fully realize
+   *  supportBonusMax. Below threshold the bonus scales linearly. A
+   *  good default is ~5 (a tight cluster of 5+ friendlies). */
+  supportBonusFullAt: number;
 }
 
 /** Per-role default profiles. Tweaking these is a global behavior
@@ -118,6 +132,8 @@ export const DEFAULT_TANK: TacticProfile = {
   hideBehindK: 0, // tanks ARE the front
   hideStandoff: 6,
   flankBiasK: 0.05, // tanks march straight
+  supportBonusMax: 0.25, // shields up; tanks lean on each other
+  supportBonusFullAt: 4,
 };
 
 export const DEFAULT_ARCHER: TacticProfile = {
@@ -137,6 +153,8 @@ export const DEFAULT_ARCHER: TacticProfile = {
   hideBehindK: 3.0, // strong preference for back-line behind friendlies
   hideStandoff: 6,
   flankBiasK: 0.05, // archers mostly aim straight at their kited target
+  supportBonusMax: 0, // archers don't get rear-rank shields
+  supportBonusFullAt: 4,
 };
 
 export const DEFAULT_CAVALRY: TacticProfile = {
@@ -156,6 +174,8 @@ export const DEFAULT_CAVALRY: TacticProfile = {
   hideBehindK: 0, // commit hard, no hiding
   hideStandoff: 6,
   flankBiasK: 0.4, // cavalry visibly diverges, flanks from sides
+  supportBonusMax: 0, // free agents don't pack tight
+  supportBonusFullAt: 4,
 };
 
 export const DEFAULT_INFANTRY: TacticProfile = {
@@ -175,6 +195,8 @@ export const DEFAULT_INFANTRY: TacticProfile = {
   hideBehindK: 0, // front line with tanks
   hideStandoff: 6,
   flankBiasK: 0.15, // slight spread to break perfect lockstep
+  supportBonusMax: 0.35, // strong rear-rank protection — phalanx core
+  supportBonusFullAt: 5,
 };
 
 export const DEFAULT_PROFILES: TacticProfile[] = [
