@@ -55,8 +55,16 @@ export interface FormationDef {
   role: RoleId;
   /** Spawn-position offset in meters, relative to the bin center. */
   arrange(args: FormationArrangeArgs): { dx: number; dy: number };
-  /** Tactic-coefficient override layered after role defaults. */
+  /** Tactic-coefficient override applied while the rac is NOT in
+   *  contact with enemies. Phalanx in march mode is loose enough to
+   *  move without falling apart; archer/cav formations are usually
+   *  the same in march and contact. Layered after role defaults. */
   tacticOverride: Partial<TacticProfile>;
+  /** Optional override applied when the rac IS in contact (any enemy
+   *  within CONTACT_RADIUS). Phalanx contact mode tightens ranks
+   *  hard — high cohesion, near-zero speed, lock orientation. If
+   *  omitted the formation has only one mode (march = contact). */
+  contactOverride?: Partial<TacticProfile>;
 }
 
 // ---------- arrangement helpers ----------
@@ -93,6 +101,9 @@ export const FORMATIONS: FormationDef[] = [
       return spreadPerp(args.burstIdx, args.burstSize, 2.5);
     },
     tacticOverride: { alignmentK: 1.4, cohesionK: 0.8 },
+    // Tanks in contact: close ranks, hold line. Already stopped by
+    // stop-in-combat; this just tightens visually.
+    contactOverride: { alignmentK: 2.0, cohesionK: 1.6, separationK: 0.5 },
   },
   {
     id: "tank-arrowhead",
@@ -119,21 +130,47 @@ export const FORMATIONS: FormationDef[] = [
       return spreadPerp(args.burstIdx, args.burstSize, 1.4);
     },
     tacticOverride: { alignmentK: 1.4, cohesionK: 1.4 },
+    // Infantry-line in contact: tighten ranks, slow.
+    contactOverride: {
+      alignmentK: 2.0,
+      cohesionK: 2.2,
+      separationK: 0.5,
+      speedMul: 0.3,
+    },
   },
   {
     id: "infantry-phalanx",
     role: "infantry",
     arrange(args) {
-      // Tight 4-wide grid. 10 infantry → 4 cols × 3 rows (one short).
-      // pitchX small (close ranks), pitchY tighter than line.
-      return gridPerp(args.burstIdx, args.burstSize, 4, 0.9, 0.9, args.forward);
+      // 4-wide × 3-deep grid in MARCH (loose) spacing. Contact mode
+      // tightens via the contactOverride below.
+      return gridPerp(args.burstIdx, args.burstSize, 4, 1.4, 1.4, args.forward);
     },
     tacticOverride: {
-      separationK: 0.5,
-      cohesionK: 1.8,
-      alignmentK: 1.6,
-      speedMul: 0.85, // slow advance
-      targetSeekK: 1.8, // commit but not aggressive
+      // MARCH mode: loose-enough spacing to move without collapsing.
+      // Cohesion ≈ 1.5× separation keeps the block from drifting
+      // apart but doesn't crush it into a column. Alignment locks
+      // the direction of advance. Slow speed so ranks stay together.
+      separationK: 1.0,
+      cohesionK: 1.5,
+      alignmentK: 2.0,
+      speedMul: 0.55,
+      targetSeekK: 1.4,
+      flankBiasK: 0.0,
+    },
+    contactOverride: {
+      // SYNASPISMOS — the dense locked-shield formation that received
+      // charges. Cohesion dominates separation hard; speed near zero
+      // (we're holding the line, not advancing); damage taken much
+      // reduced (shields up). Boids' stop-in-combat already pins
+      // infantry; this just *visually* tightens the block while it
+      // fights.
+      separationK: 0.4,
+      cohesionK: 3.0,
+      alignmentK: 3.0,
+      speedMul: 0.2,
+      targetSeekK: 0.8,
+      flankBiasK: 0.0,
     },
   },
 
@@ -185,7 +222,16 @@ export const FORMATIONS: FormationDef[] = [
       // 5 archers in a single row, 1.5m apart.
       return spreadPerp(args.burstIdx, args.burstSize, 1.5);
     },
-    tacticOverride: { hideBehindK: 3.5, alignmentK: 1.0 },
+    tacticOverride: {
+      // Lag the front line so they're naturally behind whoever
+      // advances first. hideStandoff sample reaches further so the
+      // "is there a friendly between me and the enemy?" check sees
+      // the front-line tank/infantry ~12m ahead.
+      hideBehindK: 4.0,
+      hideStandoff: 12,
+      alignmentK: 1.0,
+      speedMul: 0.85, // slower than infantry → naturally trails
+    },
   },
   {
     id: "archer-two-line",
@@ -204,7 +250,12 @@ export const FORMATIONS: FormationDef[] = [
       const xOffset = front ? args.forward * 0.6 : -args.forward * 0.6;
       return { dx: xOffset, dy: yOffset };
     },
-    tacticOverride: { hideBehindK: 3.0, alignmentK: 1.2 },
+    tacticOverride: {
+      hideBehindK: 4.0,
+      hideStandoff: 14,
+      alignmentK: 1.2,
+      speedMul: 0.75, // significantly slower so infantry advances first
+    },
   },
   {
     id: "archer-sniper",
@@ -219,11 +270,12 @@ export const FORMATIONS: FormationDef[] = [
       return { dx: xOffset, dy: yOffset };
     },
     tacticOverride: {
-      hideBehindK: 2.0,
-      hideStandoff: 10,
+      hideBehindK: 3.0,
+      hideStandoff: 18,
       cohesionK: 0,
       alignmentK: 0,
       flankBiasK: 0.5,
+      speedMul: 0.7, // snipers are slow + careful
     },
   },
 ];

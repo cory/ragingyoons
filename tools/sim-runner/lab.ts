@@ -105,6 +105,7 @@ function emptyState(seed: number): BattleState {
     endReason: null as BattleState["endReason"],
     tacticPerSide: composeTactics(),
     formationProfile: [[], []] as BattleState["formationProfile"],
+    formationContactProfile: [[], []] as BattleState["formationContactProfile"],
     racRowById: new Map<number, number>(),
     binRowById: new Map<number, number>(),
   };
@@ -168,6 +169,7 @@ function emptyRac() {
     surroundedDamageMul: new Float32Array(MAX_RACS),
     statsDirty: new Uint8Array(MAX_RACS),
     formationIdx: new Uint8Array(MAX_RACS),
+    contact: new Uint8Array(MAX_RACS),
   };
 }
 

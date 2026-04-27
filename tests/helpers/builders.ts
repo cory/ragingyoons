@@ -114,6 +114,7 @@ export function emptyState(opts: { seed?: number; bounds?: { w: number; h: numbe
     endReason: null,
     tacticPerSide: composeTactics(),
     formationProfile: [[], []],
+    formationContactProfile: [[], []],
     racRowById: new Map(),
     binRowById: new Map(),
   };
@@ -177,6 +178,7 @@ function emptyRac() {
     surroundedDamageMul: new Float32Array(MAX_RACS),
     statsDirty: new Uint8Array(MAX_RACS),
     formationIdx: new Uint8Array(MAX_RACS),
+    contact: new Uint8Array(MAX_RACS),
   };
 }
 

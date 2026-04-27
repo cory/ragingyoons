@@ -139,6 +139,12 @@ export interface RacTable {
    *  this rac was spawned under. Boids/combat lookup the formation's
    *  effective TacticProfile via state.formationProfile[owner][i]. */
   formationIdx: Uint8Array;
+  /** 1 if any enemy is within CONTACT_RADIUS (set by boidsTick per
+   *  tick from the spatial grid), else 0. Boids reads this to switch
+   *  between formationProfile (march) and formationContactProfile
+   *  (locked-shields). The Greek phalanx had distinct loose/dense/
+   *  synaspismos modes — this is the v0 binary version. */
+  contact: Uint8Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -196,6 +202,12 @@ export interface BattleState {
    *  override. Subsystems read `formationProfile[owner][formationIdx]`
    *  to get the live profile for a specific rac. */
   formationProfile: TacticProfile[][];
+  /** Per-side per-formation profile applied when the rac is in
+   *  contact with enemies (any enemy within CONTACT_RADIUS). For
+   *  formations with no contactOverride, this is identical to
+   *  formationProfile. Boids switches between them per-rac per-tick
+   *  based on state.rac.contact. */
+  formationContactProfile: TacticProfile[][];
   /** Synergy scratch state. Populated by synergyTick; read by status
    *  recompute. Typed loosely to avoid a circular import. */
   _synergy?: import("./subsys/synergy.js").SynergyState;
@@ -277,6 +289,7 @@ function emptyRacs(): RacTable {
     surroundedDamageMul: new Float32Array(MAX_RACS),
     statsDirty: new Uint8Array(MAX_RACS),
     formationIdx: new Uint8Array(MAX_RACS),
+    contact: new Uint8Array(MAX_RACS),
   };
 }
 
@@ -337,6 +350,7 @@ export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleSt
     endReason: null,
     tacticPerSide: composeTactics(cfg.tacticsA, cfg.tacticsB),
     formationProfile: [[], []],
+    formationContactProfile: [[], []],
     racRowById: new Map(),
     binRowById: new Map(),
   };
@@ -358,18 +372,27 @@ export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleSt
   return state;
 }
 
-/** Compose state.formationProfile[side][formationIdx] from per-side
- *  role profile + each formation's tacticOverride. Run once at setup
- *  so subsystems can do an O(1) lookup per rac. Exported so tests
- *  and the lab can rebuild after constructing tacticPerSide. */
+/** Compose state.formationProfile[side][formationIdx] AND
+ *  state.formationContactProfile[side][formationIdx] from per-side
+ *  role profile + each formation's tacticOverride / contactOverride.
+ *  Run once at setup so subsystems can do an O(1) lookup per rac.
+ *  Exported so tests and the lab can rebuild after constructing
+ *  tacticPerSide. */
 export function composeFormationProfiles(state: BattleState): void {
   for (let side = 0 as Owner; side < 2; side = (side + 1) as Owner) {
     state.formationProfile[side] = new Array(FORMATIONS.length);
+    state.formationContactProfile[side] = new Array(FORMATIONS.length);
     for (let i = 0; i < FORMATIONS.length; i++) {
       const f = FORMATIONS[i];
       const roleIdx = ROLE_TO_IDX[f.role];
       const base = state.tacticPerSide[side][roleIdx];
-      state.formationProfile[side][i] = { ...base, ...f.tacticOverride };
+      const march = { ...base, ...f.tacticOverride };
+      state.formationProfile[side][i] = march;
+      // Contact mode: layer contactOverride on top of march. If
+      // omitted, contact == march (formation has only one mode).
+      state.formationContactProfile[side][i] = f.contactOverride
+        ? { ...march, ...f.contactOverride }
+        : march;
     }
   }
 }

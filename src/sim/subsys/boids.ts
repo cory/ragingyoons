@@ -65,10 +65,14 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const unitId = state.unitIdTable[state.rac.unitIdIdx[i]];
     const unit = content.units.get(unitId);
     if (!unit) continue;
-    // Read the rac's effective profile via its formation. Formation
-    // overrides are layered onto the per-side role defaults at setup
-    // (state.formationProfile[owner][formationIdx]).
-    const profile = state.formationProfile[state.rac.owner[i]][state.rac.formationIdx[i]];
+    // Read the rac's effective profile via its formation, switching
+    // between MARCH (loose, mobile) and CONTACT (tight, locked-shields)
+    // mode based on the contact flag set below from enemy proximity.
+    // Formations without a contactOverride have identical profiles
+    // for both modes.
+    const profile = state.rac.contact[i]
+      ? state.formationContactProfile[state.rac.owner[i]][state.rac.formationIdx[i]]
+      : state.formationProfile[state.rac.owner[i]][state.rac.formationIdx[i]];
     const myX = state.rac.x[i];
     const myY = state.rac.y[i];
     const myVx = state.rac.vx[i];
@@ -270,6 +274,21 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const rotY = dvx * sa + dvy * ca;
     dvx = rotX;
     dvy = rotY;
+
+    // ---- Contact mode flag: any enemy within CONTACT_RADIUS ----
+    // Drives the march/contact formation switch read at the top of
+    // this iteration. Sampled from the per-side enemy density field —
+    // cheap and smooth. Threshold tuned so a single nearby enemy
+    // triggers contact, not just a distant blob.
+    const CONTACT_RADIUS = 8;
+    const CONTACT_THRESHOLD = 0.15;
+    const enemyDcontact = fields.sideDensity[1 - myOwner];
+    const dContact = sampleField(fields, enemyDcontact, myX, myY)
+      + sampleField(fields, enemyDcontact, myX + CONTACT_RADIUS, myY)
+      + sampleField(fields, enemyDcontact, myX - CONTACT_RADIUS, myY)
+      + sampleField(fields, enemyDcontact, myX, myY + CONTACT_RADIUS)
+      + sampleField(fields, enemyDcontact, myX, myY - CONTACT_RADIUS);
+    state.rac.contact[i] = dContact > CONTACT_THRESHOLD ? 1 : 0;
 
     // ---- Surrounded check: enemy density in 4 quadrants. ----
     // If enemies are present at non-trivial density in ≥3 cardinal

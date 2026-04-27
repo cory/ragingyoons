@@ -74,7 +74,11 @@ describe("formations: arrange functions produce sensible shapes", () => {
         if (d > maxD) maxD = d;
       }
     }
-    assert.ok(maxD < 5, `phalanx should be compact; max pair dist ${maxD.toFixed(1)}`);
+    // Phalanx in MARCH mode (spawn arrangement) uses 1.4m pitch over
+    // 4×3 grid → max diagonal ~5m. Contact mode tightens via cohesion;
+    // the spawn shape itself is loose-ish so it can move without
+    // collapsing.
+    assert.ok(maxD < 6, `phalanx should be compact; max pair dist ${maxD.toFixed(1)}`);
   });
 
   it("cavalry-lone-gunmen is scattered (high pair distance)", () => {
