@@ -58,6 +58,11 @@ export interface BattleConfig {
    *  role's behavior on one side and measure the winrate delta. */
   tacticsA?: TacticOverrideMap;
   tacticsB?: TacticOverrideMap;
+  /** When true, all synergy mods (env-2/3, cur-2/3 bonuses) are
+   *  treated as identity — no HP/damage/speed/etc. boosts. Used by
+   *  the doctrine autotuner to isolate doctrine balance from content
+   *  bonuses. */
+  disableSynergies?: boolean;
 }
 
 export interface BinTable {
@@ -242,6 +247,9 @@ export interface BattleState {
    *  so findRacRowById / findBinRowById are O(1) instead of O(N). */
   racRowById: Map<number, number>;
   binRowById: Map<number, number>;
+  /** When true, synergyModsFor / synergyBinMods return identity. Set
+   *  from BattleConfig.disableSynergies; read by synergy.ts. */
+  disableSynergies?: boolean;
 }
 
 function emptyBins(): BinTable {
@@ -365,6 +373,7 @@ export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleSt
     formationContactProfile: [[], []],
     racRowById: new Map(),
     binRowById: new Map(),
+    disableSynergies: cfg.disableSynergies ?? false,
   };
   // Compose per-formation effective profiles for both sides. Indexed
   // by formation index (FORMATIONS array), one TacticProfile per side

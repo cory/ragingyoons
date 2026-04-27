@@ -193,6 +193,7 @@ export function synergyModsFor(
     armorAdd: 0,
     antiBinDamageMul: 1,
   };
+  if (state.disableSynergies) return out;
   if (!state._synergy) return out;
   const side = state.rac.owner[racRow];
   const env = state.rac.env[racRow];
@@ -236,6 +237,7 @@ export function synergyBinMods(
   binCurIdx: number,
 ): { binHpMul: number; garrisonMul: number } {
   const out = { binHpMul: 1, garrisonMul: 1 };
+  if (state.disableSynergies) return out;
   if (!state._synergy) return out;
   const counts = state._synergy.side[side];
   for (const row of ENV_SYNERGIES[binEnvIdx]) {
