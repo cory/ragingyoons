@@ -6,6 +6,7 @@ role: tank
 environment: city
 curiosity: farmers
 cost: 3
+tier3_form: swarm
 stats:
   hp: 120
   damage: 7

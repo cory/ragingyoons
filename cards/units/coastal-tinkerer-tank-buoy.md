@@ -6,6 +6,7 @@ role: tank
 environment: coastal
 curiosity: tinkerers
 cost: 2
+tier3_form: swarm
 stats:
   hp: 80
   damage: 8

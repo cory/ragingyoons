@@ -6,6 +6,7 @@ role: infantry
 environment: suburban
 curiosity: barbarians
 cost: 1
+tier3_form: swarm
 stats:
   hp: 55
   damage: 5

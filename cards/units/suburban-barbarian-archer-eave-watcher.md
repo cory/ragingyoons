@@ -6,6 +6,7 @@ role: archer
 environment: suburban
 curiosity: barbarians
 cost: 3
+tier3_form: swarm
 stats:
   hp: 70
   damage: 8

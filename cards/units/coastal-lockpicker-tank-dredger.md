@@ -6,6 +6,7 @@ role: tank
 environment: coastal
 curiosity: lockpickers
 cost: 4
+tier3_form: swarm
 stats:
   hp: 130
   damage: 12

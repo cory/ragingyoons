@@ -6,6 +6,7 @@ role: cavalry
 environment: city
 curiosity: farmers
 cost: 2
+tier3_form: swarm
 stats:
   hp: 45
   damage: 12

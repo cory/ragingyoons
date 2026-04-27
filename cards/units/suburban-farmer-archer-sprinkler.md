@@ -6,6 +6,7 @@ role: archer
 environment: suburban
 curiosity: farmers
 cost: 1
+tier3_form: swarm
 stats:
   hp: 30
   damage: 9

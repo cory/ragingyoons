@@ -6,6 +6,7 @@ role: tank
 environment: park
 curiosity: barbarians
 cost: 1
+tier3_form: swarm
 stats:
   hp: 55
   damage: 6

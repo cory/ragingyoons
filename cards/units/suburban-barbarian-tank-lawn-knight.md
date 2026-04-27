@@ -6,6 +6,7 @@ role: tank
 environment: suburban
 curiosity: barbarians
 cost: 2
+tier3_form: swarm
 stats:
   hp: 140
   damage: 6

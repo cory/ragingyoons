@@ -6,6 +6,7 @@ role: infantry
 environment: coastal
 curiosity: tinkerers
 cost: 1
+tier3_form: swarm
 stats:
   hp: 43
   damage: 9

@@ -6,6 +6,7 @@ role: cavalry
 environment: coastal
 curiosity: lockpickers
 cost: 2
+tier3_form: swarm
 stats:
   hp: 50
   damage: 20

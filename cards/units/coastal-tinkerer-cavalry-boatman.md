@@ -6,6 +6,7 @@ role: cavalry
 environment: coastal
 curiosity: tinkerers
 cost: 3
+tier3_form: swarm
 stats:
   hp: 64
   damage: 26

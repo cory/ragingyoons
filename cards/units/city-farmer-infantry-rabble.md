@@ -6,6 +6,7 @@ role: infantry
 environment: city
 curiosity: farmers
 cost: 1
+tier3_form: swarm
 stats:
   hp: 40
   damage: 6

@@ -6,6 +6,7 @@ role: cavalry
 environment: park
 curiosity: lockpickers
 cost: 3
+tier3_form: swarm
 stats:
   hp: 64
   damage: 26

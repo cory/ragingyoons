@@ -6,6 +6,7 @@ role: archer
 environment: city
 curiosity: lockpickers
 cost: 2
+tier3_form: swarm
 stats:
   hp: 42
   damage: 13

@@ -6,6 +6,7 @@ role: archer
 environment: coastal
 curiosity: tinkerers
 cost: 2
+tier3_form: swarm
 stats:
   hp: 55
   damage: 5

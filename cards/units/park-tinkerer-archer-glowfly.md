@@ -6,6 +6,7 @@ role: archer
 environment: park
 curiosity: tinkerers
 cost: 4
+tier3_form: swarm
 stats:
   hp: 66
   damage: 21
