@@ -253,11 +253,12 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       }
     }
 
-    // ---- Per-rac angular jitter to break lockstep. ----
-    // Deterministic offset based on rac id — so identical seeds still
-    // produce identical motion, but two adjacent racs take subtly
-    // different paths to the same target. Magnitude is small (~6°).
-    const jitterAngle = Math.sin(state.rac.id[i] * 0.7) * 0.1;
+    // ---- Per-rac angular flank bias to break lockstep. ----
+    // Deterministic offset based on rac id and per-role flankBiasK.
+    // Cavalry flanks visibly (K=0.4 → ±23°), infantry slightly
+    // spreads (0.15), archer/tank mostly straight. Adjacent racs
+    // from the same spawn pick different sides of the approach.
+    const jitterAngle = Math.sin(state.rac.id[i] * 0.7) * profile.flankBiasK;
     const ca = Math.cos(jitterAngle);
     const sa = Math.sin(jitterAngle);
     let dvx = sepX + cohX + alignX + seekX + hideX;

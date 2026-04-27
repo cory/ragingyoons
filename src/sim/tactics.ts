@@ -79,6 +79,14 @@ export interface TacticProfile {
   /** How far ahead/behind to sample friendly density (meters). About
    *  2× cell size keeps the sample inside one neighbor cell. */
   hideStandoff: number;
+
+  // ---- Flank ----
+  /** Per-rac angular offset on seek direction, in radians, scaled by
+   *  this. The actual offset is `sin(id * 0.7) * flankBiasK`, so a K
+   *  of 0.4 produces ±23° max per rac. Higher K = more visibly
+   *  diverging approach paths (cavalry flanks, infantry stays in
+   *  rough line). */
+  flankBiasK: number;
 }
 
 /** Per-role default profiles. Tweaking these is a global behavior
@@ -109,6 +117,7 @@ export const DEFAULT_TANK: TacticProfile = {
   infantryRagePerSec: 0,
   hideBehindK: 0, // tanks ARE the front
   hideStandoff: 6,
+  flankBiasK: 0.05, // tanks march straight
 };
 
 export const DEFAULT_ARCHER: TacticProfile = {
@@ -127,6 +136,7 @@ export const DEFAULT_ARCHER: TacticProfile = {
   infantryRagePerSec: 0,
   hideBehindK: 3.0, // strong preference for back-line behind friendlies
   hideStandoff: 6,
+  flankBiasK: 0.05, // archers mostly aim straight at their kited target
 };
 
 export const DEFAULT_CAVALRY: TacticProfile = {
@@ -145,6 +155,7 @@ export const DEFAULT_CAVALRY: TacticProfile = {
   infantryRagePerSec: 0,
   hideBehindK: 0, // commit hard, no hiding
   hideStandoff: 6,
+  flankBiasK: 0.4, // cavalry visibly diverges, flanks from sides
 };
 
 export const DEFAULT_INFANTRY: TacticProfile = {
@@ -163,6 +174,7 @@ export const DEFAULT_INFANTRY: TacticProfile = {
   infantryRagePerSec: 5,
   hideBehindK: 0, // front line with tanks
   hideStandoff: 6,
+  flankBiasK: 0.15, // slight spread to break perfect lockstep
 };
 
 export const DEFAULT_PROFILES: TacticProfile[] = [
