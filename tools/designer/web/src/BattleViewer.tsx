@@ -68,6 +68,9 @@ function captureFrame(state: BattleState, attacks: import("./sim-bridge.js").Vie
       role: state.rac.role[i],
       envIdx: state.rac.env[i],
       curIdx: state.rac.cur[i],
+      doctrineIdx: state.rac.doctrineIdx[i],
+      teamId: state.rac.teamId[i],
+      contact: state.rac.contact[i] as 0 | 1,
     });
   }
   const projs: ViewerFrame["projs"] = [];
@@ -202,6 +205,22 @@ function worldToCanvas(x: number, y: number): [number, number] {
 // role idx → label + shape drawer
 const ROLE_LABEL = ["T", "A", "C", "I"]; // tank / archer / cavalry / infantry
 const CUR_LABEL = ["L", "T", "F", "B"];  // lockpickers / tinkerers / farmers / barbarians
+
+// doctrine idx → outline color (matches DOCTRINES order in src/sim/doctrines.ts)
+// 0=default, 1=phalanx, 2=fire-team, 3=skirmisher, 4=line
+const DOCTRINE_RING: Record<number, string> = {
+  1: "#d1a05c", // phalanx — bronze
+  2: "#5cd1a0", // fire-team — green
+  3: "#c05cd1", // skirmisher — purple
+  4: "#5cb0d1", // line — cyan
+};
+const DOCTRINE_LABEL: Record<number, string> = {
+  0: "default",
+  1: "phalanx",
+  2: "fire-team",
+  3: "skirmisher",
+  4: "line",
+};
 
 /** Draw a role-specific shape centered at (cx, cy) with the given fill. */
 function drawRoleShape(
@@ -341,45 +360,88 @@ function drawFrame(ctx: CanvasRenderingContext2D, frame: ViewerFrame): void {
     ctx.lineWidth = 1;
   }
 
-  // Raccoons: shape by role + HP bar above.
+  // Raccoons: shape by role + HP bar above. Optional doctrine ring
+  // (outline color = doctrine), team-id shading, and a thick dark
+  // ring for racs in contact mode (locked-shields).
   for (const r of frame.racs) {
     const [cx, cy] = worldToCanvas(r.x, r.y);
     const c = SIDE_COLORS[r.owner];
-    drawRoleShape(ctx, r.role, cx, cy, c.rac);
+    // Contact ring: thick dark outline = synaspismos / engaged.
+    if (r.contact) {
+      ctx.strokeStyle = "#000a";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    // Doctrine outline ring — only drawn for non-default doctrines
+    // so the viewer stays clean for vanilla matchups.
+    if (r.doctrineIdx > 0) {
+      ctx.strokeStyle = DOCTRINE_RING[r.doctrineIdx] ?? "transparent";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    // Per-team shading: alternate fill brightness for adjacent teams
+    // so bounding overwatch (team-A advances, team-B halts) is
+    // visually distinct.
+    let fill = c.rac;
+    if (r.doctrineIdx > 1 && r.teamId % 2 === 1) {
+      // Slightly darker shade for odd-team. Hex-ish blend.
+      fill = r.owner === 0 ? "#5a86c0" : "#c05a5a";
+    }
+    drawRoleShape(ctx, r.role, cx, cy, fill);
     drawHpBar(ctx, cx, cy, r.hp, r.hpMax, 10);
   }
 
-  // HUD: counts per side + role breakdown.
+  // HUD: counts per side + role breakdown + dominant doctrine.
   const counts = {
     0: { T: 0, A: 0, C: 0, I: 0, bins: 0 },
     1: { T: 0, A: 0, C: 0, I: 0, bins: 0 },
   };
+  // Doctrine histogram per side; pick the most common as "dominant."
+  const doctrineHist: Record<0 | 1, Record<number, number>> = { 0: {}, 1: {} };
   for (const r of frame.racs) {
     const slot = counts[r.owner];
     const k = ROLE_LABEL[r.role] as "T" | "A" | "C" | "I";
     slot[k]++;
+    doctrineHist[r.owner][r.doctrineIdx] = (doctrineHist[r.owner][r.doctrineIdx] ?? 0) + 1;
   }
   for (const b of frame.bins) {
     if (b.alive) counts[b.owner].bins++;
   }
+  function dominantDoctrine(side: 0 | 1): { idx: number; label: string } {
+    const h = doctrineHist[side];
+    let best = -1;
+    let bestN = -1;
+    for (const [k, v] of Object.entries(h)) {
+      if (v > bestN) { bestN = v; best = Number(k); }
+    }
+    return { idx: best, label: DOCTRINE_LABEL[best] ?? "—" };
+  }
+  const docA = dominantDoctrine(0);
+  const docB = dominantDoctrine(1);
   ctx.font = "11px ui-monospace, monospace";
   ctx.textAlign = "left";
   ctx.fillStyle = SIDE_COLORS[0].text;
   ctx.fillText(
-    `A  bins ${counts[0].bins}  T${counts[0].T} A${counts[0].A} C${counts[0].C} I${counts[0].I}`,
+    `A  bins ${counts[0].bins}  T${counts[0].T} A${counts[0].A} C${counts[0].C} I${counts[0].I}  ·  ${docA.label}`,
     8, 14,
   );
   ctx.textAlign = "right";
   ctx.fillStyle = SIDE_COLORS[1].text;
   ctx.fillText(
-    `T${counts[1].T} A${counts[1].A} C${counts[1].C} I${counts[1].I}  bins ${counts[1].bins}  B`,
+    `${docB.label}  ·  T${counts[1].T} A${counts[1].A} C${counts[1].C} I${counts[1].I}  bins ${counts[1].bins}  B`,
     CANVAS_W - 8, 14,
   );
   ctx.textAlign = "center";
   ctx.fillStyle = "#888";
   ctx.fillText(`tick ${frame.tick}`, CANVAS_W * 0.5, 14);
 
-  // Legend (bottom-left).
+  // Legend (bottom-left): role shapes.
   ctx.font = "10px ui-monospace, monospace";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
@@ -397,6 +459,31 @@ function drawFrame(ctx: CanvasRenderingContext2D, frame: ViewerFrame): void {
     ctx.fillStyle = "#aaa";
     ctx.fillText(label, lx + 8, legendY);
     lx += 8 + ctx.measureText(label).width + 14;
+  }
+
+  // Doctrine legend (bottom-right): only show rings for doctrines
+  // present this frame, so the legend stays decluttered for vanilla
+  // matchups.
+  const presentDoctrines = new Set<number>();
+  for (const r of frame.racs) if (r.doctrineIdx > 0) presentDoctrines.add(r.doctrineIdx);
+  if (presentDoctrines.size > 0) {
+    let rx = CANVAS_W - 8;
+    ctx.textAlign = "right";
+    for (const d of [4, 3, 2, 1]) {
+      if (!presentDoctrines.has(d)) continue;
+      const label = DOCTRINE_LABEL[d];
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "#aaa";
+      ctx.fillText(label, rx, legendY);
+      rx -= tw + 5;
+      ctx.strokeStyle = DOCTRINE_RING[d] ?? "#888";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(rx, legendY, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      rx -= 14;
+    }
+    ctx.lineWidth = 1;
   }
   ctx.textBaseline = "alphabetic";
 }

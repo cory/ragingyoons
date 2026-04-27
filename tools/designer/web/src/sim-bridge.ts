@@ -244,6 +244,19 @@ export interface ViewerFrame {
     role: number;
     envIdx: number;
     curIdx: number;
+    /** 0=default, 1=phalanx, 2=fire-team, 3=skirmisher, 4=line — see
+     *  src/sim/doctrines.ts. Drives an outline color on the rac so
+     *  doctrine choice is visible in the viewer. */
+    doctrineIdx: number;
+    /** Sub-team within the bin's burst. Doctrines partition the
+     *  burst (fire-team=4 per team, skirmisher=2). Different teams
+     *  get different shading so bounding-overwatch alternation is
+     *  visually obvious. */
+    teamId: number;
+    /** 1 if this rac is in contact mode (any enemy nearby) — drives
+     *  formation tightening (synaspismos). Visualized with a dark
+     *  ring around the unit. */
+    contact: 0 | 1;
   }>;
   /** Per-tick attack lines emitted this tick. Empty when no attacks fired. */
   attacks: ViewerAttack[];
