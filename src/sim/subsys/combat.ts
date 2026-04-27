@@ -55,7 +55,11 @@ export function combatTick(state: BattleState, content: ContentBundle, log: Logg
   const n = state.rac.count;
   const m = state.bin.count;
 
-  for (let i = 0; i < n; i++) {
+  // Iterate via the per-tick shuffled permutation so attack order
+  // doesn't always favor low-row (side-0) units.
+  const order = state._tickIterOrder;
+  for (let oi = 0; oi < n; oi++) {
+    const i = order ? order[oi] : oi;
     if (!state.rac.alive[i]) continue;
     if (state.rac.attackCooldown[i] > 0) {
       state.rac.attackCooldown[i] = Math.max(0, state.rac.attackCooldown[i] - dt);

@@ -38,7 +38,11 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
 
   const n = state.rac.count;
   const m = state.bin.count;
-  for (let i = 0; i < n; i++) {
+  // Iterate via the per-tick shuffled permutation so retarget order
+  // doesn't systematically favor lower-row (= side-0) racs.
+  const order = state._tickIterOrder;
+  for (let oi = 0; oi < n; oi++) {
+    const i = order ? order[oi] : oi;
     if (!state.rac.alive[i]) continue;
     const myOwner = state.rac.owner[i];
     const myX = state.rac.x[i];

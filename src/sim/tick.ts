@@ -22,6 +22,7 @@ import type { Logger } from "./log.js";
 import type { BattleState } from "./state.js";
 import { TICK_RATE_HZ, summarize } from "./state.js";
 import { buildRacGrid, DEFAULT_CELL_SIZE } from "./grid.js";
+import { makeRng, rngInt } from "./rng.js";
 import { boidsTick } from "./subsys/boids.js";
 import { combatTick } from "./subsys/combat.js";
 import { decayTick } from "./subsys/decay.js";
@@ -34,6 +35,28 @@ import { targetTick } from "./subsys/target.js";
 import { winTick } from "./subsys/win.js";
 
 export const TICK_SUMMARY_EVERY = TICK_RATE_HZ; // = 1 second
+
+/** Fisher-Yates shuffle of [0..rac.count) into state._tickIterOrder.
+ *  Allocates the buffer on first call up to rac.count, reuses across
+ *  ticks. Tick-seeded RNG is independent of state.rng so the shuffle
+ *  doesn't perturb any other random decision. */
+function buildTickIterOrder(state: BattleState): void {
+  const n = state.rac.count;
+  if (!state._tickIterOrder || state._tickIterOrder.length < n) {
+    state._tickIterOrder = new Int32Array(Math.max(n, 64));
+  }
+  const order = state._tickIterOrder;
+  for (let i = 0; i < n; i++) order[i] = i;
+  // Mix seed and tick so the shuffle changes per tick but is
+  // reproducible across runs of the same seed.
+  const tickRng = makeRng((state.seed ^ (state.tick * 0x9e3779b1)) >>> 0);
+  for (let i = n - 1; i > 0; i--) {
+    const j = rngInt(tickRng, 0, i + 1);
+    const tmp = order[i];
+    order[i] = order[j];
+    order[j] = tmp;
+  }
+}
 
 export function tick(state: BattleState, content: ContentBundle, log: Logger): void {
   state.tick += 1;
@@ -49,6 +72,10 @@ export function tick(state: BattleState, content: ContentBundle, log: Logger): v
   // any subsystem that does range queries against them. Rebuilt every
   // tick because positions change in boids.
   state._racGrid = buildRacGrid(state, DEFAULT_CELL_SIZE);
+  // Build the per-tick iteration permutation. Independent RNG seeded
+  // from (state.seed, state.tick) so it doesn't perturb any other
+  // randomness path; deterministic across runs.
+  buildTickIterOrder(state);
   targetTick(state, content, log);
   boidsTick(state, content, log);
   combatTick(state, content, log);

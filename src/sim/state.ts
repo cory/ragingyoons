@@ -197,6 +197,15 @@ export interface BattleState {
    *  (nearest enemy). Replaces the O(N²) inner loops those subsystems
    *  used to do. */
   _racGrid?: import("./grid.js").SpatialGrid;
+  /** Per-tick shuffled rac iteration order (length = rac.count).
+   *  Subsystems that iterate "for each alive rac" should walk this
+   *  permutation, not the raw row order, to break iteration-order
+   *  side bias (side-0 always-spawns-first means side-0 racs always
+   *  have lower row indices, so row-major iteration systematically
+   *  favors side-0 in any "first writer wins" tie). Built each tick
+   *  from a tick-seeded RNG independent of state.rng → deterministic
+   *  per (seed, tick), reproducible across runs. */
+  _tickIterOrder?: Int32Array;
   /** id → row index lookup tables. Maintained by spawn/death code paths
    *  so findRacRowById / findBinRowById are O(1) instead of O(N). */
   racRowById: Map<number, number>;
