@@ -220,6 +220,7 @@ export async function loadContentFromFs(opts: LoadOpts): Promise<ContentBundle> 
         spawn_cadence: (asString(bin.spawn_cadence) as UnitDef["bin"]["spawn_cadence"]) ?? "garrison-respawn",
         panic_spawn_max_mul: asNumber(bin.panic_spawn_max_mul),
         spawn_burst: asNumber(bin.spawn_burst),
+        formation: asString(bin.formation) as UnitDef["bin"]["formation"] | undefined,
       },
       rage: {
         capacity: Number(rage.capacity ?? 50),

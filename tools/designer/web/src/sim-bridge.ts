@@ -160,6 +160,7 @@ export async function loadContentFromApi(): Promise<ContentBundle> {
         garrison_cap: Number(bin.garrison_cap ?? 1),
         spawn_cadence: (asString(bin.spawn_cadence) as UnitDef["bin"]["spawn_cadence"]) ?? "garrison-respawn",
         panic_spawn_max_mul: asNumber(bin.panic_spawn_max_mul),
+        formation: asString(bin.formation) as UnitDef["bin"]["formation"] | undefined,
       },
       rage: {
         capacity: Number(rage.capacity ?? 50),

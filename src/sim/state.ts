@@ -16,6 +16,7 @@ import {
 import { type RngState, makeRng } from "./rng.js";
 import { applyBinHpSynergies, populateSynergyCounts } from "./subsys/synergy.js";
 import { composeTactics, type TacticOverrideMap, type TacticProfile } from "./tactics.js";
+import { FORMATIONS } from "./formations.js";
 
 /** Cap on simultaneously-tracked entities. Generous for v0; tighten later. */
 export const MAX_BINS = 32;
@@ -134,6 +135,10 @@ export interface RacTable {
    *  status applied or expired since last recompute, no synergy
    *  flipped." Saves ~half of statusTick on big battles. */
   statsDirty: Uint8Array;
+  /** Index into FORMATIONS (src/sim/formations.ts) of the formation
+   *  this rac was spawned under. Boids/combat lookup the formation's
+   *  effective TacticProfile via state.formationProfile[owner][i]. */
+  formationIdx: Uint8Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -186,6 +191,11 @@ export interface BattleState {
    *  `tacticPerSide[owner][role]` for behavior knobs (boid weights,
    *  kite distances, target rethink cadence, rage rates). */
   tacticPerSide: TacticProfile[][];
+  /** Per-side per-formation effective profile, set at setup. Composed
+   *  as: defaults → role override → per-side override → formation
+   *  override. Subsystems read `formationProfile[owner][formationIdx]`
+   *  to get the live profile for a specific rac. */
+  formationProfile: TacticProfile[][];
   /** Synergy scratch state. Populated by synergyTick; read by status
    *  recompute. Typed loosely to avoid a circular import. */
   _synergy?: import("./subsys/synergy.js").SynergyState;
@@ -266,6 +276,7 @@ function emptyRacs(): RacTable {
     dmgTakenMul: new Float32Array(MAX_RACS),
     surroundedDamageMul: new Float32Array(MAX_RACS),
     statsDirty: new Uint8Array(MAX_RACS),
+    formationIdx: new Uint8Array(MAX_RACS),
   };
 }
 
@@ -325,9 +336,14 @@ export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleSt
     winner: -1,
     endReason: null,
     tacticPerSide: composeTactics(cfg.tacticsA, cfg.tacticsB),
+    formationProfile: [[], []],
     racRowById: new Map(),
     binRowById: new Map(),
   };
+  // Compose per-formation effective profiles for both sides. Indexed
+  // by formation index (FORMATIONS array), one TacticProfile per side
+  // per formation.
+  composeFormationProfiles(state);
 
   placeComp(state, content, compA, 0);
   placeComp(state, content, compB, 1);
@@ -340,6 +356,22 @@ export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleSt
   applyBinHpSynergies(state);
 
   return state;
+}
+
+/** Compose state.formationProfile[side][formationIdx] from per-side
+ *  role profile + each formation's tacticOverride. Run once at setup
+ *  so subsystems can do an O(1) lookup per rac. Exported so tests
+ *  and the lab can rebuild after constructing tacticPerSide. */
+export function composeFormationProfiles(state: BattleState): void {
+  for (let side = 0 as Owner; side < 2; side = (side + 1) as Owner) {
+    state.formationProfile[side] = new Array(FORMATIONS.length);
+    for (let i = 0; i < FORMATIONS.length; i++) {
+      const f = FORMATIONS[i];
+      const roleIdx = ROLE_TO_IDX[f.role];
+      const base = state.tacticPerSide[side][roleIdx];
+      state.formationProfile[side][i] = { ...base, ...f.tacticOverride };
+    }
+  }
 }
 
 function placeComp(state: BattleState, content: ContentBundle, comp: CompDef, owner: Owner): void {

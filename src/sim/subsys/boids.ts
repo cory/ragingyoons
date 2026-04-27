@@ -65,7 +65,10 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const unitId = state.unitIdTable[state.rac.unitIdIdx[i]];
     const unit = content.units.get(unitId);
     if (!unit) continue;
-    const profile = state.tacticPerSide[state.rac.owner[i]][state.rac.role[i]];
+    // Read the rac's effective profile via its formation. Formation
+    // overrides are layered onto the per-side role defaults at setup
+    // (state.formationProfile[owner][formationIdx]).
+    const profile = state.formationProfile[state.rac.owner[i]][state.rac.formationIdx[i]];
     const myX = state.rac.x[i];
     const myY = state.rac.y[i];
     const myVx = state.rac.vx[i];

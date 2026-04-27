@@ -61,6 +61,11 @@ export interface BinDef {
   /** Number of raccoons emitted per slot fill ("belch"). Defaults
    *  to a per-role value: Tank 2, Archer 5, Cavalry 5, Infantry 10. */
   spawn_burst?: number;
+  /** Formation id (see src/sim/formations.ts). When omitted, the
+   *  unit's role determines a default formation (line for tank/inf,
+   *  loose-deuce for cav, two-line for archer). The formation
+   *  controls spawn arrangement and tactic-coefficient overrides. */
+  formation?: import("./formations.js").FormationId;
 }
 
 export interface RageAttackDef {

@@ -24,7 +24,15 @@ import {
   ENV_TO_IDX,
   ROLE_TO_IDX,
   type ContentBundle,
+  type RoleId,
 } from "../content.js";
+import {
+  DEFAULT_FORMATION_BY_ROLE,
+  FORMATIONS,
+  FORMATION_TO_IDX,
+  getFormation,
+  isValidFormationId,
+} from "../formations.js";
 import type { Logger } from "../log.js";
 import { rngRange } from "../rng.js";
 import { MAX_GARRISON_SLOTS, SECONDS_PER_TICK, type BattleState } from "../state.js";
@@ -102,15 +110,36 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
       // for respawn until that count hits 0.
       const roleIdx = ROLE_TO_IDX[unit.role];
       const burst = unit.bin.spawn_burst ?? ROLE_DEFAULT_BURST[roleIdx];
-      const profile = state.tacticPerSide[state.bin.owner[bi]][roleIdx];
       const owner = state.bin.owner[bi];
+      // Resolve formation: card override → per-role default. Validate
+      // formation matches the unit's role; mismatch falls back to
+      // default (and would be caught at content-load time eventually).
+      let formationId = unit.bin.formation;
+      if (!formationId || !isValidFormationId(formationId)) {
+        formationId = DEFAULT_FORMATION_BY_ROLE[unit.role as RoleId];
+      }
+      const formationDef = getFormation(formationId);
+      if (formationDef.role !== unit.role) {
+        // Role mismatch — fall back to the role's default formation.
+        formationId = DEFAULT_FORMATION_BY_ROLE[unit.role as RoleId];
+      }
+      const formationIdx = FORMATION_TO_IDX[formationId];
+      const formation = FORMATIONS[formationIdx];
+      const profile = state.formationProfile[owner][formationIdx];
+      // Forward direction: side-0 bins are at +x and want enemies at
+      // -x, so forward (toward enemy) is -1 along x. side-1 mirrors.
+      const forward = owner === 0 ? -1 : 1;
       let alive = 0;
       for (let bk = 0; bk < burst; bk++) {
         const racRow = state.rac.count;
         if (racRow >= state.rac.id.length) break;
         const racId = state.nextRacId++;
-        const jx = rngRange(state.rng, -SPAWN_JITTER, SPAWN_JITTER);
-        const jy = rngRange(state.rng, -SPAWN_JITTER, SPAWN_JITTER);
+        // Formation arrangement (deterministic) + small jitter (RNG)
+        // so spawns don't pile exactly on top of each other and the
+        // density gradient has texture.
+        const off = formation.arrange({ burstIdx: bk, burstSize: burst, forward });
+        const jx = off.dx + rngRange(state.rng, -SPAWN_JITTER * 0.4, SPAWN_JITTER * 0.4);
+        const jy = off.dy + rngRange(state.rng, -SPAWN_JITTER * 0.4, SPAWN_JITTER * 0.4);
 
         state.rac.id[racRow] = racId;
         state.racRowById.set(racId, racRow);
@@ -149,6 +178,7 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         state.rac.effArmor[racRow] = unit.stats.armor + syn.armorAdd;
         state.rac.dmgTakenMul[racRow] = 1;
         state.rac.surroundedDamageMul[racRow] = 1;
+        state.rac.formationIdx[racRow] = formationIdx;
         alive += 1;
 
         log.emit("rac_spawn", {

@@ -39,8 +39,15 @@ import {
   MAX_GARRISON_SLOTS,
   TARGET_KIND_RAC,
   TARGET_KIND_BIN,
+  composeFormationProfiles,
 } from "../../src/sim/state.js";
 import { composeTactics } from "../../src/sim/tactics.js";
+import {
+  DEFAULT_FORMATION_BY_ROLE,
+  FORMATIONS,
+  FORMATION_TO_IDX,
+  type FormationId,
+} from "../../src/sim/formations.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -97,10 +104,13 @@ function emptyState(seed: number): BattleState {
     winner: -1 as -1 | 0 | 1,
     endReason: null as BattleState["endReason"],
     tacticPerSide: composeTactics(),
+    formationProfile: [[], []] as BattleState["formationProfile"],
     racRowById: new Map<number, number>(),
     binRowById: new Map<number, number>(),
   };
-  return stateAny as unknown as BattleState;
+  const state = stateAny as unknown as BattleState;
+  composeFormationProfiles(state);
+  return state;
 }
 
 function emptyBin() {
@@ -157,6 +167,7 @@ function emptyRac() {
     dmgTakenMul: new Float32Array(MAX_RACS),
     surroundedDamageMul: new Float32Array(MAX_RACS),
     statsDirty: new Uint8Array(MAX_RACS),
+    formationIdx: new Uint8Array(MAX_RACS),
   };
 }
 
@@ -229,6 +240,9 @@ function placeRac(
   state.rac.effArmor[slot] = unit.stats.armor;
   state.rac.dmgTakenMul[slot] = 1;
   state.rac.surroundedDamageMul[slot] = 1;
+  // Default formation per role so boids reads the right profile.
+  const fid = DEFAULT_FORMATION_BY_ROLE[unit.role];
+  state.rac.formationIdx[slot] = FORMATION_TO_IDX[fid];
   state.rac.sourceBinId[slot] = -1;
   state.rac.sourceSlotIdx[slot] = -1;
   state.rac.count = slot + 1;
@@ -546,6 +560,32 @@ function scenarioSpawn(unitId: string, seed: number) {
   };
 }
 
+/** scenario: formation — one unit's burst arranged by a specified
+ *  formation, then settled for N ticks. Lets you visualize a formation
+ *  shape without the rest of the battle's complications. */
+function scenarioFormation(unitId: string, formationId: FormationId | null) {
+  return (state: BattleState, content: ContentBundle) => {
+    const u = getUnit(content, unitId);
+    const fid = formationId ?? DEFAULT_FORMATION_BY_ROLE[u.role];
+    const formationIdx = FORMATION_TO_IDX[fid];
+    const def = FORMATIONS[formationIdx];
+    if (!def) throw new Error(`unknown formation ${fid}`);
+    if (def.role !== u.role) {
+      throw new Error(
+        `formation '${fid}' is for role '${def.role}', but '${unitId}' is '${u.role}'`,
+      );
+    }
+    const burst = u.bin.spawn_burst ?? [2, 5, 5, 10][ROLE_TO_IDX[u.role]];
+    // Use the formation's arrange() directly. forward = -1 means
+    // enemies are at -x (canonical side-0 placement).
+    for (let k = 0; k < burst; k++) {
+      const off = def.arrange({ burstIdx: k, burstSize: burst, forward: -1 });
+      const slot = placeRac(state, u, 0, off.dx, off.dy);
+      state.rac.formationIdx[slot] = formationIdx;
+    }
+  };
+}
+
 /** scenario: march — units spawn at -X, dummy enemy rac at +X, see motion. */
 function scenarioMarch(unitId: string, distance: number) {
   return (state: BattleState, content: ContentBundle) => {
@@ -734,6 +774,22 @@ async function main(): Promise<void> {
           seed,
           ticks,
           setupFn: scenarioSurround(u, n, r),
+        },
+        content,
+      );
+      break;
+    }
+    case "formation": {
+      const unit = args.positional[0];
+      const formationId = (args.positional[1] ?? null) as FormationId | null;
+      if (!unit) throw new Error("usage: lab formation <unit-id> [formation-id]");
+      await runScenario(
+        {
+          scenario: "formation",
+          args: { unit, formation: formationId ?? "default" },
+          seed,
+          ticks,
+          setupFn: scenarioFormation(unit, formationId),
         },
         content,
       );

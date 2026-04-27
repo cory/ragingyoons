@@ -24,6 +24,7 @@ import {
   MAX_BINS,
   MAX_GARRISON_SLOTS,
   MAX_RACS,
+  composeFormationProfiles,
   type BattleState,
   type Owner,
 } from "../../src/sim/state.js";
@@ -95,7 +96,7 @@ export function makeBundle(opts: {
 
 /** Build a fresh, empty BattleState. Add bins / racs via the helpers below. */
 export function emptyState(opts: { seed?: number; bounds?: { w: number; h: number } } = {}): BattleState {
-  return {
+  const state: BattleState = {
     tick: 0,
     rng: makeRng(opts.seed ?? 42),
     battleId: "test",
@@ -112,9 +113,13 @@ export function emptyState(opts: { seed?: number; bounds?: { w: number; h: numbe
     winner: -1,
     endReason: null,
     tacticPerSide: composeTactics(),
+    formationProfile: [[], []],
     racRowById: new Map(),
     binRowById: new Map(),
   };
+  // Build formation-profile lookup; subsystems read from this directly.
+  composeFormationProfiles(state);
+  return state;
 }
 
 function emptyBin() {
@@ -171,6 +176,7 @@ function emptyRac() {
     dmgTakenMul: new Float32Array(MAX_RACS),
     surroundedDamageMul: new Float32Array(MAX_RACS),
     statsDirty: new Uint8Array(MAX_RACS),
+    formationIdx: new Uint8Array(MAX_RACS),
   };
 }
 
