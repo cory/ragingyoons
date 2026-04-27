@@ -204,10 +204,15 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const cohKEff = profile.cohesionK * (1 - bold * 0.8) * dMod.cohesionKMul;
     const alignKEff = profile.alignmentK * (1 - bold * 0.8);
 
-    // ---- Cohesion: toward this rac's group centroid. ----
-    // Uses analytical group centroid (not field sample) so two
-    // distinct groups of the same role/side don't pull together.
-    // Splits and merges are reflected on the next tick.
+    // ---- Cohesion: toward this rac's slot in the group formation. ----
+    // Each rac has a slot offset from the formation's arrange() at spawn.
+    // We pull toward (groupCentroid + slot) so the formation HOLDS its
+    // shape on the march instead of collapsing into a point. With a
+    // bare-centroid pull, every rac in a 10-wide line drags toward the
+    // line's middle and the line caves in to a tight clump in seconds.
+    // Slot-aware pull also lets shape-mode actually reform into the
+    // selected formation: spawn jitter + slot offsets means the boid
+    // system is doing the formation work each tick, not just at spawn.
     let cohX = 0;
     let cohY = 0;
     if (cohKEff > 0) {
@@ -216,8 +221,10 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       if (stats && stats.count >= 2) {
         const cx = stats.sumX / stats.count;
         const cy = stats.sumY / stats.count;
-        const tdx = cx - myX;
-        const tdy = cy - myY;
+        const tx = cx + state.rac.slotDx[i];
+        const ty = cy + state.rac.slotDy[i];
+        const tdx = tx - myX;
+        const tdy = ty - myY;
         const td = Math.hypot(tdx, tdy);
         if (td > 1e-3) {
           cohX = (tdx / td) * cohKEff;

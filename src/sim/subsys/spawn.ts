@@ -219,6 +219,8 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         state.rac.doctrineIdx[racRow] = doctrineIdx;
         state.rac.teamId[racRow] = Math.floor(bk / teamSize);
         state.rac.groupId[racRow] = groupId;
+        state.rac.slotDx[racRow] = off.dx;
+        state.rac.slotDy[racRow] = off.dy;
         alive += 1;
 
         log.emit("rac_spawn", {

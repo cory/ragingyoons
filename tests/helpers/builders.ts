@@ -25,6 +25,9 @@ import {
   MAX_GARRISON_SLOTS,
   MAX_RACS,
   composeFormationProfiles,
+  emptyAtks,
+  emptyBins,
+  emptyRacs,
   type BattleState,
   type Owner,
 } from "../../src/sim/state.js";
@@ -104,9 +107,9 @@ export function emptyState(opts: { seed?: number; bounds?: { w: number; h: numbe
     seed: opts.seed ?? 42,
     bounds: opts.bounds ?? { w: 20, h: 12 },
     unitIdTable: [],
-    bin: emptyBin(),
-    rac: emptyRac(),
-    atk: emptyAtk(),
+    bin: emptyBins(),
+    rac: emptyRacs(),
+    atk: emptyAtks(),
     nextBinId: 1,
     nextRacId: 1,
     nextAtkId: 1,
@@ -122,87 +125,6 @@ export function emptyState(opts: { seed?: number; bounds?: { w: number; h: numbe
   // Build formation-profile lookup; subsystems read from this directly.
   composeFormationProfiles(state);
   return state;
-}
-
-function emptyBin() {
-  return {
-    count: 0,
-    id: new Int32Array(MAX_BINS),
-    owner: new Uint8Array(MAX_BINS),
-    unitIdIdx: new Int32Array(MAX_BINS),
-    envIdx: new Uint8Array(MAX_BINS),
-    curIdx: new Uint8Array(MAX_BINS),
-    hp: new Float32Array(MAX_BINS),
-    hpMax: new Float32Array(MAX_BINS),
-    x: new Float32Array(MAX_BINS),
-    y: new Float32Array(MAX_BINS),
-    starTier: new Uint8Array(MAX_BINS),
-    garrisonCap: new Uint8Array(MAX_BINS),
-    slotRespawnT: new Float32Array(MAX_BINS * MAX_GARRISON_SLOTS),
-    slotOccupant: new Int32Array(MAX_BINS * MAX_GARRISON_SLOTS),
-    alive: new Uint8Array(MAX_BINS),
-  };
-}
-
-function emptyRac() {
-  return {
-    count: 0,
-    id: new Int32Array(MAX_RACS),
-    owner: new Uint8Array(MAX_RACS),
-    sourceBinId: new Int32Array(MAX_RACS),
-    sourceSlotIdx: new Int32Array(MAX_RACS),
-    unitIdIdx: new Int32Array(MAX_RACS),
-    role: new Uint8Array(MAX_RACS),
-    env: new Uint8Array(MAX_RACS),
-    cur: new Uint8Array(MAX_RACS),
-    hp: new Float32Array(MAX_RACS),
-    hpMax: new Float32Array(MAX_RACS),
-    rage: new Float32Array(MAX_RACS),
-    rageCap: new Float32Array(MAX_RACS),
-    x: new Float32Array(MAX_RACS),
-    y: new Float32Array(MAX_RACS),
-    vx: new Float32Array(MAX_RACS),
-    vy: new Float32Array(MAX_RACS),
-    facing: new Float32Array(MAX_RACS),
-    prevFacing: new Float32Array(MAX_RACS),
-    targetId: new Int32Array(MAX_RACS),
-    targetKind: new Uint8Array(MAX_RACS),
-    attackCooldown: new Float32Array(MAX_RACS),
-    statuses: Array.from({ length: MAX_RACS }, () => []),
-    alive: new Uint8Array(MAX_RACS),
-    effSpeed: new Float32Array(MAX_RACS),
-    effDamage: new Float32Array(MAX_RACS),
-    effRange: new Float32Array(MAX_RACS),
-    effAttackRate: new Float32Array(MAX_RACS),
-    effArmor: new Float32Array(MAX_RACS),
-    dmgTakenMul: new Float32Array(MAX_RACS),
-    surroundedDamageMul: new Float32Array(MAX_RACS),
-    statsDirty: new Uint8Array(MAX_RACS),
-    formationIdx: new Uint8Array(MAX_RACS),
-    contact: new Uint8Array(MAX_RACS),
-    doctrineIdx: new Uint8Array(MAX_RACS),
-    teamId: new Uint8Array(MAX_RACS),
-    groupId: new Uint16Array(MAX_RACS),
-  };
-}
-
-function emptyAtk() {
-  return {
-    count: 0,
-    id: new Int32Array(MAX_ATKS),
-    sourceRacId: new Int32Array(MAX_ATKS),
-    sourceOwner: new Uint8Array(MAX_ATKS),
-    kindIdx: new Uint8Array(MAX_ATKS),
-    damage: new Float32Array(MAX_ATKS),
-    appliesStatusIds: Array.from({ length: MAX_ATKS }, () => []),
-    x: new Float32Array(MAX_ATKS),
-    y: new Float32Array(MAX_ATKS),
-    vx: new Float32Array(MAX_ATKS),
-    vy: new Float32Array(MAX_ATKS),
-    radius: new Float32Array(MAX_ATKS),
-    ttl: new Float32Array(MAX_ATKS),
-    alive: new Uint8Array(MAX_ATKS),
-  };
 }
 
 function internUnitId(state: BattleState, unitId: string): number {
@@ -254,6 +176,8 @@ export function addRac(
     hp?: number;
     rage?: number;
     sourceBinId?: number;
+    slotDx?: number;
+    slotDy?: number;
   },
 ): number {
   const slot = state.rac.count;
@@ -288,6 +212,8 @@ export function addRac(
   state.rac.effArmor[slot] = u.stats.armor;
   state.rac.dmgTakenMul[slot] = 1;
   state.rac.surroundedDamageMul[slot] = 1;
+  state.rac.slotDx[slot] = opts.slotDx ?? 0;
+  state.rac.slotDy[slot] = opts.slotDy ?? 0;
   state.rac.count = slot + 1;
   state.racRowById.set(state.rac.id[slot], slot);
   return slot;

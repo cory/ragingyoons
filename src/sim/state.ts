@@ -171,6 +171,15 @@ export interface RacTable {
    *  get out-of-phase rhythm cycles so the pack appears to bound
    *  forward in alternation without per-team coordination logic. */
   teamId: Uint8Array;
+  /** Per-rac formation slot offset (formation-space, with forward
+   *  already mirrored by side at spawn). Boids cohesion pulls each rac
+   *  toward `groupCentroid + slot` so the formation holds its shape
+   *  instead of collapsing to a single point. Set once at spawn from
+   *  `formation.arrange()`. Splits don't recompute slots — a split
+   *  group inherits the parent's slot vectors, which is fine since the
+   *  centroid moves to the new sub-group's centroid. */
+  slotDx: Float32Array;
+  slotDy: Float32Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -266,7 +275,7 @@ export interface BattleState {
   disableSynergies?: boolean;
 }
 
-function emptyBins(): BinTable {
+export function emptyBins(): BinTable {
   return {
     count: 0,
     id: new Int32Array(MAX_BINS),
@@ -286,7 +295,7 @@ function emptyBins(): BinTable {
   };
 }
 
-function emptyRacs(): RacTable {
+export function emptyRacs(): RacTable {
   return {
     count: 0,
     id: new Int32Array(MAX_RACS),
@@ -325,10 +334,12 @@ function emptyRacs(): RacTable {
     doctrineIdx: new Uint8Array(MAX_RACS),
     teamId: new Uint8Array(MAX_RACS),
     groupId: new Uint16Array(MAX_RACS),
+    slotDx: new Float32Array(MAX_RACS),
+    slotDy: new Float32Array(MAX_RACS),
   };
 }
 
-function emptyAtks(): AtkTable {
+export function emptyAtks(): AtkTable {
   return {
     count: 0,
     id: new Int32Array(MAX_ATKS),
@@ -413,12 +424,10 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   };
   composeFormationProfiles(state);
 
-  // Resolve formation + doctrine for the spawned racs. Formation drives
-  // the per-rac TacticProfile (cohesion / separation / seek weights); the
-  // boid system reforms a blob of racs into the formation's shape under
-  // those weights — no need to pre-arrange positions.
+  // Resolve formation + doctrine for the spawned racs.
   const formationId = cfg.formationId ?? DEFAULT_FORMATION_BY_ROLE[unit.role];
   const formationIdx = FORMATION_TO_IDX[formationId];
+  const formation = FORMATIONS[formationIdx];
   const doctrineId = doctrineFor(unit.environment, unit.curiosity);
   const doctrineIdx = DOCTRINE_TO_IDX[doctrineId];
   const teamSize = teamSizeFor(doctrineIdx);
@@ -453,27 +462,23 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   state.bin.count = binSlot + 1;
   state.binRowById.set(state.bin.id[binSlot], binSlot);
 
-  // Place side-0 racs in a tight jittered blob around (-30% of bounds, 0).
-  // We *don't* spawn them in formation arrangement — the whole point of
-  // the shape-lab is to watch the boid + formation system reform a
-  // disordered crowd into the correct shape and march it to the enemy.
-  // Blob radius scales with sqrt(count) so density stays roughly constant.
+  // Place side-0 racs in formation arrangement around (-30% of bounds, 0).
+  // Each rac's slot offset is stored on the rac so boids cohesion pulls
+  // it back toward (centroid + slot) — that's what holds shape on the
+  // march. Small RNG jitter so spawn positions aren't pixel-identical
+  // (looks alive even at tick 0 + breaks symmetry that can stall the
+  // anti-overlap d=0 path).
   const baseX = -halfW * 0.6;
   const baseY = 0;
-  const blobR = 1.5 + Math.sqrt(cfg.count) * 0.5;
   const groupId = state.nextGroupId++;
   const profile = state.formationProfile[0][formationIdx];
+  // forward = +1 because the enemy is in +x direction from us.
+  const forward = 1;
   for (let k = 0; k < cfg.count; k++) {
     if (state.rac.count >= state.rac.id.length) break;
-    // Uniform-disc sampling via rejection from the unit square.
-    let jx = 0,
-      jy = 0;
-    for (let tries = 0; tries < 8; tries++) {
-      jx = rngFloat(state.rng) * 2 - 1;
-      jy = rngFloat(state.rng) * 2 - 1;
-      if (jx * jx + jy * jy <= 1) break;
-    }
-    const off = { dx: jx * blobR, dy: jy * blobR };
+    const off = formation.arrange({ burstIdx: k, burstSize: cfg.count, forward });
+    const jx = (rngFloat(state.rng) - 0.5) * 0.2;
+    const jy = (rngFloat(state.rng) - 0.5) * 0.2;
     const racRow = state.rac.count;
     const racId = state.nextRacId++;
     state.rac.id[racRow] = racId;
@@ -489,8 +494,8 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
     state.rac.hpMax[racRow] = unit.stats.hp;
     state.rac.rage[racRow] = 0;
     state.rac.rageCap[racRow] = unit.rage.capacity;
-    state.rac.x[racRow] = baseX + off.dx;
-    state.rac.y[racRow] = baseY + off.dy;
+    state.rac.x[racRow] = baseX + off.dx + jx;
+    state.rac.y[racRow] = baseY + off.dy + jy;
     state.rac.vx[racRow] = 0;
     state.rac.vy[racRow] = 0;
     state.rac.facing[racRow] = 0; // +x toward enemy
@@ -511,6 +516,8 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
     state.rac.doctrineIdx[racRow] = doctrineIdx;
     state.rac.teamId[racRow] = Math.floor(k / teamSize);
     state.rac.groupId[racRow] = groupId;
+    state.rac.slotDx[racRow] = off.dx;
+    state.rac.slotDy[racRow] = off.dy;
     state.rac.count = racRow + 1;
   }
   return state;
