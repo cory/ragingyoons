@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "dev:server": "node server.mjs",
+    "dev:server": "node --watch server.mjs",
     "dev:web": "vite",
     "dev": "concurrently -n server,web -c blue,green \"npm run dev:server\" \"npm run dev:web\"",
     "build": "tsc -b && vite build"
