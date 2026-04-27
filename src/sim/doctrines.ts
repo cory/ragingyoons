@@ -43,6 +43,60 @@ import type { BattleState } from "./state.js";
 import type { BoidFields } from "./fields.js";
 import { sampleField } from "./fields.js";
 
+// ---------- TUNABLE KNOBS ----------
+// Module-level mutable values that strategies read at runtime. The
+// autotuner overwrites these between battles to search the design
+// space; outside the autotuner they hold their default values.
+//
+// Why mutable (vs threading through BattleConfig): the autotuner
+// drives many short battles per evaluation across multiple worker
+// processes. Each worker is its own process, so module mutation is
+// process-local and safe. Per-battle knob overrides live in
+// BattleJob.doctrineKnobs, applied inside the worker before
+// setupBattle.
+export const DOCTRINE_KNOBS = {
+  /** fire-team bounding period in ticks. */
+  fireTeamPeriod: 30,
+  /** fire-team advance phase fraction (0..coverStart = sprint). */
+  fireTeamCoverStart: 0.5,
+  /** fire-team cover phase end (coverStart..coverEnd = halt). */
+  fireTeamCoverEnd: 0.83,
+  /** fire-team advance phase seek multiplier. */
+  fireTeamAdvanceSeek: 1.4,
+  /** fire-team rejoin phase speed multiplier (post-cover regroup). */
+  fireTeamRejoinSpeed: 0.5,
+
+  /** skirmisher cycle period (ticks). */
+  skirmisherPeriod: 22,
+  /** skirmisher sprint phase end (0..sprintEnd = sprint). */
+  skirmisherSprintEnd: 0.65,
+  /** skirmisher halt phase end (sprintEnd..haltEnd = halt). */
+  skirmisherHaltEnd: 0.9,
+  /** skirmisher sprint seek multiplier. */
+  skirmisherSeekMul: 1.5,
+
+  /** Reinforce strategy: rush-to-engaged seek strength. */
+  rushToEngagedSeek: 1.6,
+  /** Reinforce strategy: flank-engaged seek strength. */
+  flankEngagedSeek: 1.4,
+
+  /** Last-stand HP-fraction threshold (below this triggers
+   *  last-stand phase). */
+  lastStandHpFrac: 0.3,
+  /** rout-to-bin damage taken multiplier (>1 = vulnerable while fleeing). */
+  routVulnerability: 1.4,
+  /** rally-cluster damage taken multiplier. */
+  rallyVulnerability: 1.2,
+  /** death-rage damage taken multiplier (<1 = berserk). */
+  deathRageDmgRed: 0.7,
+  /** death-rage seek multiplier. */
+  deathRageSeek: 2.0,
+  /** death-rage speed multiplier. */
+  deathRageSpeed: 1.3,
+};
+
+export type DoctrineKnobs = typeof DOCTRINE_KNOBS;
+
 // ---------- mod returned by each strategy ----------
 
 export interface PhaseMod {
@@ -93,22 +147,28 @@ export type MovementId = "steady-advance" | "bounding-overwatch" | "sprint-halt"
 const movementSteady = (_c: PhaseCtx): PhaseMod => NEUTRAL;
 
 const movementBounding = (c: PhaseCtx): PhaseMod => {
-  // 30-tick cycle. Teams offset by 7 ticks so adjacent teams cover
-  // each other (one advances while the other holds).
-  const period = 30;
+  const period = DOCTRINE_KNOBS.fireTeamPeriod;
   const phase = (c.tick + c.teamId * 7) % period;
   const phaseFrac = phase / period;
-  if (phaseFrac < 0.5) return { ...NEUTRAL, seekKMul: 1.4, cohesionKMul: 0.8 };
-  if (phaseFrac < 0.83) return { ...NEUTRAL, speedMul: 0, seekKMul: 0 };
-  return { ...NEUTRAL, speedMul: 0.5, seekKMul: 0.6, cohesionKMul: 1.5 };
+  if (phaseFrac < DOCTRINE_KNOBS.fireTeamCoverStart) {
+    return { ...NEUTRAL, seekKMul: DOCTRINE_KNOBS.fireTeamAdvanceSeek, cohesionKMul: 0.8 };
+  }
+  if (phaseFrac < DOCTRINE_KNOBS.fireTeamCoverEnd) {
+    return { ...NEUTRAL, speedMul: 0, seekKMul: 0 };
+  }
+  return { ...NEUTRAL, speedMul: DOCTRINE_KNOBS.fireTeamRejoinSpeed, seekKMul: 0.6, cohesionKMul: 1.5 };
 };
 
 const movementSprintHalt = (c: PhaseCtx): PhaseMod => {
-  const period = 22;
+  const period = DOCTRINE_KNOBS.skirmisherPeriod;
   const phase = (c.tick + c.teamId * 5) % period;
   const phaseFrac = phase / period;
-  if (phaseFrac < 0.65) return { ...NEUTRAL, seekKMul: 1.5, cohesionKMul: 0.5 };
-  if (phaseFrac < 0.9) return { ...NEUTRAL, speedMul: 0, seekKMul: 0 };
+  if (phaseFrac < DOCTRINE_KNOBS.skirmisherSprintEnd) {
+    return { ...NEUTRAL, seekKMul: DOCTRINE_KNOBS.skirmisherSeekMul, cohesionKMul: 0.5 };
+  }
+  if (phaseFrac < DOCTRINE_KNOBS.skirmisherHaltEnd) {
+    return { ...NEUTRAL, speedMul: 0, seekKMul: 0 };
+  }
   return { ...NEUTRAL, speedMul: 0.7, seekKMul: 0.7, cohesionKMul: 0.5 };
 };
 
@@ -188,7 +248,7 @@ const reinforceRush = (c: PhaseCtx): PhaseMod => {
   if (len < 0.01) return NEUTRAL;
   return {
     ...NEUTRAL,
-    seekKMul: 1.6,
+    seekKMul: DOCTRINE_KNOBS.rushToEngagedSeek,
     seekDirOverride: { dx: dirX / len, dy: dirY / len },
   };
 };
@@ -211,7 +271,7 @@ const reinforceFlank = (c: PhaseCtx): PhaseMod => {
   const sign = c.teamId % 2 === 0 ? 1 : -1;
   return {
     ...NEUTRAL,
-    seekKMul: 1.4,
+    seekKMul: DOCTRINE_KNOBS.flankEngagedSeek,
     seekDirOverride: { dx: -ty / len * sign, dy: tx / len * sign },
   };
 };
@@ -264,7 +324,7 @@ const lastStandRoutToBin = (c: PhaseCtx): PhaseMod => {
     seekKMul: 2.0,
     cohesionKMul: 0,
     seekDirOverride: { dx: dx / len, dy: dy / len },
-    damageTakenMul: 1.4, // fleeing units are vulnerable (back exposed)
+    damageTakenMul: DOCTRINE_KNOBS.routVulnerability,
   };
 };
 
@@ -287,16 +347,16 @@ const lastStandRallyCluster = (c: PhaseCtx): PhaseMod => {
     seekKMul: 1.8,
     cohesionKMul: 2.0,
     seekDirOverride: { dx: dirX / len, dy: dirY / len },
-    damageTakenMul: 1.2,
+    damageTakenMul: DOCTRINE_KNOBS.rallyVulnerability,
   };
 };
 
 const lastStandDeathRage = (_c: PhaseCtx): PhaseMod => ({
   // No retreat — full forward commit, accept incoming damage.
-  speedMul: 1.3,
-  seekKMul: 2.0,
+  speedMul: DOCTRINE_KNOBS.deathRageSpeed,
+  seekKMul: DOCTRINE_KNOBS.deathRageSeek,
   cohesionKMul: 0.5,
-  damageTakenMul: 0.7, // berserk: shrug off hits
+  damageTakenMul: DOCTRINE_KNOBS.deathRageDmgRed,
 });
 
 const LAST_STAND_FNS: Record<LastStandId, (c: PhaseCtx) => PhaseMod> = {
@@ -441,7 +501,7 @@ export function computeDoctrineMod(c: PhaseCtx & { inAttackRange: boolean }): Ph
 
   // Last-stand check
   const hpFrac = c.state.rac.hpMax[c.i] > 0 ? c.state.rac.hp[c.i] / c.state.rac.hpMax[c.i] : 1;
-  if (hpFrac < 0.3) return LAST_STAND_FNS[def.lastStand](c);
+  if (hpFrac < DOCTRINE_KNOBS.lastStandHpFrac) return LAST_STAND_FNS[def.lastStand](c);
 
   // Contact check — must be within actual attack range, not just
   // the 8m formation-contact zone.

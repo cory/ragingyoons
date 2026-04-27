@@ -12,13 +12,14 @@ import {
   streamChat,
 } from "./api";
 import { BattleViewer } from "./BattleViewer";
+import { TunePage } from "./TunePage";
 
 const ENVS = ["city", "suburban", "park", "coastal"] as const;
 const CURIOSITIES = ["lockpickers", "tinkerers", "farmers", "barbarians"] as const;
 const ROLES = ["tank", "archer", "cavalry", "infantry"] as const;
-const TABS: ViewTab[] = ["units", "comps", "battles", "environments", "curiosities", "roles", "synergies", "statuses"];
+const TABS: ViewTab[] = ["units", "comps", "battles", "tune", "environments", "curiosities", "roles", "synergies", "statuses"];
 
-type ViewTab = "units" | "comps" | "battles" | "environments" | "curiosities" | "roles" | "synergies" | "statuses";
+type ViewTab = "units" | "comps" | "battles" | "tune" | "environments" | "curiosities" | "roles" | "synergies" | "statuses";
 
 interface CompBin {
   id: string;
@@ -100,6 +101,11 @@ export function App() {
               Use the controls in the canvas pane to pick comps and run battles.
               Each run produces a tile here you can scrub through.
             </div>
+          ) : tab === "tune" ? (
+            <div className="hint" style={{ padding: 12 }}>
+              Watch the autotuner search the doctrine knob space. Loss
+              curve, knob trajectories, live winrate heatmap.
+            </div>
           ) : tab === "units" ? (
             <UnitGrid
               units={cards?.units ?? []}
@@ -151,7 +157,9 @@ export function App() {
           )}
         </aside>
         <section className="editor">
-          {tab === "battles" ? (
+          {tab === "tune" ? (
+            <TunePage />
+          ) : tab === "battles" ? (
             <BattleViewer />
           ) : tab === "comps" && cards ? (
             <CompWorkspace

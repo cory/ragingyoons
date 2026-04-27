@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { loadContentFromFs } from "../../src/sim/load-fs.js";
 import { MemoryLogger } from "../../src/sim/log.js";
 import { resolveTimeout, setupBattle, tick, type BattleConfig, type ContentBundle } from "../../src/sim/index.js";
+import { DOCTRINE_KNOBS, type DoctrineKnobs } from "../../src/sim/doctrines.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -46,6 +47,10 @@ export interface BattleJob {
   boundsW: number;
   boundsH: number;
   disableSynergies: boolean;
+  /** Optional doctrine-knob overrides, applied to module-global
+   *  DOCTRINE_KNOBS before this battle runs. Used by the autotuner
+   *  to evaluate parameter sets. */
+  doctrineKnobs?: Partial<DoctrineKnobs>;
 }
 
 export interface BattleOutcome {
@@ -75,6 +80,9 @@ async function init(): Promise<void> {
 
 function runJob(job: BattleJob): BattleOutcome {
   if (!content) throw new Error("content not loaded");
+  // Apply doctrine knob overrides for this battle. Each worker is a
+  // separate process so this mutation is process-local.
+  if (job.doctrineKnobs) Object.assign(DOCTRINE_KNOBS, job.doctrineKnobs);
   const cfg: BattleConfig = {
     seed: job.seed,
     battleId: job.battleId,

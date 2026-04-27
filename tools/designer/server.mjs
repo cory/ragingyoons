@@ -485,6 +485,66 @@ function summarizeToolUse(block) {
   return `${name}(${rel || "…"})`;
 }
 
+// ---------- autotune ----------
+//
+// /api/autotune/iterations  — returns parsed iterations from the
+//                             current latest.ndjson (or empty array
+//                             if no run has happened).
+// /api/autotune/start       — spawns the autotune script (POST).
+// /api/autotune/status      — returns whether a run is in progress
+//                             and the wall-time of the running pid.
+//
+// The autotune script writes to lab/autotune/latest.ndjson; this
+// endpoint just reads + parses it. Polling cadence on the client
+// is ~1s.
+
+const AUTOTUNE_LATEST = path.join(REPO_ROOT, "lab", "autotune", "latest.ndjson");
+let autotuneProc = null;
+
+app.get("/api/autotune/iterations", async (_req, res) => {
+  try {
+    const raw = await fs.readFile(AUTOTUNE_LATEST, "utf8").catch(() => "");
+    const lines = raw.split("\n").filter((l) => l.length > 0);
+    const iters = lines.map((l) => JSON.parse(l));
+    res.json({ iterations: iters, running: !!autotuneProc });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post("/api/autotune/start", async (req, res) => {
+  if (autotuneProc) {
+    return res.status(409).json({ error: "autotune already running" });
+  }
+  const { duration = 300, seeds = 20, ticks = 1500, workers = 4 } = req.body ?? {};
+  // Truncate latest.ndjson so the client sees fresh iterations.
+  await fs.mkdir(path.dirname(AUTOTUNE_LATEST), { recursive: true });
+  await fs.writeFile(AUTOTUNE_LATEST, "");
+  const args = [
+    "tools/sim-runner/autotune.ts",
+    "--duration",
+    String(duration),
+    "--seeds",
+    String(seeds),
+    "--ticks",
+    String(ticks),
+    "--workers",
+    String(workers),
+  ];
+  autotuneProc = spawn("npx", ["tsx", ...args], { cwd: REPO_ROOT, stdio: "ignore" });
+  autotuneProc.on("exit", () => {
+    autotuneProc = null;
+  });
+  res.json({ started: true, pid: autotuneProc.pid });
+});
+
+app.post("/api/autotune/stop", async (_req, res) => {
+  if (!autotuneProc) return res.json({ stopped: false, reason: "not running" });
+  autotuneProc.kill("SIGTERM");
+  autotuneProc = null;
+  res.json({ stopped: true });
+});
+
 // ---------- start ----------
 
 const PORT = Number(process.env.PORT ?? 7321);
