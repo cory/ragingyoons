@@ -218,6 +218,12 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const slotS = profile.slotScale;
     const mySlotDx = state.rac.slotDx[i] * slotS;
     const mySlotDy = state.rac.slotDy[i] * slotS;
+    // Shape-error gate (used below to pause advance during a formation
+    // re-shape, e.g. phalanx → synaspismos compression). Distance from
+    // this rac to its (centroid + slot × slotScale) target. Initialized
+    // to 0 — racs without a group or with cohesion off are "in shape"
+    // by definition and don't dampen.
+    let shapeError = 0;
     if (cohKEff > 0) {
       const myGroupId = state.rac.groupId[i];
       const stats = groupStats.get(myGroupId);
@@ -229,6 +235,7 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
         const tdx = tx - myX;
         const tdy = ty - myY;
         const td = Math.hypot(tdx, tdy);
+        shapeError = td;
         if (td > 1e-3) {
           cohX = (tdx / td) * cohKEff;
           cohY = (tdy / td) * cohKEff;
@@ -306,16 +313,39 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       seekX = dMod.seekDirOverride.dx * seekKEff;
       seekY = dMod.seekDirOverride.dy * seekKEff;
     } else if (tgtFound && !inCombat) {
-      // Each rac seeks (target + own slot offset), not the bare target —
-      // otherwise a 10-wide line collapses to a point at the target as
-      // every rac aims at the same x,y. With personal-slot seeks, the
-      // leftmost rac aims slightly left, rightmost slightly right, and
-      // the line ENVELOPS the target instead of converging on it. In
-      // contact mode slotScale drops, so the personal targets cluster
-      // near the bare target — the formation tightens for melee, which
-      // is the "march in line, fight in cluster" combat shape.
-      const tdx = (tgtX + mySlotDx) - myX;
-      const tdy = (tgtY + mySlotDy) - myY;
+      // Envelopment: each rac seeks a personal aim point that is slot-
+      // offset from the bare target FAR AWAY but collapses to the bare
+      // target as the rac closes. Without the collapse the line marches
+      // parallel forever and never wraps the target ("stays straight,
+      // no envelopment"). With it, leftmost/rightmost racs trace curved
+      // paths that converge on the target — the line bends in like a U
+      // and ideally arrives together (outer racs walk a slightly longer
+      // diagonal but at the same forward speed). ENVELOP_R sets how
+      // tight the curve is: small R = sharp collapse near the target;
+      // large R = gradual lean-in over the whole approach. 18m is about
+      // 2× CONTACT_RADIUS so the envelopment is mostly done by the time
+      // the formation enters contact mode.
+      const dx0 = tgtX - myX;
+      const dy0 = tgtY - myY;
+      const distToTarget = Math.hypot(dx0, dy0);
+      const ENVELOP_R = 18;
+      const fEnvelop = distToTarget / (distToTarget + ENVELOP_R);
+      const aimX = tgtX + mySlotDx * fEnvelop;
+      const aimY = tgtY + mySlotDy * fEnvelop;
+      // Reshape gate: when the formation is mid-transformation (e.g.
+      // phalanx march → synaspismos: slotScale just dropped from 1.0
+      // to 0.5, racs are 0.7m+ from their new slot targets), pause the
+      // advance until the shape settles. shapeError > RESHAPE_R (~1m)
+      // ramps the seek down toward zero; once racs are within the
+      // band, seek returns to full and the formation marches again.
+      // The transformation can be fast — RESHAPE_R is small — but it
+      // should be visible as an interruption of forward motion.
+      const RESHAPE_R = 1.0;
+      const reshapeGate = shapeError > RESHAPE_R
+        ? Math.max(0, 1 - (shapeError - RESHAPE_R) * 0.6)
+        : 1;
+      const tdx = aimX - myX;
+      const tdy = aimY - myY;
       const td2 = tdx * tdx + tdy * tdy;
       if (td2 > 1e-6) {
         const td = Math.sqrt(td2);
@@ -327,11 +357,11 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
           let k = 0;
           if (td > preferred * 1.1) k = seekKEff;
           else if (td < preferred * 0.9) k = -seekKEff * 1.2;
-          seekX = (tdx / td) * k;
-          seekY = (tdy / td) * k;
+          seekX = (tdx / td) * k * reshapeGate;
+          seekY = (tdy / td) * k * reshapeGate;
         } else {
-          seekX = (tdx / td) * seekKEff;
-          seekY = (tdy / td) * seekKEff;
+          seekX = (tdx / td) * seekKEff * reshapeGate;
+          seekY = (tdy / td) * seekKEff * reshapeGate;
         }
       }
     }
