@@ -11,7 +11,7 @@ stats:
   damage: 12
   attack_rate: 1.0
   range: 0.8
-  speed: 2.3
+  speed: 9.0
   armor: 0
 bin:
   hp: 110
