@@ -432,6 +432,8 @@ export type DoctrineId =
   | "modern-patrol"
   | "fanatic";
 
+export type SplitAxisId = "none" | "lateral" | "front-rear" | "perpendicular" | "random";
+
 export interface DoctrineDef {
   id: DoctrineId;
   /** Sub-team size for rhythm-based movement strategies. 99 = one
@@ -441,6 +443,18 @@ export interface DoctrineDef {
   contact: ContactId;
   reinforce: ReinforceId;
   lastStand: LastStandId;
+  /** Maximum group size before the formation splits. Captures
+   *  doctrine identity in numbers — phalanxes are big blocks
+   *  (~64), fire teams are small (~12), skirmishers are tiny (~6).
+   *  When a group's count exceeds this, the boid pipeline bisects
+   *  it along splitAxis. */
+  maxFormationSize: number;
+  /** Where to bisect when splitting. "lateral" = left/right halves
+   *  (perpendicular to the group's seek direction). "front-rear" =
+   *  front/back along the seek axis. "perpendicular" = perpendicular
+   *  to the enemy axis (cardinal +x). "random" = id-hash. "none" =
+   *  formation never splits. */
+  splitAxis: SplitAxisId;
 }
 
 export const DOCTRINES: readonly DoctrineDef[] = [
@@ -452,8 +466,11 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     contact: "hold-and-fight",
     reinforce: "ignore",
     lastStand: "fight-on",
+    maxFormationSize: 32,
+    splitAxis: "lateral",
   },
-  // 1 — Suburban+Barbarians: tight wall, hold ground, fight to death
+  // 1 — Suburban+Barbarians: tight wall, hold ground, fight to death.
+  // Big block formation; splits along depth (front/back ranks).
   {
     id: "phalanx",
     teamSize: 99,
@@ -461,9 +478,11 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     contact: "hold-and-fight",
     reinforce: "ignore",
     lastStand: "fight-on",
+    maxFormationSize: 64,
+    splitAxis: "front-rear",
   },
-  // 2 — City+Lockpickers / Coastal+Lockpickers: bounding overwatch,
-  // rush to where the action is, rally cluster when losing
+  // 2 — City+Lockpickers / Coastal+Lockpickers: bounding overwatch.
+  // Real fire teams are 4-12 strong; we cap at 12.
   {
     id: "fire-team",
     teamSize: 4,
@@ -471,9 +490,10 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     contact: "hold-and-fight",
     reinforce: "rush-to-engaged",
     lastStand: "rally-cluster",
+    maxFormationSize: 12,
+    splitAxis: "lateral",
   },
-  // 3 — Park+Tinkerers: sprint-halt, harass-and-disengage, flank when
-  // ally engaged, rout when losing
+  // 3 — Park+Tinkerers: sprint-halt, harass. Tiny groups by design.
   {
     id: "skirmisher",
     teamSize: 2,
@@ -481,9 +501,10 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     contact: "harass-disengage",
     reinforce: "flank-engaged",
     lastStand: "rout-to-bin",
+    maxFormationSize: 6,
+    splitAxis: "random",
   },
-  // 4 — City+Farmers / Coastal+Farmers: wide line, hold-and-fight,
-  // mass to engaged ally, rally cluster
+  // 4 — City+Farmers / Coastal+Farmers: wide line.
   {
     id: "line",
     teamSize: 99,
@@ -491,10 +512,10 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     contact: "hold-and-fight",
     reinforce: "rush-to-engaged",
     lastStand: "rally-cluster",
+    maxFormationSize: 40,
+    splitAxis: "lateral",
   },
-  // 5 — Roaming patrol that swarms first contact (the user's
-  // canonical example: roam loose, mass to first engaged ally,
-  // rout if losing fast)
+  // 5 — Roaming patrol that swarms first contact.
   {
     id: "modern-patrol",
     teamSize: 4,
@@ -502,8 +523,10 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     contact: "hold-and-fight",
     reinforce: "rush-to-engaged",
     lastStand: "rout-to-bin",
+    maxFormationSize: 16,
+    splitAxis: "front-rear",
   },
-  // 6 — Fanatic: never breaks, dies advancing
+  // 6 — Fanatic: never breaks, dies advancing. No formation discipline.
   {
     id: "fanatic",
     teamSize: 99,
@@ -511,6 +534,8 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     contact: "hold-and-fight",
     reinforce: "rush-to-engaged",
     lastStand: "death-rage",
+    maxFormationSize: 30,
+    splitAxis: "none",
   },
 ];
 

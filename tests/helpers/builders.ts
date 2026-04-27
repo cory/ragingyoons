@@ -110,6 +110,7 @@ export function emptyState(opts: { seed?: number; bounds?: { w: number; h: numbe
     nextBinId: 1,
     nextRacId: 1,
     nextAtkId: 1,
+    nextGroupId: 1,
     winner: -1,
     endReason: null,
     tacticPerSide: composeTactics(),
@@ -181,6 +182,7 @@ function emptyRac() {
     contact: new Uint8Array(MAX_RACS),
     doctrineIdx: new Uint8Array(MAX_RACS),
     teamId: new Uint8Array(MAX_RACS),
+    groupId: new Uint16Array(MAX_RACS),
   };
 }
 

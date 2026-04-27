@@ -108,6 +108,7 @@ function emptyState(seed: number): BattleState {
     nextBinId: 1,
     nextRacId: 1,
     nextAtkId: 1,
+    nextGroupId: 1,
     winner: -1 as -1 | 0 | 1,
     endReason: null as BattleState["endReason"],
     tacticPerSide: composeTactics(),
@@ -179,6 +180,7 @@ function emptyRac() {
     contact: new Uint8Array(MAX_RACS),
     doctrineIdx: new Uint8Array(MAX_RACS),
     teamId: new Uint8Array(MAX_RACS),
+    groupId: new Uint16Array(MAX_RACS),
   };
 }
 
@@ -264,6 +266,9 @@ function placeRac(
   const dIdx = DOCTRINE_TO_IDX[dId];
   state.rac.doctrineIdx[slot] = dIdx;
   state.rac.teamId[slot] = Math.floor(slot / teamSizeFor(dIdx));
+  // Lab places racs one at a time — give each a unique groupId so
+  // they're independent unless a caller explicitly groups them.
+  state.rac.groupId[slot] = state.nextGroupId++;
   state.rac.sourceBinId[slot] = -1;
   state.rac.sourceSlotIdx[slot] = -1;
   state.rac.count = slot + 1;

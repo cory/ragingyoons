@@ -71,6 +71,7 @@ function captureFrame(state: BattleState, attacks: import("./sim-bridge.js").Vie
       doctrineIdx: state.rac.doctrineIdx[i],
       teamId: state.rac.teamId[i],
       contact: state.rac.contact[i] as 0 | 1,
+      groupId: state.rac.groupId[i],
     });
   }
   const projs: ViewerFrame["projs"] = [];
@@ -205,6 +206,33 @@ function worldToCanvas(x: number, y: number): [number, number] {
 // role idx → label + shape drawer
 const ROLE_LABEL = ["T", "A", "C", "I"]; // tank / archer / cavalry / infantry
 const CUR_LABEL = ["L", "T", "F", "B"];  // lockpickers / tinkerers / farmers / barbarians
+
+/** Subtly shift `hex` toward a per-group hue so formation splits
+ *  show as adjacent groups in slightly-different colors. Keeps the
+ *  side identity (blue/red) dominant — only rotates the secondary
+ *  channels. `gh` is a [0,1) hash of the group id. */
+function tintByGroup(hex: string, gh: number): string {
+  // Parse hex → rgb. Accept #rrggbb only.
+  if (hex.length !== 7 || hex[0] !== "#") return hex;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  // Five group-tint offsets in (R, G, B) — small magnitudes (~12).
+  const tints = [
+    [12, -8, -4],   // warmer
+    [-8, 12, -4],   // greener
+    [-4, -4, 12],   // bluer
+    [10, 8, -8],    // yellow
+    [8, -8, 10],    // magenta
+  ];
+  const idx = Math.floor(gh * tints.length) % tints.length;
+  const t = tints[idx];
+  const clamp = (v: number) => Math.max(0, Math.min(255, v | 0));
+  const rr = clamp(r + t[0]);
+  const gg = clamp(g + t[1]);
+  const bb = clamp(b + t[2]);
+  return `#${rr.toString(16).padStart(2, "0")}${gg.toString(16).padStart(2, "0")}${bb.toString(16).padStart(2, "0")}`;
+}
 
 // doctrine idx → outline color (matches DOCTRINES order in src/sim/doctrines.ts)
 // 0=default, 1=phalanx, 2=fire-team, 3=skirmisher, 4=line
@@ -380,6 +408,12 @@ function drawFrame(ctx: CanvasRenderingContext2D, frame: ViewerFrame): void {
     if (r.doctrineIdx > 1 && r.teamId % 2 === 1) {
       fill = r.owner === 0 ? "#5a86c0" : "#c05a5a";
     }
+    // Group-id hue shift: rotate the fill toward a per-group hue so
+    // formation splits appear as color-divergent halves. Subtle —
+    // we only nudge toward red/green/yellow/cyan/magenta depending on
+    // group hash, not full re-color. Keeps side identity dominant.
+    const gh = ((r.groupId * 2654435761) >>> 0) / 4294967296;
+    fill = tintByGroup(fill, gh);
     drawRoleShape(ctx, r.role, cx, cy, fill);
     // Doctrine indicator: only on every 5th rac (sparse), small ring.
     if (r.doctrineIdx > 0 && r.id % 5 === 0) {

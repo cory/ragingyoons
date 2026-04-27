@@ -144,6 +144,11 @@ export interface RacTable {
    *  this rac was spawned under. Boids/combat lookup the formation's
    *  effective TacticProfile via state.formationProfile[owner][i]. */
   formationIdx: Uint8Array;
+  /** Group id — racs of the same group cohere together; racs of
+   *  different groups don't. Initially each bin's burst is one group;
+   *  formation-split logic assigns new groupIds when a group exceeds
+   *  the doctrine's maxFormationSize. Allocated from state.nextGroupId. */
+  groupId: Uint16Array;
   /** 1 if any enemy is within CONTACT_RADIUS (set by boidsTick per
    *  tick from the spatial grid), else 0. Boids reads this to switch
    *  between formationProfile (march) and formationContactProfile
@@ -206,6 +211,9 @@ export interface BattleState {
   nextBinId: number;
   nextRacId: number;
   nextAtkId: number;
+  /** Monotonic group id counter — incremented at each burst spawn
+   *  and at each formation split. */
+  nextGroupId: number;
   winner: -1 | 0 | 1;
   endReason: "last-raccoon" | "all-bins" | "timeout" | "tiebreak" | "draw" | null;
   /** Per-side per-role tactic profile, set at setup. Subsystems read
@@ -310,6 +318,7 @@ function emptyRacs(): RacTable {
     contact: new Uint8Array(MAX_RACS),
     doctrineIdx: new Uint8Array(MAX_RACS),
     teamId: new Uint8Array(MAX_RACS),
+    groupId: new Uint16Array(MAX_RACS),
   };
 }
 
@@ -366,6 +375,7 @@ export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleSt
     nextBinId: 1,
     nextRacId: 1,
     nextAtkId: 1,
+    nextGroupId: 1,
     winner: -1,
     endReason: null,
     tacticPerSide: composeTactics(cfg.tacticsA, cfg.tacticsB),

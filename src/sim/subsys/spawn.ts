@@ -138,6 +138,10 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
       const doctrineId = doctrineFor(unit.environment, unit.curiosity);
       const doctrineIdx = DOCTRINE_TO_IDX[doctrineId];
       const teamSize = teamSizeFor(doctrineIdx);
+      // Each burst spawn = one fresh group. Splits later assign new
+      // group ids; respawns from the same slot get a fresh group too,
+      // because they're a new tactical unit on the field.
+      const groupId = state.nextGroupId++;
       // Per-doctrine stat scalars (autotuner balance levers). Default
       // 1.0 = no change. Indexed by doctrine id.
       const docHpMul =
@@ -210,6 +214,7 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         state.rac.formationIdx[racRow] = formationIdx;
         state.rac.doctrineIdx[racRow] = doctrineIdx;
         state.rac.teamId[racRow] = Math.floor(bk / teamSize);
+        state.rac.groupId[racRow] = groupId;
         alive += 1;
 
         log.emit("rac_spawn", {

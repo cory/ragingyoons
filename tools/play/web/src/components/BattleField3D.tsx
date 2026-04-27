@@ -41,6 +41,7 @@ import {
   type ContentBundle,
 } from "@sim/index.js";
 import { MemoryLogger } from "@sim/log.js";
+import type { InstancedBoid } from "@sim/instancedBoids";
 import { InstancedBoidsField } from "@sim/instancedBoids";
 
 import { loadContentFromApi } from "../sim-bridge";
@@ -199,6 +200,15 @@ export function BattleField3D({
         // count). Far units beyond 50m drop fur entirely.
         f.setFurLodRange(8.0, 50.0);
 
+        // CRITICAL: stepAnimate re-sorts field.boids by source-unit-id
+        // every frame for batch rendering. If we map boids[i] = rac[i]
+        // we'll write all sim positions into one source's slice and
+        // park the rest — visible as "only one team's archetype on
+        // screen." Snapshot the array now to keep a stable per-slot
+        // mapping; the boid OBJECTS' .pos fields still drive rendering
+        // regardless of array order.
+        const boidBySlot: InstancedBoid[] = [...f.boids];
+
         // Sim setup. Restart with a fresh seed when the battle ends.
         // Sim places bins along its X axis (sign × 0.30..0.40 × bounds.w);
         // we rotate -90° around Z when going to babylon so the wide
@@ -315,12 +325,12 @@ export function BattleField3D({
           if (simAccumulator > SIM_DT) simAccumulator = SIM_DT; // prevent runaway when paused
 
           // Sub-tick interpolation — alpha is the fraction of the next
-          // sim tick we've already rendered past, in [0, 1).
+          // sim tick we've already rendered past, in [0, 1). Iterate
+          // boidBySlot (stable order), NOT field.boids (sort-shuffled).
           const alpha = Math.max(0, Math.min(1, simAccumulator / SIM_DT));
-          const boids = field.boids;
-          const M = boids.length;
+          const M = boidBySlot.length;
           for (let i = 0; i < M; i++) {
-            const b = boids[i];
+            const b = boidBySlot[i];
             if (curAlive[i]) {
               const x = prevX[i] + (curX[i] - prevX[i]) * alpha;
               const y = prevY[i] + (curY[i] - prevY[i]) * alpha;

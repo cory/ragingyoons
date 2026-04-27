@@ -257,6 +257,11 @@ export interface ViewerFrame {
      *  formation tightening (synaspismos). Visualized with a dark
      *  ring around the unit. */
     contact: 0 | 1;
+    /** Group id (formation cohesion bucket). Two racs with same gid
+     *  cohere together. Splits assign new gids when a group exceeds
+     *  its doctrine's maxFormationSize. Viewer color-tints by gid
+     *  hash so splits are visually obvious. */
+    groupId: number;
   }>;
   /** Per-tick attack lines emitted this tick. Empty when no attacks fired. */
   attacks: ViewerAttack[];

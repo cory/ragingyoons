@@ -40,7 +40,7 @@ import {
   findRacRowById,
 } from "../state.js";
 import { allocBoidFields, buildBoidFields, sampleField } from "../fields.js";
-import { computeDoctrineMod, DOCTRINE_KNOBS } from "../doctrines.js";
+import { computeDoctrineMod, DOCTRINE_KNOBS, DOCTRINES } from "../doctrines.js";
 
 /** Step (meters) used for central-difference gradient of the density
  *  field. Smaller = sharper response to local density variation; too
@@ -60,6 +60,14 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
   }
   const fields = state._boidFields;
   buildBoidFields(state, fields);
+
+  // Compute per-group centroids for cohesion. Splitting also happens
+  // here when a group exceeds its doctrine's maxFormationSize. This
+  // replaces the old field-based cohesion which had no notion of
+  // distinct groups (so two phalanxes from different bins would pull
+  // toward each other across 30m of empty field).
+  const groupStats = computeGroupStats(state);
+  applyFormationSplits(state, groupStats);
 
   for (let i = 0; i < n; i++) {
     if (!state.rac.alive[i]) continue;
@@ -151,14 +159,18 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const cohKEff = profile.cohesionK * (1 - bold * 0.8) * dMod.cohesionKMul;
     const alignKEff = profile.alignmentK * (1 - bold * 0.8);
 
-    // ---- Cohesion: toward local same-side same-role centroid. ----
+    // ---- Cohesion: toward this rac's group centroid. ----
+    // Uses analytical group centroid (not field sample) so two
+    // distinct groups of the same role/side don't pull together.
+    // Splits and merges are reflected on the next tick.
     let cohX = 0;
     let cohY = 0;
     if (cohKEff > 0) {
-      const myDens = sampleField(fields, fields.density[myCh], myX, myY);
-      if (myDens > 1e-3) {
-        const cx = sampleField(fields, fields.centroidNumX[myCh], myX, myY) / myDens;
-        const cy = sampleField(fields, fields.centroidNumY[myCh], myX, myY) / myDens;
+      const myGroupId = state.rac.groupId[i];
+      const stats = groupStats.get(myGroupId);
+      if (stats && stats.count >= 2) {
+        const cx = stats.sumX / stats.count;
+        const cy = stats.sumY / stats.count;
         const tdx = cx - myX;
         const tdy = cy - myY;
         const td = Math.hypot(tdx, tdy);
@@ -457,6 +469,113 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     state.rac.prevFacing[i] = state.rac.facing[i];
     if (newVx !== 0 || newVy !== 0) {
       state.rac.facing[i] = Math.atan2(newVy, newVx);
+    }
+  }
+}
+
+interface GroupStats {
+  count: number;
+  sumX: number;
+  sumY: number;
+  members: number[];
+  doctrineIdx: number;
+  owner: 0 | 1;
+}
+
+/** Per-tick: scan alive racs, bucket by groupId, compute centroid
+ *  position and member list. Used by cohesion (centroid pull) and
+ *  by the split logic below (member partitioning). */
+function computeGroupStats(state: BattleState): Map<number, GroupStats> {
+  const out = new Map<number, GroupStats>();
+  for (let i = 0; i < state.rac.count; i++) {
+    if (!state.rac.alive[i]) continue;
+    const gid = state.rac.groupId[i];
+    let s = out.get(gid);
+    if (!s) {
+      s = {
+        count: 0,
+        sumX: 0,
+        sumY: 0,
+        members: [],
+        doctrineIdx: state.rac.doctrineIdx[i],
+        owner: state.rac.owner[i] as 0 | 1,
+      };
+      out.set(gid, s);
+    }
+    s.count += 1;
+    s.sumX += state.rac.x[i];
+    s.sumY += state.rac.y[i];
+    s.members.push(i);
+  }
+  return out;
+}
+
+/** When a group exceeds its doctrine's maxFormationSize, partition
+ *  its members along the doctrine's splitAxis. The bigger half keeps
+ *  the original groupId; the smaller half (or upper half on ties)
+ *  gets state.nextGroupId++.
+ *
+ *  Determinism: the partition is by sorted projection onto the axis,
+ *  median split, with row-index tiebreak. Same inputs → same split.
+ */
+function applyFormationSplits(state: BattleState, stats: Map<number, GroupStats>): void {
+  // Iterate stats in groupId order so the split sequence is
+  // deterministic across runs. Map iteration order is insertion;
+  // computeGroupStats inserts in row-index order (which is stable
+  // per tick after the per-tick shuffle).
+  const sortedGids: number[] = [...stats.keys()].sort((a, b) => a - b);
+  for (const gid of sortedGids) {
+    const s = stats.get(gid)!;
+    const def = DOCTRINES[s.doctrineIdx];
+    if (!def || def.splitAxis === "none") continue;
+    if (s.count <= def.maxFormationSize) continue;
+
+    // Pick split axis as a 2D unit vector. "lateral" / "front-rear"
+    // are relative to the group's seek direction (toward enemy).
+    // We approximate "toward enemy" as the side-mirror: side 0
+    // faces -x, side 1 faces +x.
+    const forwardX = s.owner === 0 ? -1 : 1;
+    const forwardY = 0;
+    let axisX = 1, axisY = 0; // direction we project members along to bisect
+    switch (def.splitAxis) {
+      case "lateral":
+        // Bisect perpendicular to forward → axis is forward direction.
+        axisX = forwardX;
+        axisY = forwardY;
+        break;
+      case "front-rear":
+        // Bisect along forward → axis is perpendicular to forward.
+        axisX = -forwardY;
+        axisY = forwardX;
+        break;
+      case "perpendicular":
+        // Bisect perpendicular to enemy axis (cardinal +x).
+        axisX = 1;
+        axisY = 0;
+        break;
+      case "random": {
+        // Hash gid for deterministic per-group axis selection.
+        const h = ((gid * 2654435761) >>> 0) / 4294967296;
+        const ang = h * Math.PI * 2;
+        axisX = Math.cos(ang);
+        axisY = Math.sin(ang);
+        break;
+      }
+    }
+
+    // Project each member onto the axis (relative to centroid) and
+    // sort. Lower half keeps gid; upper half gets new gid.
+    const cx = s.sumX / s.count;
+    const cy = s.sumY / s.count;
+    const projections: { row: number; t: number }[] = s.members.map((row) => ({
+      row,
+      t: (state.rac.x[row] - cx) * axisX + (state.rac.y[row] - cy) * axisY,
+    }));
+    projections.sort((a, b) => (a.t === b.t ? a.row - b.row : a.t - b.t));
+    const half = Math.floor(projections.length / 2);
+    const newGid = state.nextGroupId++;
+    for (let k = half; k < projections.length; k++) {
+      state.rac.groupId[projections[k].row] = newGid;
     }
   }
 }
