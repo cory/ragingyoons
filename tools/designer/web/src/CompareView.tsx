@@ -16,11 +16,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   resolveTimeout,
   setupBattle,
+  setupShapeBattle,
   tick,
   type BattleConfig,
   type BattleState,
   type ContentBundle,
+  type ShapeBattleConfig,
 } from "@sim/index.js";
+import { FORMATIONS, type FormationId } from "@sim/formations.js";
 import { MemoryLogger } from "@sim/log.js";
 import { DOCTRINE_KNOBS, type DoctrineKnobs } from "@sim/doctrines.js";
 import { loadContentFromApi } from "./sim-bridge.js";
@@ -31,9 +34,19 @@ interface Knobset {
   knobs: Partial<DoctrineKnobs> | null;
 }
 
+type CellMode = "comp" | "shape";
+
 interface CellConfig {
+  mode: CellMode;
+  // comp mode
   compA: string;
   compB: string;
+  // shape mode
+  shapeUnit: string;
+  shapeCount: number;
+  shapeFormation: FormationId | "default";
+  shapeEnemyBin: string;
+  // shared
   knobsetId: string;
   seed: number;
 }
@@ -102,21 +115,35 @@ function runOneBattle(content: ContentBundle, cfg: CellConfig, knobs: Partial<Do
 
   try {
     const battleId = uuidv4();
-    const battleCfg: BattleConfig = {
-      seed: cfg.seed,
-      battleId,
-      compA: cfg.compA,
-      compB: cfg.compB,
-      bounds: { w: BOUNDS_W, h: BOUNDS_H },
-      verbosity: "events",
-    };
     const log = new MemoryLogger({
       battle_id: battleId,
       seed: cfg.seed,
       service_version: "compare",
       content_version: content.version,
     });
-    const state = setupBattle(content, battleCfg);
+    let state: BattleState;
+    if (cfg.mode === "shape") {
+      const shapeCfg: ShapeBattleConfig = {
+        seed: cfg.seed,
+        battleId,
+        bounds: { w: BOUNDS_W, h: BOUNDS_H },
+        unitId: cfg.shapeUnit,
+        count: cfg.shapeCount,
+        formationId: cfg.shapeFormation === "default" ? undefined : cfg.shapeFormation,
+        enemyBinUnitId: cfg.shapeEnemyBin,
+      };
+      state = setupShapeBattle(content, shapeCfg);
+    } else {
+      const battleCfg: BattleConfig = {
+        seed: cfg.seed,
+        battleId,
+        compA: cfg.compA,
+        compB: cfg.compB,
+        bounds: { w: BOUNDS_W, h: BOUNDS_H },
+        verbosity: "events",
+      };
+      state = setupBattle(content, battleCfg);
+    }
     log.setTickReader(() => state.tick);
     log.drain();
     const frames: CellFrame[] = [captureFrame(state)];
@@ -204,8 +231,24 @@ export function CompareView() {
   // all-time-best doesn't exist yet, both cells fall back to default
   // and the user picks something else.
   const [cells, setCells] = useState<CellConfig[]>([
-    { compA: "doc-fire-team", compB: "doc-phalanx", knobsetId: "default", seed: 0xcafe },
-    { compA: "doc-fire-team", compB: "doc-phalanx", knobsetId: "all-time-best", seed: 0xcafe },
+    {
+      mode: "comp",
+      compA: "doc-fire-team", compB: "doc-phalanx",
+      shapeUnit: "suburban-barbarian-infantry-smasher",
+      shapeCount: 20,
+      shapeFormation: "default",
+      shapeEnemyBin: "city-barbarian-tank-brick",
+      knobsetId: "default", seed: 0xcafe,
+    },
+    {
+      mode: "comp",
+      compA: "doc-fire-team", compB: "doc-phalanx",
+      shapeUnit: "suburban-barbarian-infantry-smasher",
+      shapeCount: 20,
+      shapeFormation: "default",
+      shapeEnemyBin: "city-barbarian-tank-brick",
+      knobsetId: "all-time-best", seed: 0xcafe,
+    },
   ]);
   const [results, setResults] = useState<(CellResult | null)[]>([]);
   const [tickIdx, setTickIdx] = useState(0);
@@ -247,6 +290,10 @@ export function CompareView() {
   const compIds = useMemo(() => {
     if (!content) return [];
     return [...content.comps.keys()].sort();
+  }, [content]);
+  const unitIds = useMemo(() => {
+    if (!content) return [];
+    return [...content.units.keys()].sort();
   }, [content]);
 
   const runAll = useCallback(async () => {
@@ -389,18 +436,48 @@ export function CompareView() {
         {cells.map((cell, i) => (
           <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11 }}>
-              <SelectField
-                label="A"
-                value={cell.compA}
-                options={compIds}
-                onChange={(v) => updateCell(i, { compA: v })}
-              />
-              <SelectField
-                label="B"
-                value={cell.compB}
-                options={compIds}
-                onChange={(v) => updateCell(i, { compB: v })}
-              />
+              <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 2 }}>
+                <button
+                  onClick={() => updateCell(i, { mode: "comp" })}
+                  style={modeBtnStyle(cell.mode === "comp")}
+                  title="full comp-vs-comp battle"
+                >comp</button>
+                <button
+                  onClick={() => updateCell(i, { mode: "shape" })}
+                  style={modeBtnStyle(cell.mode === "shape")}
+                  title="N units of one type vs one enemy bin (no other forces)"
+                >shape</button>
+                {cells.length > 1 && (
+                  <button onClick={() => removeCell(i)} title="remove cell" style={{ background: "transparent", border: "none", color: "#777", cursor: "pointer", fontSize: 16, marginLeft: "auto" }}>×</button>
+                )}
+              </div>
+              {cell.mode === "comp" ? (
+                <>
+                  <SelectField label="A" value={cell.compA} options={compIds}
+                    onChange={(v) => updateCell(i, { compA: v })} />
+                  <SelectField label="B" value={cell.compB} options={compIds}
+                    onChange={(v) => updateCell(i, { compB: v })} />
+                </>
+              ) : (
+                <>
+                  <SelectField label="unit" value={cell.shapeUnit} options={unitIds}
+                    onChange={(v) => updateCell(i, { shapeUnit: v })} />
+                  <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <span style={{ width: 40, color: "#aaa" }}>count</span>
+                    <input type="number" value={cell.shapeCount}
+                      onChange={(e) => updateCell(i, { shapeCount: Math.max(1, Math.min(500, Number(e.target.value))) })}
+                      style={{ flexGrow: 1, background: "#1a1a1a", color: "#ddd", border: "1px solid #333", borderRadius: 3, padding: "2px 4px" }} />
+                  </label>
+                  <SelectField label="form" value={cell.shapeFormation}
+                    options={["default", ...FORMATIONS.filter((f) => {
+                      const u = content?.units.get(cell.shapeUnit);
+                      return u && f.role === u.role;
+                    }).map((f) => f.id)]}
+                    onChange={(v) => updateCell(i, { shapeFormation: v as FormationId | "default" })} />
+                  <SelectField label="bin" value={cell.shapeEnemyBin} options={unitIds}
+                    onChange={(v) => updateCell(i, { shapeEnemyBin: v })} />
+                </>
+              )}
               <SelectField
                 label="knobs"
                 value={cell.knobsetId}
@@ -416,9 +493,6 @@ export function CompareView() {
                   onChange={(e) => updateCell(i, { seed: Number(e.target.value) })}
                   style={{ flexGrow: 1, background: "#1a1a1a", color: "#ddd", border: "1px solid #333", borderRadius: 3, padding: "2px 4px" }}
                 />
-                {cells.length > 1 && (
-                  <button onClick={() => removeCell(i)} title="remove cell" style={{ background: "transparent", border: "none", color: "#777", cursor: "pointer", fontSize: 16 }}>×</button>
-                )}
               </label>
             </div>
             <canvas
@@ -477,6 +551,19 @@ function btnStyle(bg: string): React.CSSProperties {
     borderRadius: 4,
     cursor: "pointer",
     fontSize: 13,
+    fontWeight: 500,
+  };
+}
+
+function modeBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: "2px 10px",
+    background: active ? "#446" : "#222",
+    color: active ? "#fff" : "#888",
+    border: "1px solid #333",
+    borderRadius: 3,
+    cursor: "pointer",
+    fontSize: 11,
     fontWeight: 500,
   };
 }

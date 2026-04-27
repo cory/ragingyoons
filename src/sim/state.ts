@@ -16,7 +16,13 @@ import {
 import { type RngState, makeRng } from "./rng.js";
 import { applyBinHpSynergies, populateSynergyCounts } from "./subsys/synergy.js";
 import { composeTactics, type TacticOverrideMap, type TacticProfile } from "./tactics.js";
-import { FORMATIONS } from "./formations.js";
+import {
+  DEFAULT_FORMATION_BY_ROLE,
+  FORMATIONS,
+  FORMATION_TO_IDX,
+  type FormationId,
+} from "./formations.js";
+import { DOCTRINE_TO_IDX, doctrineFor, teamSizeFor } from "./doctrines.js";
 
 /** Cap on simultaneously-tracked entities. Generous for v0; tighten later. */
 export const MAX_BINS = 32;
@@ -350,6 +356,146 @@ function placementForOwner(idx: number, owner: Owner, bounds: { w: number; h: nu
   const x = sign * (bounds.w * 0.30 + col * bounds.w * 0.10);
   const y = (row - 0.5) * bounds.h * 0.30;
   return { x, y };
+}
+
+/** Synthetic battle config — N units of one type marching to a single
+ *  enemy bin. Used by the designer's shape-lab cells in CompareView
+ *  to tune formation visuals without the full comp-vs-comp dynamics. */
+export interface ShapeBattleConfig {
+  seed: number;
+  battleId: string;
+  bounds: { w: number; h: number };
+  /** Side 0: spawn `count` racs of this unit. */
+  unitId: string;
+  count: number;
+  /** Optional formation override; falls back to role default. */
+  formationId?: FormationId;
+  /** Side 1: a single bin of this unit (the punching bag). It does
+   *  NOT spawn raccoons (garrison_cap is forced to 0 at placement). */
+  enemyBinUnitId: string;
+  /** Optional HP override for the punching-bag bin (default = card hp). */
+  enemyBinHp?: number;
+  disableSynergies?: boolean;
+}
+
+/** Build a state for the shape-lab: N alive racs of one unit vs a
+ *  single enemy bin (no garrison, just sits there as a target). All
+ *  racs are pre-targeted on the bin. */
+export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig): BattleState {
+  const unit = content.units.get(cfg.unitId);
+  if (!unit) throw new Error(`unknown unit "${cfg.unitId}"`);
+  const enemyUnit = content.units.get(cfg.enemyBinUnitId);
+  if (!enemyUnit) throw new Error(`unknown enemy bin unit "${cfg.enemyBinUnitId}"`);
+
+  const state: BattleState = {
+    tick: 0,
+    rng: makeRng(cfg.seed),
+    battleId: cfg.battleId,
+    contentVersion: content.version,
+    seed: cfg.seed,
+    bounds: cfg.bounds,
+    unitIdTable: [],
+    bin: emptyBins(),
+    rac: emptyRacs(),
+    atk: emptyAtks(),
+    nextBinId: 1,
+    nextRacId: 1,
+    nextAtkId: 1,
+    nextGroupId: 1,
+    winner: -1,
+    endReason: null,
+    tacticPerSide: composeTactics(),
+    formationProfile: [[], []],
+    formationContactProfile: [[], []],
+    racRowById: new Map(),
+    binRowById: new Map(),
+    disableSynergies: cfg.disableSynergies ?? false,
+  };
+  composeFormationProfiles(state);
+
+  // Resolve formation + doctrine for the spawned racs.
+  const formationId = cfg.formationId ?? DEFAULT_FORMATION_BY_ROLE[unit.role];
+  const formationIdx = FORMATION_TO_IDX[formationId];
+  const formation = FORMATIONS[formationIdx];
+  const doctrineId = doctrineFor(unit.environment, unit.curiosity);
+  const doctrineIdx = DOCTRINE_TO_IDX[doctrineId];
+  const teamSize = teamSizeFor(doctrineIdx);
+
+  // Place the enemy punching-bag bin on side 1 at +30% of bounds.
+  const halfW = cfg.bounds.w * 0.5;
+  const binX = halfW * 0.6;
+  const binY = 0;
+  const binSlot = state.bin.count;
+  state.bin.id[binSlot] = state.nextBinId++;
+  state.bin.owner[binSlot] = 1;
+  state.bin.unitIdIdx[binSlot] = internUnitId(state, enemyUnit.id);
+  state.bin.envIdx[binSlot] = ENV_TO_IDX[enemyUnit.environment];
+  state.bin.curIdx[binSlot] = CURIOSITY_TO_IDX[enemyUnit.curiosity];
+  const binHp = cfg.enemyBinHp ?? enemyUnit.bin.hp;
+  state.bin.hp[binSlot] = binHp;
+  state.bin.hpMax[binSlot] = binHp;
+  state.bin.x[binSlot] = binX;
+  state.bin.y[binSlot] = binY;
+  state.bin.starTier[binSlot] = 1;
+  state.bin.garrisonCap[binSlot] = 0; // <-- key: bin never spawns
+  for (let s = 0; s < MAX_GARRISON_SLOTS; s++) {
+    state.bin.slotRespawnT[binSlot * MAX_GARRISON_SLOTS + s] = Number.POSITIVE_INFINITY;
+    state.bin.slotOccupant[binSlot * MAX_GARRISON_SLOTS + s] = -1;
+  }
+  state.bin.alive[binSlot] = 1;
+  state.bin.count = binSlot + 1;
+  state.binRowById.set(state.bin.id[binSlot], binSlot);
+
+  // Place side-0 racs in formation arrangement around (-30% of bounds, 0).
+  const baseX = -halfW * 0.6;
+  const baseY = 0;
+  const groupId = state.nextGroupId++;
+  const profile = state.formationProfile[0][formationIdx];
+  // forward = +1 because the enemy is in +x direction from us.
+  const forward = 1;
+  for (let k = 0; k < cfg.count; k++) {
+    if (state.rac.count >= state.rac.id.length) break;
+    const off = formation.arrange({ burstIdx: k, burstSize: cfg.count, forward });
+    const racRow = state.rac.count;
+    const racId = state.nextRacId++;
+    state.rac.id[racRow] = racId;
+    state.racRowById.set(racId, racRow);
+    state.rac.owner[racRow] = 0;
+    state.rac.sourceBinId[racRow] = -1;
+    state.rac.sourceSlotIdx[racRow] = -1;
+    state.rac.unitIdIdx[racRow] = internUnitId(state, unit.id);
+    state.rac.role[racRow] = ROLE_TO_IDX[unit.role];
+    state.rac.env[racRow] = ENV_TO_IDX[unit.environment];
+    state.rac.cur[racRow] = CURIOSITY_TO_IDX[unit.curiosity];
+    state.rac.hp[racRow] = unit.stats.hp;
+    state.rac.hpMax[racRow] = unit.stats.hp;
+    state.rac.rage[racRow] = 0;
+    state.rac.rageCap[racRow] = unit.rage.capacity;
+    state.rac.x[racRow] = baseX + off.dx;
+    state.rac.y[racRow] = baseY + off.dy;
+    state.rac.vx[racRow] = 0;
+    state.rac.vy[racRow] = 0;
+    state.rac.facing[racRow] = 0; // +x toward enemy
+    state.rac.prevFacing[racRow] = 0;
+    state.rac.targetId[racRow] = state.bin.id[binSlot];
+    state.rac.targetKind[racRow] = TARGET_KIND_BIN;
+    state.rac.attackCooldown[racRow] = 0;
+    state.rac.statuses[racRow] = [];
+    state.rac.alive[racRow] = 1;
+    state.rac.effSpeed[racRow] = unit.stats.speed * profile.speedMul;
+    state.rac.effDamage[racRow] = unit.stats.damage;
+    state.rac.effRange[racRow] = unit.stats.range;
+    state.rac.effAttackRate[racRow] = unit.stats.attack_rate;
+    state.rac.effArmor[racRow] = unit.stats.armor;
+    state.rac.dmgTakenMul[racRow] = 1;
+    state.rac.surroundedDamageMul[racRow] = 1;
+    state.rac.formationIdx[racRow] = formationIdx;
+    state.rac.doctrineIdx[racRow] = doctrineIdx;
+    state.rac.teamId[racRow] = Math.floor(k / teamSize);
+    state.rac.groupId[racRow] = groupId;
+    state.rac.count = racRow + 1;
+  }
+  return state;
 }
 
 /** Build a battle state from two comp ids. Uses the FIRST four bins listed
