@@ -21,6 +21,7 @@ import {
   findBinRowById,
   findRacRowById,
 } from "../state.js";
+import { DOCTRINE_KNOBS } from "../doctrines.js";
 import { forEachNear } from "../grid.js";
 import { freeRacSlot } from "./spawn.js";
 import { spawnProjectile } from "./projectile.js";
@@ -335,6 +336,31 @@ export function markRacDead(
   });
 }
 
+/** Compute the bin's defender-shield damage multiplier. The design
+ *  intent is "kill the army first, then the bin" — so the shield is
+ *  a SIDE-level tally of alive raccoons, not local proximity. As the
+ *  bin's army is attrited the shield drops; once they're wiped, bins
+ *  fall fast. The local-proximity version didn't do the work because
+ *  defenders typically march away from their bin toward the enemy.
+ *
+ *  binShieldRadius is unused now; kept as a knob the autotuner can
+ *  ignore (or repurpose for a future hybrid model). */
+function computeBinShieldMul(state: BattleState, binRow: number): number {
+  const shieldMax = DOCTRINE_KNOBS.binShieldMax;
+  if (shieldMax <= 0) return 1;
+  const fullAt = Math.max(1, DOCTRINE_KNOBS.binShieldFullAt);
+  const binOwner = state.bin.owner[binRow];
+  // Count all alive racs on the same side as the bin.
+  let count = 0;
+  for (let j = 0; j < state.rac.count; j++) {
+    if (!state.rac.alive[j]) continue;
+    if (state.rac.owner[j] !== binOwner) continue;
+    count++;
+  }
+  const frac = Math.min(1, count / fullAt);
+  return 1 - frac * shieldMax;
+}
+
 export function applyBinDamage(
   state: BattleState,
   content: ContentBundle,
@@ -343,8 +369,11 @@ export function applyBinDamage(
   tgtBinRow: number,
   dmgRaw: number,
 ): void {
-  // Bins have no armor in v0a — dmg lands raw.
-  const dmg = Math.max(MIN_DAMAGE, dmgRaw);
+  // Bins have no armor in v0a — dmg lands raw, then is reduced by
+  // the defender-shield multiplier. The shield maps "you can't kill
+  // the bin while the army defends it" into an attrition gradient.
+  const shieldMul = computeBinShieldMul(state, tgtBinRow);
+  const dmg = Math.max(MIN_DAMAGE, dmgRaw * shieldMul);
   const hpBefore = state.bin.hp[tgtBinRow];
   const hpAfter = hpBefore - dmg;
   state.bin.hp[tgtBinRow] = hpAfter;
@@ -359,6 +388,7 @@ export function applyBinDamage(
     dmg_raw: dmgRaw,
     dmg_after_armor: dmg,
     armor: 0,
+    bin_shield_mul: shieldMul,
     tgt_hp_before: hpBefore,
     tgt_hp_after: hpAfter,
   });

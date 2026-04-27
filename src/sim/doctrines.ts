@@ -119,6 +119,18 @@ export const DOCTRINE_KNOBS = {
   deathRageSeek: 2.0,
   /** death-rage speed multiplier. */
   deathRageSpeed: 1.3,
+
+  // ---- Bin shield from living defenders (side-total). ----
+  // Bins take reduced damage scaled by how many friendly raccoons
+  // are still alive on the bin's side. Once an army is wiped, its
+  // bins fall fast. Stops fire-team's "dance through the army to
+  // kill the bin" cheese: you have to attrit the defenders first.
+  /** Max damage reduction at full defender support (0 = disabled). */
+  binShieldMax: 0.85,
+  /** Number of side-alive raccoons for full shield. */
+  binShieldFullAt: 30,
+  /** Reserved for future hybrid (proximity × side-total) shield model. */
+  binShieldRadius: 12,
 };
 
 export type DoctrineKnobs = typeof DOCTRINE_KNOBS;

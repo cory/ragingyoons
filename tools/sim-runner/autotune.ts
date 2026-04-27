@@ -68,6 +68,9 @@ const INITIAL_KNOBS: DoctrineKnobs = {
   deathRageDmgRed: 0.7,
   deathRageSeek: 2.0,
   deathRageSpeed: 1.3,
+  binShieldMax: 0.85,
+  binShieldFullAt: 30,
+  binShieldRadius: 12,
 };
 
 interface KnobBound {
@@ -110,6 +113,9 @@ const BOUNDS: Record<keyof DoctrineKnobs, KnobBound> = {
   deathRageDmgRed: { min: 0.4, max: 1.0, step: 0.05 },
   deathRageSeek: { min: 1.0, max: 3.0, step: 0.15 },
   deathRageSpeed: { min: 0.8, max: 1.8, step: 0.1 },
+  binShieldMax: { min: 0.0, max: 0.95, step: 0.05 },
+  binShieldFullAt: { min: 8, max: 80, step: 4 },
+  binShieldRadius: { min: 6, max: 30, step: 2 },
 };
 
 const KNOB_KEYS = Object.keys(BOUNDS) as Array<keyof DoctrineKnobs>;
