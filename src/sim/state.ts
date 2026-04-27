@@ -13,7 +13,7 @@ import {
   ENV_TO_IDX,
   ROLE_TO_IDX,
 } from "./content.js";
-import { type RngState, makeRng } from "./rng.js";
+import { type RngState, makeRng, rngFloat } from "./rng.js";
 import { applyBinHpSynergies, populateSynergyCounts } from "./subsys/synergy.js";
 import { composeTactics, type TacticOverrideMap, type TacticProfile } from "./tactics.js";
 import {
@@ -413,10 +413,12 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   };
   composeFormationProfiles(state);
 
-  // Resolve formation + doctrine for the spawned racs.
+  // Resolve formation + doctrine for the spawned racs. Formation drives
+  // the per-rac TacticProfile (cohesion / separation / seek weights); the
+  // boid system reforms a blob of racs into the formation's shape under
+  // those weights — no need to pre-arrange positions.
   const formationId = cfg.formationId ?? DEFAULT_FORMATION_BY_ROLE[unit.role];
   const formationIdx = FORMATION_TO_IDX[formationId];
-  const formation = FORMATIONS[formationIdx];
   const doctrineId = doctrineFor(unit.environment, unit.curiosity);
   const doctrineIdx = DOCTRINE_TO_IDX[doctrineId];
   const teamSize = teamSizeFor(doctrineIdx);
@@ -431,7 +433,12 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   state.bin.unitIdIdx[binSlot] = internUnitId(state, enemyUnit.id);
   state.bin.envIdx[binSlot] = ENV_TO_IDX[enemyUnit.environment];
   state.bin.curIdx[binSlot] = CURIOSITY_TO_IDX[enemyUnit.curiosity];
-  const binHp = cfg.enemyBinHp ?? enemyUnit.bin.hp;
+  // Default to a giant finite HP so the battle doesn't end when the
+  // racs reach the bin — shape-lab wants to watch the formation hold
+  // line of contact, not declare victory. Finite (not Infinity) so the
+  // viewer's hp/hpMax healthbar math doesn't NaN. An explicit override
+  // wins (use a small number to study kill-the-bin pacing).
+  const binHp = cfg.enemyBinHp ?? 1e9;
   state.bin.hp[binSlot] = binHp;
   state.bin.hpMax[binSlot] = binHp;
   state.bin.x[binSlot] = binX;
@@ -446,16 +453,27 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   state.bin.count = binSlot + 1;
   state.binRowById.set(state.bin.id[binSlot], binSlot);
 
-  // Place side-0 racs in formation arrangement around (-30% of bounds, 0).
+  // Place side-0 racs in a tight jittered blob around (-30% of bounds, 0).
+  // We *don't* spawn them in formation arrangement — the whole point of
+  // the shape-lab is to watch the boid + formation system reform a
+  // disordered crowd into the correct shape and march it to the enemy.
+  // Blob radius scales with sqrt(count) so density stays roughly constant.
   const baseX = -halfW * 0.6;
   const baseY = 0;
+  const blobR = 1.5 + Math.sqrt(cfg.count) * 0.5;
   const groupId = state.nextGroupId++;
   const profile = state.formationProfile[0][formationIdx];
-  // forward = +1 because the enemy is in +x direction from us.
-  const forward = 1;
   for (let k = 0; k < cfg.count; k++) {
     if (state.rac.count >= state.rac.id.length) break;
-    const off = formation.arrange({ burstIdx: k, burstSize: cfg.count, forward });
+    // Uniform-disc sampling via rejection from the unit square.
+    let jx = 0,
+      jy = 0;
+    for (let tries = 0; tries < 8; tries++) {
+      jx = rngFloat(state.rng) * 2 - 1;
+      jy = rngFloat(state.rng) * 2 - 1;
+      if (jx * jx + jy * jy <= 1) break;
+    }
+    const off = { dx: jx * blobR, dy: jy * blobR };
     const racRow = state.rac.count;
     const racId = state.nextRacId++;
     state.rac.id[racRow] = racId;
