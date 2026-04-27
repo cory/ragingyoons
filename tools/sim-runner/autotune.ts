@@ -137,6 +137,7 @@ interface CLIArgs {
   ticks: number;
   comps: string[];
   pop: number;
+  resume: boolean;
 }
 
 function parseArgs(argv: string[]): CLIArgs {
@@ -146,6 +147,7 @@ function parseArgs(argv: string[]): CLIArgs {
     seeds: 20,
     ticks: 1500,
     pop: 12,
+    resume: false,
     comps: ["doc-phalanx", "doc-fire-team", "doc-modern-patrol", "doc-fanatic"],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -156,6 +158,7 @@ function parseArgs(argv: string[]): CLIArgs {
     else if (a === "--seeds") { out.seeds = Number(v); i++; }
     else if (a === "--ticks") { out.ticks = Number(v); i++; }
     else if (a === "--pop") { out.pop = Number(v); i++; }
+    else if (a === "--resume") { out.resume = true; }
     else if (a === "--comps") {
       out.comps = String(v).split(",").map((s) => s.trim()).filter(Boolean);
       i++;
@@ -375,11 +378,34 @@ async function main(): Promise<void> {
   const t0 = Date.now();
   const rng = makeRng(0xc0ffee);
 
-  // Seed initial population: 1 = INITIAL_KNOBS (anchor at current
-  // hand-tuned values), rest = uniform random within bounds.
+  // Resume: load all-time best from prior runs as a pop seed. The
+  // rest of the pop is small mutations of it (warm start) plus a
+  // few random individuals (exploration).
+  const allTimeBestPath = path.join(REPO_ROOT, "lab", "autotune", "all-time-best.json");
+  let resumeKnobs: DoctrineKnobs | null = null;
+  if (args.resume) {
+    try {
+      const raw = await fs.readFile(allTimeBestPath, "utf8");
+      const parsed = JSON.parse(raw) as { knobs: DoctrineKnobs };
+      resumeKnobs = parsed.knobs;
+      process.stdout.write(`[autotune-ga] resuming from ${path.relative(REPO_ROOT, allTimeBestPath)}\n`);
+    } catch {
+      process.stdout.write(`[autotune-ga] no all-time best to resume; starting from defaults\n`);
+    }
+  }
+
+  // Seed initial population: anchor at INITIAL_KNOBS or resume best,
+  // then small mutations of the anchor + random individuals.
+  const anchor = resumeKnobs ?? INITIAL_KNOBS;
   const pop: { knobs: DoctrineKnobs; loss: number }[] = [];
-  pop.push({ knobs: { ...INITIAL_KNOBS }, loss: Infinity });
-  for (let i = 1; i < args.pop; i++) {
+  pop.push({ knobs: { ...anchor }, loss: Infinity });
+  // 1/3 of the rest = small mutations of the anchor (exploitation)
+  // 2/3 = uniform random (exploration)
+  const nMut = Math.max(0, Math.floor((args.pop - 1) / 3));
+  for (let i = 0; i < nMut; i++) {
+    pop.push({ knobs: mutate({ ...anchor }, rng, 0.25), loss: Infinity });
+  }
+  while (pop.length < args.pop) {
     pop.push({ knobs: randomKnobs(rng), loss: Infinity });
   }
 
@@ -406,12 +432,30 @@ async function main(): Promise<void> {
       .map((p, i) => ({ p, i }))
       .sort((a, b) => a.p.loss - b.p.loss);
 
-    // Update best-of-run.
+    // Update best-of-run + all-time-best (persisted to disk so the
+    // next --resume run starts from here).
     const eliteIdx = ranked[0].i;
     if (pop[eliteIdx].loss < bestLoss) {
       bestLoss = pop[eliteIdx].loss;
       bestKnobs = { ...pop[eliteIdx].knobs };
       bestMatrix = matrices[eliteIdx];
+      // Persist all-time best continuously (not just at end), so a
+      // crash or kill doesn't lose progress and so the UI can read
+      // the in-flight best.
+      const atb = { bestLoss, knobs: bestKnobs, matrix: bestMatrix, gen, ts: Date.now() };
+      try {
+        // Compare to existing all-time-best; only overwrite if better.
+        let prevBestLoss = Infinity;
+        try {
+          const prev = JSON.parse(await fs.readFile(allTimeBestPath, "utf8"));
+          if (typeof prev.bestLoss === "number") prevBestLoss = prev.bestLoss;
+        } catch {}
+        if (bestLoss < prevBestLoss) {
+          await fs.writeFile(allTimeBestPath, JSON.stringify(atb, null, 2));
+        }
+      } catch (e) {
+        process.stderr.write(`[autotune-ga] warn: failed to write all-time-best: ${String(e)}\n`);
+      }
     }
 
     // Stream every individual of this generation.

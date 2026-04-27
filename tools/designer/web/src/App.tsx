@@ -13,13 +13,14 @@ import {
 } from "./api";
 import { BattleViewer } from "./BattleViewer";
 import { TunePage } from "./TunePage";
+import { CompareView } from "./CompareView";
 
 const ENVS = ["city", "suburban", "park", "coastal"] as const;
 const CURIOSITIES = ["lockpickers", "tinkerers", "farmers", "barbarians"] as const;
 const ROLES = ["tank", "archer", "cavalry", "infantry"] as const;
-const TABS: ViewTab[] = ["units", "comps", "battles", "tune", "environments", "curiosities", "roles", "synergies", "statuses"];
+const TABS: ViewTab[] = ["units", "comps", "battles", "compare", "tune", "environments", "curiosities", "roles", "synergies", "statuses"];
 
-type ViewTab = "units" | "comps" | "battles" | "tune" | "environments" | "curiosities" | "roles" | "synergies" | "statuses";
+type ViewTab = "units" | "comps" | "battles" | "compare" | "tune" | "environments" | "curiosities" | "roles" | "synergies" | "statuses";
 
 interface CompBin {
   id: string;
@@ -106,6 +107,11 @@ export function App() {
               Watch the autotuner search the doctrine knob space. Loss
               curve, knob trajectories, live winrate heatmap.
             </div>
+          ) : tab === "compare" ? (
+            <div className="hint" style={{ padding: 12 }}>
+              Run up to 4 battles side-by-side with different knobsets.
+              Pick autotune checkpoints to compare "before vs after".
+            </div>
           ) : tab === "units" ? (
             <UnitGrid
               units={cards?.units ?? []}
@@ -159,6 +165,8 @@ export function App() {
         <section className="editor">
           {tab === "tune" ? (
             <TunePage />
+          ) : tab === "compare" ? (
+            <CompareView />
           ) : tab === "battles" ? (
             <BattleViewer />
           ) : tab === "comps" && cards ? (

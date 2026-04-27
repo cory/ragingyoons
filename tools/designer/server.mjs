@@ -516,26 +516,64 @@ app.post("/api/autotune/start", async (req, res) => {
   if (autotuneProc) {
     return res.status(409).json({ error: "autotune already running" });
   }
-  const { duration = 300, seeds = 20, ticks = 1500, workers = 4 } = req.body ?? {};
+  const { duration = 300, seeds = 20, ticks = 1500, workers = 4, pop = 12, resume = false } = req.body ?? {};
   // Truncate latest.ndjson so the client sees fresh iterations.
   await fs.mkdir(path.dirname(AUTOTUNE_LATEST), { recursive: true });
   await fs.writeFile(AUTOTUNE_LATEST, "");
   const args = [
     "tools/sim-runner/autotune.ts",
-    "--duration",
-    String(duration),
-    "--seeds",
-    String(seeds),
-    "--ticks",
-    String(ticks),
-    "--workers",
-    String(workers),
+    "--duration", String(duration),
+    "--seeds", String(seeds),
+    "--ticks", String(ticks),
+    "--workers", String(workers),
+    "--pop", String(pop),
   ];
+  if (resume) args.push("--resume");
   autotuneProc = spawn("npx", ["tsx", ...args], { cwd: REPO_ROOT, stdio: "ignore" });
   autotuneProc.on("exit", () => {
     autotuneProc = null;
   });
   res.json({ started: true, pid: autotuneProc.pid });
+});
+
+// Knobset library: enumerates available named knob sets the
+// BattleViewer / MultiBattleView can use. Pulls from:
+//   - "default": INITIAL_KNOBS sentinel ({} → server-side defaults)
+//   - "all-time-best": lab/autotune/all-time-best.json
+//   - per-run "best": lab/autotune/<stamp>/best.json (most recent few)
+app.get("/api/autotune/knobsets", async (_req, res) => {
+  try {
+    const out = [
+      { id: "default", label: "Defaults (no autotune)", knobs: null },
+    ];
+    const allTimeBestPath = path.join(REPO_ROOT, "lab", "autotune", "all-time-best.json");
+    try {
+      const j = JSON.parse(await fs.readFile(allTimeBestPath, "utf8"));
+      out.push({ id: "all-time-best", label: `All-time best (loss ${j.bestLoss?.toFixed?.(3) ?? "?"})`, knobs: j.knobs });
+    } catch {
+      // no all-time-best yet
+    }
+    // Per-run bests: scan lab/autotune/* dirs for best.json.
+    const baseDir = path.join(REPO_ROOT, "lab", "autotune");
+    try {
+      const entries = await fs.readdir(baseDir);
+      const stamps = entries.filter((e) => /^\d{4}-/.test(e)).sort().reverse().slice(0, 6);
+      for (const stamp of stamps) {
+        const p = path.join(baseDir, stamp, "best.json");
+        try {
+          const j = JSON.parse(await fs.readFile(p, "utf8"));
+          out.push({
+            id: `run-${stamp}`,
+            label: `Run ${stamp.slice(0, 19)} (loss ${j.bestLoss?.toFixed?.(3) ?? "?"})`,
+            knobs: j.knobs,
+          });
+        } catch {}
+      }
+    } catch {}
+    res.json({ knobsets: out });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
 });
 
 app.post("/api/autotune/stop", async (_req, res) => {
