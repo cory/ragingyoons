@@ -27,6 +27,33 @@ import {
  *  bookkeeping for marginal benefit). */
 export const TARGET_RETHINK_TICKS = 4;
 
+/** Role-affinity matrix: ROLE_AFFINITY[attackerRole][targetRole] is a
+ *  preference multiplier on the (1/d²) scoring. Values >1 mean
+ *  "prefer this matchup," <1 means "deprioritize." Indexed by
+ *  ROLE_TO_IDX (tank=0, archer=1, cavalry=2, infantry=3).
+ *
+ *  Design read:
+ *   - Tank prefers attacking infantry (1.2) and tanks (1.0); cavalry
+ *     less because they outpace tanks.
+ *   - Archer counter-snipes other archers (1.5), then squishy infantry
+ *     (1.2). Doesn't prioritize tanks (low: 0.7).
+ *   - Cavalry hunts archers (1.5) and infantry (1.4) — squishy
+ *     targets. Tanks deprioritized (0.5) because cavalry isn't built
+ *     to grind through armor.
+ *   - Infantry frontline-matches tanks (1.2) and other infantry (1.0).
+ */
+export const ROLE_AFFINITY: number[][] = [
+  // attacker:  tank  archer  cav   inf
+  /* tank */   [1.0,  1.0,    0.7,  1.2],
+  /* archer */ [0.7,  1.5,    1.0,  1.2],
+  /* cav */    [0.5,  1.5,    0.8,  1.4],
+  /* inf */    [1.2,  1.0,    0.8,  1.0],
+];
+
+/** Bonus weight on (1/d²) for low-HP targets — encourages finishing
+ *  wounded enemies. score *= (1 + LOW_HP_BONUS × (1 − hpFrac)). */
+const LOW_HP_BONUS = 0.5;
+
 export function targetTick(state: BattleState, content: ContentBundle, log: Logger): void {
   void content;
   // Use the most aggressive (lowest) rethink cadence across all
@@ -86,10 +113,15 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
       }
     }
 
-    // Find nearest enemy raccoon. Full scan — N is bounded and the
-    // simple inner loop is hot-cache-friendly.
+    // Find best enemy raccoon by SCORE (not just nearest). Score
+    // combines proximity (1/d²), role affinity (counter-picks), and
+    // a low-HP finishing bonus. Cavalry seeks squishy archers,
+    // archers counter-snipe other archers, etc.
+    const myRole = state.rac.role[i];
+    const affRow = ROLE_AFFINITY[myRole];
     let bestRacId = -1;
-    let bestRacD2 = Infinity;
+    let bestRacScore = -Infinity;
+    let bestRacD2 = Infinity; // tracked for the rac_target distance log field
     for (let j = 0; j < n; j++) {
       if (j === i) continue;
       if (!state.rac.alive[j]) continue;
@@ -97,10 +129,17 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
       const dx = state.rac.x[j] - myX;
       const dy = state.rac.y[j] - myY;
       const d2 = dx * dx + dy * dy;
+      if (d2 < 1) continue; // basically self / ~touching, skip the singular
+      const tgtRole = state.rac.role[j];
+      const affinity = affRow[tgtRole];
+      const hpFrac = state.rac.hpMax[j] > 0 ? state.rac.hp[j] / state.rac.hpMax[j] : 1;
+      const lowHpBoost = 1 + LOW_HP_BONUS * (1 - Math.max(0, Math.min(1, hpFrac)));
+      const score = (affinity * lowHpBoost) / d2;
       const id = state.rac.id[j];
-      if (d2 < bestRacD2 || (d2 === bestRacD2 && id < bestRacId)) {
-        bestRacD2 = d2;
+      if (score > bestRacScore || (score === bestRacScore && id < bestRacId)) {
+        bestRacScore = score;
         bestRacId = id;
+        bestRacD2 = d2;
       }
     }
 
