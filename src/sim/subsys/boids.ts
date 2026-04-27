@@ -40,7 +40,7 @@ import {
   findRacRowById,
 } from "../state.js";
 import { allocBoidFields, buildBoidFields, sampleField } from "../fields.js";
-import { computeDoctrineMod } from "../doctrines.js";
+import { computeDoctrineMod, DOCTRINE_KNOBS } from "../doctrines.js";
 
 /** Step (meters) used for central-difference gradient of the density
  *  field. Smaller = sharper response to local density variation; too
@@ -363,10 +363,18 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // that's surrounded is still tougher than a lone unit surrounded,
     // because rear ranks still help.
     let dmgMul = surrounded ? SURROUND_DMG_MUL : 1;
-    if (profile.supportBonusMax > 0) {
+    // For the phalanx doctrine in contact, the support-bonus magnitude
+    // is overridden by the autotuner knob (so the GA can rebalance
+    // without editing formation cards). Other formations use their
+    // profile value as before.
+    const supportMaxEff =
+      state.rac.doctrineIdx[i] === 1 /* phalanx */ && state.rac.contact[i]
+        ? DOCTRINE_KNOBS.phalanxSupportMax
+        : profile.supportBonusMax;
+    if (supportMaxEff > 0) {
       const friendlyHere = sampleField(fields, fields.sideDensity[myOwner], myX, myY);
       const supportFrac = Math.min(1, Math.max(0, friendlyHere / profile.supportBonusFullAt));
-      dmgMul *= 1 - profile.supportBonusMax * supportFrac;
+      dmgMul *= 1 - supportMaxEff * supportFrac;
     }
     state.rac.surroundedDamageMul[i] = dmgMul;
 
@@ -378,7 +386,18 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // tiny self-overlap density gradient remaining) would still go
     // at full speed in the noise direction. The threshold separates
     // "I want to GO" from "I want to STAY."
-    const maxV = state.rac.effSpeed[i] * (surrounded ? SURROUND_SPEED_MUL : 1) * dMod.speedMul;
+    // Phalanx contact speed: when this rac is the phalanx doctrine
+    // and in formation-contact mode, the autotuner can override the
+    // contact-mode slowdown (formation override is 0.2 default).
+    const phalanxContactSlow =
+      state.rac.doctrineIdx[i] === 1 /* phalanx */ && state.rac.contact[i]
+        ? DOCTRINE_KNOBS.phalanxContactSpeed / 0.2 // ratio vs the formation's hardcoded 0.2
+        : 1;
+    const maxV =
+      state.rac.effSpeed[i] *
+      (surrounded ? SURROUND_SPEED_MUL : 1) *
+      dMod.speedMul *
+      phalanxContactSlow;
     const desiredLen = Math.hypot(dvx, dvy);
     const COMMIT_THRESHOLD = 0.5; // intent must exceed this to maxV-go
     let newVx: number;

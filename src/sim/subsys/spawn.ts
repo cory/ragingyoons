@@ -34,6 +34,7 @@ import {
   isValidFormationId,
 } from "../formations.js";
 import {
+  DOCTRINE_KNOBS,
   DOCTRINE_TO_IDX,
   doctrineFor,
   teamSizeFor,
@@ -137,6 +138,23 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
       const doctrineId = doctrineFor(unit.environment, unit.curiosity);
       const doctrineIdx = DOCTRINE_TO_IDX[doctrineId];
       const teamSize = teamSizeFor(doctrineIdx);
+      // Per-doctrine stat scalars (autotuner balance levers). Default
+      // 1.0 = no change. Indexed by doctrine id.
+      const docHpMul =
+        doctrineId === "phalanx" ? DOCTRINE_KNOBS.phalanxHpMul :
+        doctrineId === "fire-team" ? DOCTRINE_KNOBS.fireTeamHpMul :
+        doctrineId === "modern-patrol" ? DOCTRINE_KNOBS.modernPatrolHpMul :
+        doctrineId === "fanatic" ? DOCTRINE_KNOBS.fanaticHpMul : 1.0;
+      const docDamageMul =
+        doctrineId === "phalanx" ? DOCTRINE_KNOBS.phalanxDamageMul :
+        doctrineId === "fire-team" ? DOCTRINE_KNOBS.fireTeamDamageMul :
+        doctrineId === "modern-patrol" ? DOCTRINE_KNOBS.modernPatrolDamageMul :
+        doctrineId === "fanatic" ? DOCTRINE_KNOBS.fanaticDamageMul : 1.0;
+      const docSpeedMul =
+        doctrineId === "phalanx" ? DOCTRINE_KNOBS.phalanxSpeedMul :
+        doctrineId === "fire-team" ? DOCTRINE_KNOBS.fireTeamSpeedMul :
+        doctrineId === "modern-patrol" ? DOCTRINE_KNOBS.modernPatrolSpeedMul :
+        doctrineId === "fanatic" ? DOCTRINE_KNOBS.fanaticSpeedMul : 1.0;
       // Forward direction: side-0 bins are at +x and want enemies at
       // -x, so forward (toward enemy) is -1 along x. side-1 mirrors.
       const forward = owner === 0 ? -1 : 1;
@@ -166,7 +184,7 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
 
         // Apply synergy mods that affect at-spawn quantities.
         const syn = synergyModsFor(state, racRow);
-        const hpAfterSyn = unit.stats.hp * syn.hpMul;
+        const hpAfterSyn = unit.stats.hp * syn.hpMul * docHpMul;
         state.rac.hp[racRow] = hpAfterSyn;
         state.rac.hpMax[racRow] = hpAfterSyn;
         state.rac.rage[racRow] = 0;
@@ -182,8 +200,8 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         // Effective stats fold in TACTIC speedMul so eff_speed at
         // rac_spawn IS the truth — no other code applies speedMul
         // downstream.
-        state.rac.effSpeed[racRow] = unit.stats.speed * syn.speedMul * profile.speedMul;
-        state.rac.effDamage[racRow] = unit.stats.damage * syn.damageMul;
+        state.rac.effSpeed[racRow] = unit.stats.speed * syn.speedMul * profile.speedMul * docSpeedMul;
+        state.rac.effDamage[racRow] = unit.stats.damage * syn.damageMul * docDamageMul;
         state.rac.effRange[racRow] = unit.stats.range * syn.rangeMul;
         state.rac.effAttackRate[racRow] = unit.stats.attack_rate * syn.attackRateMul;
         state.rac.effArmor[racRow] = unit.stats.armor + syn.armorAdd;

@@ -1,26 +1,27 @@
 /**
- * Doctrine-balance autotuner.
+ * Doctrine-balance autotuner — genetic algorithm.
  *
- * Random-local-search over DOCTRINE_KNOBS. Each iteration:
- *   1. Pick one random knob and perturb it by ±10–25%
- *   2. Run the comp matrix (k×k, N seeds each) under that knob set
- *   3. Compute loss = sum of squared distances from balance targets
- *   4. Accept if loss improves (greedy hill-climb)
+ * Population of 12 candidate knob-sets (chromosomes). Each generation:
+ *   1. Evaluate every individual via parallel comp-matrix battles.
+ *   2. Elitism: top 2 survive unchanged.
+ *   3. Tournament-2 selection picks parents.
+ *   4. Uniform 50/50 crossover per knob.
+ *   5. Mutation: each knob ±1-2 step sizes with p=0.15.
+ *   6. Replace the rest of the pop with offspring.
  *
- * Loss components:
- *   - Mirror penalty: each (D, D) winrate should be 50%. Sum (w − 0.5)².
- *   - Domination penalty: no doctrine's average cross-winrate should
- *     exceed 0.5 + DOMINANCE_BAND. Squared excess.
- *   - Floor penalty: no doctrine should average below 0.5 − DOMINANCE_BAND.
- *   - Variance bonus: cross-matchups close to 50% are uninteresting.
- *     Reward spread (some 30%/70% matchups) — small term.
+ * Why GA over hill-climb: the doctrine knob space has joint-knob
+ * effects (a doctrine's HP and damage need to coadapt) and likely
+ * multiple local optima (different RPS equilibria). GA's crossover
+ * combines knob clusters from successful individuals, and the
+ * population preserves diverse strategies rather than committing to
+ * one local minimum.
  *
- * Streams iteration records to lab/autotune/<timestamp>/iterations.ndjson
- * so the designer's tune page can poll and visualize evolution.
+ * Streams iteration NDJSON to lab/autotune/latest.ndjson with a
+ * `gen` and `ranking` so the tune UI can show per-generation views.
  *
  * CLI:
  *   npm run sim:autotune -- --duration 300 --workers 4 --seeds 20 \
- *     --comps doc-phalanx,doc-fire-team,doc-modern-patrol,doc-fanatic
+ *     --pop 12 --comps doc-phalanx,doc-fire-team,doc-modern-patrol,doc-fanatic
  */
 
 import { promises as fs } from "node:fs";
@@ -36,6 +37,20 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
 // Default starting knob values (must match DOCTRINE_KNOBS defaults).
 const INITIAL_KNOBS: DoctrineKnobs = {
+  phalanxHpMul: 1.0,
+  phalanxDamageMul: 1.0,
+  phalanxSpeedMul: 1.0,
+  phalanxSupportMax: 0.55,
+  phalanxContactSpeed: 0.2,
+  fireTeamHpMul: 1.0,
+  fireTeamDamageMul: 1.0,
+  fireTeamSpeedMul: 1.0,
+  modernPatrolHpMul: 1.0,
+  modernPatrolDamageMul: 1.0,
+  modernPatrolSpeedMul: 1.0,
+  fanaticHpMul: 1.0,
+  fanaticDamageMul: 1.0,
+  fanaticSpeedMul: 1.0,
   fireTeamPeriod: 30,
   fireTeamCoverStart: 0.5,
   fireTeamCoverEnd: 0.83,
@@ -58,14 +73,26 @@ const INITIAL_KNOBS: DoctrineKnobs = {
 interface KnobBound {
   min: number;
   max: number;
-  /** Step size for perturbation (proportional to range). */
   step: number;
 }
 
-/** Per-knob bounds and search step. Tightly clamped on either end so
- *  a runaway perturbation can't break the sim. Step is a fraction of
- *  the knob's natural range. */
 const BOUNDS: Record<keyof DoctrineKnobs, KnobBound> = {
+  // Stat scalars: roughly 0.5–1.5× to allow doubling/halving in steps.
+  phalanxHpMul: { min: 0.5, max: 2.0, step: 0.1 },
+  phalanxDamageMul: { min: 0.5, max: 2.0, step: 0.1 },
+  phalanxSpeedMul: { min: 0.6, max: 1.4, step: 0.05 },
+  phalanxSupportMax: { min: 0.0, max: 0.8, step: 0.05 },
+  phalanxContactSpeed: { min: 0.0, max: 0.6, step: 0.05 },
+  fireTeamHpMul: { min: 0.5, max: 2.0, step: 0.1 },
+  fireTeamDamageMul: { min: 0.5, max: 2.0, step: 0.1 },
+  fireTeamSpeedMul: { min: 0.6, max: 1.4, step: 0.05 },
+  modernPatrolHpMul: { min: 0.5, max: 2.0, step: 0.1 },
+  modernPatrolDamageMul: { min: 0.5, max: 2.0, step: 0.1 },
+  modernPatrolSpeedMul: { min: 0.6, max: 1.4, step: 0.05 },
+  fanaticHpMul: { min: 0.5, max: 2.0, step: 0.1 },
+  fanaticDamageMul: { min: 0.5, max: 2.0, step: 0.1 },
+  fanaticSpeedMul: { min: 0.6, max: 1.4, step: 0.05 },
+  // Rhythm / behavior knobs.
   fireTeamPeriod: { min: 12, max: 60, step: 4 },
   fireTeamCoverStart: { min: 0.2, max: 0.7, step: 0.05 },
   fireTeamCoverEnd: { min: 0.55, max: 0.95, step: 0.05 },
@@ -88,13 +115,19 @@ const BOUNDS: Record<keyof DoctrineKnobs, KnobBound> = {
 const KNOB_KEYS = Object.keys(BOUNDS) as Array<keyof DoctrineKnobs>;
 
 interface IterationRecord {
-  iter: number;
+  /** Generation index (0 = initial random pop). */
+  gen: number;
+  /** Within-generation rank (0 = best). */
+  rank: number;
+  /** Wall-clock seconds since autotune start. */
   wallTimeS: number;
   knobs: DoctrineKnobs;
   matrix: Record<string, Record<string, number>>;
   loss: number;
-  accepted: boolean;
+  /** Best loss seen across all generations and individuals so far. */
   bestLoss: number;
+  /** Pop size for this generation (UI uses this to chunk). */
+  popSize: number;
 }
 
 interface CLIArgs {
@@ -103,6 +136,7 @@ interface CLIArgs {
   seeds: number;
   ticks: number;
   comps: string[];
+  pop: number;
 }
 
 function parseArgs(argv: string[]): CLIArgs {
@@ -111,24 +145,18 @@ function parseArgs(argv: string[]): CLIArgs {
     workers: 4,
     seeds: 20,
     ticks: 1500,
+    pop: 12,
     comps: ["doc-phalanx", "doc-fire-team", "doc-modern-patrol", "doc-fanatic"],
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const v = argv[i + 1];
-    if (a === "--duration") {
-      out.duration = Number(v);
-      i++;
-    } else if (a === "--workers") {
-      out.workers = Number(v);
-      i++;
-    } else if (a === "--seeds") {
-      out.seeds = Number(v);
-      i++;
-    } else if (a === "--ticks") {
-      out.ticks = Number(v);
-      i++;
-    } else if (a === "--comps") {
+    if (a === "--duration") { out.duration = Number(v); i++; }
+    else if (a === "--workers") { out.workers = Number(v); i++; }
+    else if (a === "--seeds") { out.seeds = Number(v); i++; }
+    else if (a === "--ticks") { out.ticks = Number(v); i++; }
+    else if (a === "--pop") { out.pop = Number(v); i++; }
+    else if (a === "--comps") {
       out.comps = String(v).split(",").map((s) => s.trim()).filter(Boolean);
       i++;
     }
@@ -140,21 +168,67 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function perturb(base: DoctrineKnobs, rng: () => number): DoctrineKnobs {
-  const out = { ...base };
-  // Pick one or two random knobs to perturb (more changes = bigger
-  // step in parameter space; biased toward small steps so the
-  // search stays local).
-  const nChanges = rng() < 0.7 ? 1 : 2;
-  for (let i = 0; i < nChanges; i++) {
-    const key = KNOB_KEYS[Math.floor(rng() * KNOB_KEYS.length)];
-    const b = BOUNDS[key];
-    const cur = out[key];
-    const sign = rng() < 0.5 ? -1 : 1;
-    const mag = (1 + Math.floor(rng() * 2)) * b.step; // 1 or 2 steps
-    out[key] = clamp(cur + sign * mag, b.min, b.max);
+/** Round v to the nearest multiple of step (so the search lattice
+ *  matches the user-meaningful step sizes). */
+function snap(v: number, step: number): number {
+  return Math.round(v / step) * step;
+}
+
+function makeRng(seed: number): () => number {
+  let s = (seed | 0) >>> 0;
+  if (s === 0) s = 0x9e3779b9;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Latin hypercube-ish: each knob sampled uniformly within its
+ *  bounds, snapped to step. */
+function randomKnobs(rng: () => number): DoctrineKnobs {
+  const out = { ...INITIAL_KNOBS };
+  for (const k of KNOB_KEYS) {
+    const b = BOUNDS[k];
+    const v = b.min + rng() * (b.max - b.min);
+    out[k] = clamp(snap(v, b.step), b.min, b.max);
   }
   return out;
+}
+
+/** Uniform 50/50 crossover per knob. */
+function crossover(a: DoctrineKnobs, b: DoctrineKnobs, rng: () => number): DoctrineKnobs {
+  const out = { ...INITIAL_KNOBS };
+  for (const k of KNOB_KEYS) {
+    out[k] = rng() < 0.5 ? a[k] : b[k];
+  }
+  return out;
+}
+
+/** Mutation: each knob with p=0.15 gets a ±1-2 step random walk. */
+function mutate(k: DoctrineKnobs, rng: () => number, mutationRate = 0.15): DoctrineKnobs {
+  const out = { ...k };
+  for (const key of KNOB_KEYS) {
+    if (rng() >= mutationRate) continue;
+    const b = BOUNDS[key];
+    const sign = rng() < 0.5 ? -1 : 1;
+    const mag = (1 + Math.floor(rng() * 2)) * b.step; // 1 or 2 steps
+    out[key] = clamp(snap(out[key] + sign * mag, b.step), b.min, b.max);
+  }
+  return out;
+}
+
+/** Tournament-2 selection: pick 2 random individuals, return the
+ *  fitter (lower loss) one. */
+function tournament(
+  pop: { knobs: DoctrineKnobs; loss: number }[],
+  rng: () => number,
+): DoctrineKnobs {
+  const a = pop[Math.floor(rng() * pop.length)];
+  const b = pop[Math.floor(rng() * pop.length)];
+  return (a.loss < b.loss ? a : b).knobs;
 }
 
 interface MatrixCounts {
@@ -182,34 +256,28 @@ function matrixWinrates(comps: string[], m: MatrixCounts): Record<string, Record
   return out;
 }
 
-const DOMINANCE_BAND = 0.18; // doctrines should average within 50% ± 18% across crosses
+const DOMINANCE_BAND = 0.18;
 
 function computeLoss(comps: string[], wr: Record<string, Record<string, number>>): number {
   let loss = 0;
-  // 1. Mirror penalty: each (d, d) should be 50%.
+  // 1. Mirror penalty.
   for (const d of comps) {
     const w = wr[d][d];
-    loss += (w - 0.5) ** 2 * 1.5; // weight mirrors slightly higher
+    loss += (w - 0.5) ** 2 * 1.5;
   }
-  // 2. Per-doctrine average cross-winrate should be near 50%.
-  // Penalize squared distance from the band [0.5 - BAND, 0.5 + BAND].
+  // 2. Per-doctrine avg cross winrate inside band.
   for (const d of comps) {
-    let sum = 0;
-    let n = 0;
+    let sum = 0, n = 0;
     for (const e of comps) {
       if (e === d) continue;
-      sum += wr[d][e];
-      n++;
+      sum += wr[d][e]; n++;
     }
     const avg = n > 0 ? sum / n : 0.5;
     const dist = Math.max(0, Math.abs(avg - 0.5) - DOMINANCE_BAND);
-    loss += dist ** 2 * 4; // big penalty for dominant or floor-tier doctrines
+    loss += dist ** 2 * 4;
   }
-  // 3. Variance bonus: subtract small term for cross-matchup spread
-  // (some 30/70 matchups make the meta interesting). Negative loss
-  // contribution = bonus.
-  let crossVar = 0;
-  let crossN = 0;
+  // 3. Variance bonus (some 30/70 matchups are interesting).
+  let crossVar = 0, crossN = 0;
   for (const a of comps) {
     for (const b of comps) {
       if (a === b) continue;
@@ -218,20 +286,8 @@ function computeLoss(comps: string[], wr: Record<string, Record<string, number>>
     }
   }
   const avgVar = crossN > 0 ? crossVar / crossN : 0;
-  loss -= avgVar * 0.3; // mild bonus for spread; capped by other terms
+  loss -= avgVar * 0.3;
   return loss;
-}
-
-function makeRng(seed: number): () => number {
-  let s = (seed | 0) >>> 0;
-  if (s === 0) s = 0x9e3779b9;
-  return () => {
-    s = (s + 0x6d2b79f5) | 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 async function evaluate(
@@ -272,88 +328,28 @@ async function evaluate(
   return { wr: matrixWinrates(comps, m), battles: jobs.length };
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const outDir = path.join(REPO_ROOT, "lab", "autotune", stamp);
-  await fs.mkdir(outDir, { recursive: true });
-  const ndjsonPath = path.join(outDir, "iterations.ndjson");
-  const latestPath = path.join(REPO_ROOT, "lab", "autotune", "latest.ndjson");
-  await fs.mkdir(path.dirname(latestPath), { recursive: true });
-  // Truncate latest pointer so the UI sees fresh data.
-  await fs.writeFile(latestPath, "");
-
-  process.stdout.write(`[autotune] dir: ${path.relative(REPO_ROOT, outDir)}\n`);
-  process.stdout.write(`[autotune] comps: ${args.comps.join(", ")}\n`);
-  process.stdout.write(`[autotune] duration: ${args.duration}s   seeds/cell: ${args.seeds}   workers: ${args.workers}\n\n`);
-
-  const t0 = Date.now();
-  const rng = makeRng(0xc0ffee);
-  let bestKnobs = { ...INITIAL_KNOBS };
-  let bestLoss = Infinity;
-  let totalBattles = 0;
-
-  // Initial evaluation
-  const { wr: initialWr, battles: initialBattles } = await evaluate(args.comps, bestKnobs, args, 1);
-  totalBattles += initialBattles;
-  bestLoss = computeLoss(args.comps, initialWr);
-  let iter = 0;
-  await appendIter(ndjsonPath, latestPath, {
-    iter,
-    wallTimeS: (Date.now() - t0) / 1000,
-    knobs: bestKnobs,
-    matrix: initialWr,
-    loss: bestLoss,
-    accepted: true,
-    bestLoss,
-  });
-  process.stdout.write(`iter ${iter}  loss ${bestLoss.toFixed(3)}  (initial)\n`);
-
-  while ((Date.now() - t0) / 1000 < args.duration) {
-    iter++;
-    const candidate = perturb(bestKnobs, rng);
-    const startSeed = 1 + iter * args.seeds;
-    const { wr, battles } = await evaluate(args.comps, candidate, args, startSeed);
-    totalBattles += battles;
-    const loss = computeLoss(args.comps, wr);
-    const accepted = loss < bestLoss;
-    if (accepted) {
-      bestLoss = loss;
-      bestKnobs = candidate;
-    }
-    const wallTimeS = (Date.now() - t0) / 1000;
-    await appendIter(ndjsonPath, latestPath, {
-      iter,
-      wallTimeS,
-      knobs: candidate,
-      matrix: wr,
-      loss,
-      accepted,
-      bestLoss,
-    });
-    const flag = accepted ? "✓" : " ";
-    process.stdout.write(
-      `iter ${iter}  ${flag}  loss ${loss.toFixed(3)}  best ${bestLoss.toFixed(3)}  ` +
-        `bps ${(totalBattles / wallTimeS).toFixed(1)}  t ${wallTimeS.toFixed(0)}s\n`,
-    );
+async function evaluatePopulation(
+  comps: string[],
+  pop: { knobs: DoctrineKnobs }[],
+  args: CLIArgs,
+  baseSeed: number,
+): Promise<{ losses: number[]; matrices: Record<string, Record<string, number>>[]; battles: number }> {
+  // Build all jobs across the whole population so workers stay
+  // saturated. Each individual gets its own seed range.
+  const losses: number[] = [];
+  const matrices: Record<string, Record<string, number>>[] = [];
+  let battles = 0;
+  // Run evaluations sequentially per-individual but each evaluation
+  // is itself parallel. (Could pack across pop, but seed mixing is
+  // simpler this way.)
+  for (let i = 0; i < pop.length; i++) {
+    const startSeed = baseSeed + i * 1000;
+    const { wr, battles: b } = await evaluate(comps, pop[i].knobs, args, startSeed);
+    losses.push(computeLoss(comps, wr));
+    matrices.push(wr);
+    battles += b;
   }
-
-  // Print final winner matrix
-  const { wr: finalWr } = await evaluate(args.comps, bestKnobs, args, 99999);
-  process.stdout.write("\n[autotune] best knobs:\n");
-  for (const [k, v] of Object.entries(bestKnobs)) {
-    process.stdout.write(`  ${k}: ${v}\n`);
-  }
-  process.stdout.write("\n[autotune] best matrix:\n");
-  for (const a of args.comps) {
-    const row = args.comps.map((b) => `${(finalWr[a][b] * 100).toFixed(0)}%`).join(" ");
-    process.stdout.write(`  ${a.padEnd(20)} ${row}\n`);
-  }
-  process.stdout.write(`\n[autotune] total battles: ${totalBattles}  iters: ${iter}\n`);
-  process.stdout.write(`[autotune] log: ${path.relative(REPO_ROOT, ndjsonPath)}\n`);
-  // Write best knobs as a separate file for easy scripting.
-  await fs.writeFile(path.join(outDir, "best.json"), JSON.stringify({ bestLoss, knobs: bestKnobs, matrix: finalWr }, null, 2));
-  process.exit(0);
+  return { losses, matrices, battles };
 }
 
 async function appendIter(ndjsonPath: string, latestPath: string, rec: IterationRecord): Promise<void> {
@@ -362,7 +358,119 @@ async function appendIter(ndjsonPath: string, latestPath: string, rec: Iteration
   await fs.appendFile(latestPath, line);
 }
 
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const outDir = path.join(REPO_ROOT, "lab", "autotune", stamp);
+  await fs.mkdir(outDir, { recursive: true });
+  const ndjsonPath = path.join(outDir, "iterations.ndjson");
+  const latestPath = path.join(REPO_ROOT, "lab", "autotune", "latest.ndjson");
+  await fs.mkdir(path.dirname(latestPath), { recursive: true });
+  await fs.writeFile(latestPath, "");
+
+  process.stdout.write(`[autotune-ga] dir: ${path.relative(REPO_ROOT, outDir)}\n`);
+  process.stdout.write(`[autotune-ga] comps: ${args.comps.join(", ")}\n`);
+  process.stdout.write(`[autotune-ga] pop=${args.pop}  seeds/cell=${args.seeds}  ticks=${args.ticks}  workers=${args.workers}  duration=${args.duration}s\n\n`);
+
+  const t0 = Date.now();
+  const rng = makeRng(0xc0ffee);
+
+  // Seed initial population: 1 = INITIAL_KNOBS (anchor at current
+  // hand-tuned values), rest = uniform random within bounds.
+  const pop: { knobs: DoctrineKnobs; loss: number }[] = [];
+  pop.push({ knobs: { ...INITIAL_KNOBS }, loss: Infinity });
+  for (let i = 1; i < args.pop; i++) {
+    pop.push({ knobs: randomKnobs(rng), loss: Infinity });
+  }
+
+  let bestLoss = Infinity;
+  let bestKnobs = { ...INITIAL_KNOBS };
+  let bestMatrix: Record<string, Record<string, number>> | null = null;
+  let totalBattles = 0;
+  let gen = 0;
+
+  while (true) {
+    const elapsed = (Date.now() - t0) / 1000;
+    if (elapsed >= args.duration) break;
+
+    // Evaluate the current population.
+    const { losses, matrices, battles } = await evaluatePopulation(
+      args.comps, pop, args, 1 + gen * 7919,
+    );
+    totalBattles += battles;
+    for (let i = 0; i < pop.length; i++) pop[i].loss = losses[i];
+
+    // Sort by loss ascending (best first). Carry-over of the order
+    // matters for elitism + iter-record `rank`.
+    const ranked = pop
+      .map((p, i) => ({ p, i }))
+      .sort((a, b) => a.p.loss - b.p.loss);
+
+    // Update best-of-run.
+    const eliteIdx = ranked[0].i;
+    if (pop[eliteIdx].loss < bestLoss) {
+      bestLoss = pop[eliteIdx].loss;
+      bestKnobs = { ...pop[eliteIdx].knobs };
+      bestMatrix = matrices[eliteIdx];
+    }
+
+    // Stream every individual of this generation.
+    const wallTimeS = (Date.now() - t0) / 1000;
+    for (let r = 0; r < ranked.length; r++) {
+      const original = ranked[r].i;
+      await appendIter(ndjsonPath, latestPath, {
+        gen,
+        rank: r,
+        wallTimeS,
+        knobs: pop[original].knobs,
+        matrix: matrices[original],
+        loss: pop[original].loss,
+        bestLoss,
+        popSize: pop.length,
+      });
+    }
+    const meanLoss = losses.reduce((a, b) => a + b, 0) / losses.length;
+    process.stdout.write(
+      `gen ${gen}  best ${ranked[0].p.loss.toFixed(3)}  mean ${meanLoss.toFixed(3)}  worst ${ranked[ranked.length - 1].p.loss.toFixed(3)}  bestEver ${bestLoss.toFixed(3)}  bps ${(totalBattles / wallTimeS).toFixed(1)}  t ${wallTimeS.toFixed(0)}s\n`,
+    );
+
+    // Build next generation:
+    //   - elites (top 2) carry over
+    //   - rest = crossover(tournament, tournament) + mutate
+    const nextPop: { knobs: DoctrineKnobs; loss: number }[] = [];
+    const ELITES = Math.min(2, pop.length);
+    for (let e = 0; e < ELITES; e++) {
+      nextPop.push({ knobs: { ...ranked[e].p.knobs }, loss: Infinity });
+    }
+    while (nextPop.length < args.pop) {
+      const p1 = tournament(pop, rng);
+      const p2 = tournament(pop, rng);
+      const child = mutate(crossover(p1, p2, rng), rng);
+      nextPop.push({ knobs: child, loss: Infinity });
+    }
+    pop.splice(0, pop.length, ...nextPop);
+    gen++;
+  }
+
+  // Print final winner matrix
+  process.stdout.write("\n[autotune-ga] best knobs:\n");
+  for (const [k, v] of Object.entries(bestKnobs)) {
+    process.stdout.write(`  ${k}: ${typeof v === "number" ? v.toFixed(3) : v}\n`);
+  }
+  if (bestMatrix) {
+    process.stdout.write("\n[autotune-ga] best matrix:\n");
+    for (const a of args.comps) {
+      const row = args.comps.map((b) => `${(bestMatrix![a][b] * 100).toFixed(0)}%`.padEnd(5)).join(" ");
+      process.stdout.write(`  ${a.padEnd(20)} ${row}\n`);
+    }
+  }
+  process.stdout.write(`\n[autotune-ga] total battles: ${totalBattles}  generations: ${gen}\n`);
+  process.stdout.write(`[autotune-ga] log: ${path.relative(REPO_ROOT, ndjsonPath)}\n`);
+  await fs.writeFile(path.join(outDir, "best.json"), JSON.stringify({ bestLoss, knobs: bestKnobs, matrix: bestMatrix }, null, 2));
+  process.exit(0);
+}
+
 main().catch((e) => {
-  process.stderr.write(`[autotune] failed: ${String(e?.stack ?? e)}\n`);
+  process.stderr.write(`[autotune-ga] failed: ${String(e?.stack ?? e)}\n`);
   process.exit(1);
 });

@@ -55,6 +55,32 @@ import { sampleField } from "./fields.js";
 // BattleJob.doctrineKnobs, applied inside the worker before
 // setupBattle.
 export const DOCTRINE_KNOBS = {
+  // ---- per-doctrine stat scalars (applied at spawn to a rac whose
+  // doctrineIdx matches the index named here). HP and damage are the
+  // primary balance levers; speed is secondary. The autotuner can
+  // shift entire doctrines up/down without touching individual unit
+  // cards. Indexed by doctrine id.
+  phalanxHpMul: 1.0,
+  phalanxDamageMul: 1.0,
+  phalanxSpeedMul: 1.0,
+  /** Phalanx contact-mode support bonus magnitude (was hard-coded
+   *  in the formation override). 0 = no rear-rank protection. */
+  phalanxSupportMax: 0.55,
+  /** Phalanx contact-mode speed multiplier (locked-shield slowdown). */
+  phalanxContactSpeed: 0.2,
+
+  fireTeamHpMul: 1.0,
+  fireTeamDamageMul: 1.0,
+  fireTeamSpeedMul: 1.0,
+
+  modernPatrolHpMul: 1.0,
+  modernPatrolDamageMul: 1.0,
+  modernPatrolSpeedMul: 1.0,
+
+  fanaticHpMul: 1.0,
+  fanaticDamageMul: 1.0,
+  fanaticSpeedMul: 1.0,
+
   /** fire-team bounding period in ticks. */
   fireTeamPeriod: 30,
   /** fire-team advance phase fraction (0..coverStart = sprint). */

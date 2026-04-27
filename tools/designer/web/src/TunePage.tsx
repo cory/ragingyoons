@@ -15,13 +15,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 interface Iteration {
-  iter: number;
+  /** Generation index (0 = initial random pop). */
+  gen: number;
+  /** Within-generation rank (0 = best). */
+  rank: number;
   wallTimeS: number;
   knobs: Record<string, number>;
   matrix: Record<string, Record<string, number>>;
   loss: number;
-  accepted: boolean;
   bestLoss: number;
+  popSize: number;
+}
+
+interface GenSummary {
+  gen: number;
+  best: number;
+  mean: number;
+  worst: number;
+  eliteIter: Iteration;
+  losses: number[];
+  wallTimeS: number;
 }
 
 interface AutotuneState {
@@ -77,14 +90,41 @@ export function TunePage() {
     await fetch("/api/autotune/stop", { method: "POST" });
   }, []);
 
-  const latestAccepted = useMemo(() => {
-    for (let i = state.iterations.length - 1; i >= 0; i--) {
-      if (state.iterations[i].accepted) return state.iterations[i];
+  // Group iterations by generation; compute per-gen summary.
+  const generations = useMemo<GenSummary[]>(() => {
+    const byGen = new Map<number, Iteration[]>();
+    for (const it of state.iterations) {
+      const arr = byGen.get(it.gen) ?? [];
+      arr.push(it);
+      byGen.set(it.gen, arr);
     }
-    return state.iterations[state.iterations.length - 1] ?? null;
+    const gens: GenSummary[] = [];
+    for (const [g, arr] of byGen) {
+      arr.sort((a, b) => a.rank - b.rank);
+      const losses = arr.map((it) => it.loss);
+      const best = Math.min(...losses);
+      const mean = losses.reduce((a, b) => a + b, 0) / losses.length;
+      const worst = Math.max(...losses);
+      const elite = arr.find((it) => it.rank === 0) ?? arr[0];
+      gens.push({ gen: g, best, mean, worst, eliteIter: elite, losses, wallTimeS: elite.wallTimeS });
+    }
+    gens.sort((a, b) => a.gen - b.gen);
+    return gens;
   }, [state.iterations]);
 
-  const comps = latestAccepted ? Object.keys(latestAccepted.matrix) : [];
+  // Best individual of the latest fully-evaluated generation.
+  const latestBest = generations.length > 0 ? generations[generations.length - 1].eliteIter : null;
+  // Best individual EVER (lowest loss across all generations).
+  const bestEver = useMemo<Iteration | null>(() => {
+    if (state.iterations.length === 0) return null;
+    let best = state.iterations[0];
+    for (const it of state.iterations) {
+      if (it.loss < best.loss) best = it;
+    }
+    return best;
+  }, [state.iterations]);
+
+  const comps = bestEver ? Object.keys(bestEver.matrix) : [];
 
   return (
     <div style={{ padding: "16px 20px", color: "#ddd", fontFamily: "ui-sans-serif, system-ui" }}>
@@ -103,27 +143,38 @@ export function TunePage() {
         onStop={stop}
       />
       {error && <div style={{ color: "#f99", marginTop: 8 }}>{error}</div>}
-      {state.iterations.length === 0 ? (
+      {state.iterations.length === 0 || !bestEver ? (
         <p style={{ color: "#888", marginTop: 24 }}>
           No iterations yet. Hit Start to launch the autotuner.
         </p>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 30%) 1fr", gap: 24, marginTop: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 32%) 1fr", gap: 24, marginTop: 16 }}>
           <div>
             <h3 style={{ fontSize: 13, color: "#aaa", margin: "0 0 6px" }}>
-              Best matrix (iter {latestAccepted!.iter}, loss {latestAccepted!.loss.toFixed(3)})
+              Best ever (gen {bestEver.gen}, loss {bestEver.loss.toFixed(3)})
             </h3>
-            <Heatmap comps={comps} matrix={latestAccepted!.matrix} />
-            <h3 style={{ fontSize: 13, color: "#aaa", margin: "16px 0 6px" }}>Best knobs</h3>
-            <KnobTable knobs={latestAccepted!.knobs} />
+            <Heatmap comps={comps} matrix={bestEver.matrix} />
+            <h3 style={{ fontSize: 13, color: "#aaa", margin: "16px 0 6px" }}>
+              Best knobs ({Object.keys(bestEver.knobs).length})
+            </h3>
+            <KnobTable knobs={bestEver.knobs} />
           </div>
           <div>
             <h3 style={{ fontSize: 13, color: "#aaa", margin: "0 0 6px" }}>
-              Loss over iterations ({state.iterations.length} total)
+              Loss per generation ({generations.length} gens, {state.iterations.length} evals)
             </h3>
-            <LossChart iterations={state.iterations} />
-            <h3 style={{ fontSize: 13, color: "#aaa", margin: "16px 0 6px" }}>Knob trajectories (best-only)</h3>
-            <KnobTimeline iterations={state.iterations} />
+            <GenLossChart generations={generations} />
+            <h3 style={{ fontSize: 13, color: "#aaa", margin: "16px 0 6px" }}>
+              Knob trajectories (elite per gen)
+            </h3>
+            <KnobTimeline generations={generations} />
+            {latestBest && (
+              <p style={{ fontSize: 11, color: "#888", marginTop: 10 }}>
+                Latest gen {latestBest.gen}: best {generations[generations.length - 1].best.toFixed(3)},
+                mean {generations[generations.length - 1].mean.toFixed(3)},
+                worst {generations[generations.length - 1].worst.toFixed(3)}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -275,22 +326,24 @@ function KnobTable({ knobs }: { knobs: Record<string, number> }) {
   );
 }
 
-function LossChart({ iterations }: { iterations: Iteration[] }) {
+function GenLossChart({ generations }: { generations: GenSummary[] }) {
   const W = 540;
   const H = 200;
   const PAD = 30;
-  const losses = iterations.map((it) => it.loss);
-  const bestLosses = iterations.map((it) => it.bestLoss);
-  const maxLoss = Math.max(...losses, ...bestLosses, 0.1);
-  const minLoss = Math.min(...bestLosses, 0);
+  if (generations.length === 0)
+    return <svg width={W} height={H} style={{ background: "#161616", border: "1px solid #2a2a2a", borderRadius: 4 }} />;
+
+  const allLosses = generations.flatMap((g) => [g.best, g.mean, g.worst]);
+  const maxLoss = Math.max(...allLosses, 0.1);
+  const minLoss = Math.min(...allLosses.filter((v) => isFinite(v)), 0);
 
   const xAt = (i: number) =>
-    iterations.length <= 1 ? PAD : PAD + (i / (iterations.length - 1)) * (W - 2 * PAD);
+    generations.length <= 1 ? PAD : PAD + (i / (generations.length - 1)) * (W - 2 * PAD);
   const yAt = (v: number) =>
     H - PAD - ((v - minLoss) / Math.max(maxLoss - minLoss, 1e-6)) * (H - 2 * PAD);
 
-  const lossPath = iterations.map((it, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)},${yAt(it.loss).toFixed(1)}`).join("");
-  const bestPath = iterations.map((it, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)},${yAt(it.bestLoss).toFixed(1)}`).join("");
+  const buildPath = (key: "best" | "mean" | "worst") =>
+    generations.map((g, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)},${yAt(g[key]).toFixed(1)}`).join("");
 
   return (
     <svg width={W} height={H} style={{ background: "#161616", border: "1px solid #2a2a2a", borderRadius: 4 }}>
@@ -298,72 +351,74 @@ function LossChart({ iterations }: { iterations: Iteration[] }) {
       <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="#333" />
       <text x={4} y={PAD + 4} fontSize={9} fill="#888">{maxLoss.toFixed(2)}</text>
       <text x={4} y={H - PAD} fontSize={9} fill="#888">{minLoss.toFixed(2)}</text>
-      {/* per-iter loss (dim) */}
-      <path d={lossPath} stroke="#5a86c0" fill="none" strokeWidth="1" opacity="0.7" />
-      {/* best-so-far (bright) */}
-      <path d={bestPath} stroke="#7dd97d" fill="none" strokeWidth="2" />
-      {/* dots: green if accepted, dim if rejected */}
-      {iterations.map((it, i) => (
-        <circle
-          key={i}
-          cx={xAt(i)}
-          cy={yAt(it.loss)}
-          r={it.accepted ? 2.5 : 1.2}
-          fill={it.accepted ? "#7dd97d" : "#666"}
-        />
-      ))}
+      {/* worst (dim red) */}
+      <path d={buildPath("worst")} stroke="#c05a5a" fill="none" strokeWidth="1" opacity="0.5" />
+      {/* mean (orange) */}
+      <path d={buildPath("mean")} stroke="#d1a05c" fill="none" strokeWidth="1.2" opacity="0.8" />
+      {/* best (bright green) */}
+      <path d={buildPath("best")} stroke="#7dd97d" fill="none" strokeWidth="2" />
+      {/* per-individual losses as small dots, lightly colored */}
+      {generations.map((g, gi) => g.losses.map((loss, li) => (
+        <circle key={`${gi}-${li}`} cx={xAt(gi)} cy={yAt(loss)} r={1.2} fill="#666" opacity="0.4" />
+      )))}
       <text x={W - PAD} y={H - 6} fontSize={9} fill="#888" textAnchor="end">
-        iter {iterations.length - 1}
+        gen {generations.length - 1}
       </text>
+      {/* legend */}
+      <g transform={`translate(${PAD + 6}, ${PAD - 16})`}>
+        <line x1={0} y1={4} x2={14} y2={4} stroke="#7dd97d" strokeWidth="2" /><text x={18} y={7} fontSize={9} fill="#aaa">best</text>
+        <line x1={50} y1={4} x2={64} y2={4} stroke="#d1a05c" strokeWidth="1.2" /><text x={68} y={7} fontSize={9} fill="#aaa">mean</text>
+        <line x1={102} y1={4} x2={116} y2={4} stroke="#c05a5a" strokeWidth="1" /><text x={120} y={7} fontSize={9} fill="#aaa">worst</text>
+      </g>
     </svg>
   );
 }
 
-function KnobTimeline({ iterations }: { iterations: Iteration[] }) {
-  // Show only the BEST trajectory (knobs at each accepted iteration).
-  const accepted = iterations.filter((it) => it.accepted);
+function KnobTimeline({ generations }: { generations: GenSummary[] }) {
+  // Track only the elite (rank-0) individual per generation.
+  const elites = generations.map((g) => g.eliteIter);
   const W = 540;
-  const H = 200;
+  const H = 220;
   const PAD = 30;
-  if (accepted.length === 0)
+  const LEGEND_W = 160;
+  if (elites.length === 0)
     return (
       <div style={{ width: W, height: H, background: "#161616", color: "#888", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #2a2a2a", borderRadius: 4 }}>
-        no accepted iterations yet
+        no generations yet
       </div>
     );
-  const knobKeys = Object.keys(accepted[0].knobs);
-  // Per-knob, normalize to its observed range so all lines fit in
-  // the same plot.
+  const knobKeys = Object.keys(elites[0].knobs);
   const ranges: Record<string, { min: number; max: number }> = {};
   for (const k of knobKeys) {
     let mn = Infinity;
     let mx = -Infinity;
-    for (const it of accepted) {
+    for (const it of elites) {
       const v = it.knobs[k];
       if (v < mn) mn = v;
       if (v > mx) mx = v;
     }
-    ranges[k] = { min: mn, max: mx };
+    ranges[k] = { min: mn, max: mx === mn ? mn + 1 : mx };
   }
-  const xAt = (i: number) => (accepted.length <= 1 ? PAD : PAD + (i / (accepted.length - 1)) * (W - 2 * PAD));
+  const plotW = W - LEGEND_W;
+  const xAt = (i: number) => (elites.length <= 1 ? PAD : PAD + (i / (elites.length - 1)) * (plotW - 2 * PAD));
   const yAt = (k: string, v: number) => {
     const r = ranges[k];
     const span = r.max - r.min || 1;
     return H - PAD - ((v - r.min) / span) * (H - 2 * PAD);
   };
-  const colors = ["#5cd1a0", "#d1a05c", "#c05cd1", "#5cb0d1", "#d1d15c", "#d15c5c", "#5c5cd1", "#a05cd1"];
+  const colors = ["#5cd1a0", "#d1a05c", "#c05cd1", "#5cb0d1", "#d1d15c", "#d15c5c", "#5c5cd1", "#a05cd1", "#5cd17a", "#d17a5c"];
   return (
     <svg width={W} height={H} style={{ background: "#161616", border: "1px solid #2a2a2a", borderRadius: 4 }}>
-      <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="#333" />
+      <line x1={PAD} y1={H - PAD} x2={plotW - PAD} y2={H - PAD} stroke="#333" />
       {knobKeys.map((k, ki) => {
-        const path = accepted.map((it, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)},${yAt(k, it.knobs[k]).toFixed(1)}`).join("");
+        const path = elites.map((it, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)},${yAt(k, it.knobs[k]).toFixed(1)}`).join("");
         return <path key={k} d={path} stroke={colors[ki % colors.length]} fill="none" strokeWidth="1" opacity="0.7" />;
       })}
-      {/* Legend */}
+      {/* Legend on the right */}
       {knobKeys.map((k, ki) => (
         <g key={k}>
-          <rect x={W - 130} y={8 + ki * 11} width={8} height={3} fill={colors[ki % colors.length]} />
-          <text x={W - 118} y={11 + ki * 11} fontSize={8} fill="#aaa" fontFamily="ui-monospace, monospace">
+          <rect x={plotW + 4} y={8 + ki * 9} width={8} height={3} fill={colors[ki % colors.length]} />
+          <text x={plotW + 16} y={11 + ki * 9} fontSize={8} fill="#aaa" fontFamily="ui-monospace, monospace">
             {k}
           </text>
         </g>
