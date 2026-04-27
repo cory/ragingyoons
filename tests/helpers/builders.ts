@@ -179,6 +179,8 @@ function emptyRac() {
     statsDirty: new Uint8Array(MAX_RACS),
     formationIdx: new Uint8Array(MAX_RACS),
     contact: new Uint8Array(MAX_RACS),
+    doctrineIdx: new Uint8Array(MAX_RACS),
+    teamId: new Uint8Array(MAX_RACS),
   };
 }
 

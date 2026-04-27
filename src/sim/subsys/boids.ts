@@ -40,6 +40,7 @@ import {
   findRacRowById,
 } from "../state.js";
 import { allocBoidFields, buildBoidFields, sampleField } from "../fields.js";
+import { doctrineMovementMod } from "../doctrines.js";
 
 /** Step (meters) used for central-difference gradient of the density
  *  field. Smaller = sharper response to local density variation; too
@@ -97,6 +98,16 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     let sepX = -gradX * sepK;
     let sepY = -gradY * sepK;
 
+    // ---- Doctrine modulation: per-tick rhythm pattern. ----
+    // Fire teams bound forward in alternation; skirmishers sprint
+    // and halt; phalanx and default doctrines pass through unchanged.
+    // Multipliers apply to the formation's seek/cohesion coefficients.
+    const dMod = doctrineMovementMod(
+      state.rac.doctrineIdx[i],
+      state.rac.teamId[i],
+      state.tick,
+    );
+
     // ---- Leadership: per-rac boldness in [0,1) from id hash. -------
     // Roughly 20% of units come out highly bold (commit-to-mission),
     // 80% are followers that stick to formation. Without this, a
@@ -106,8 +117,8 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // Bias is deterministic per rac id, so seeds remain reproducible.
     const idHash = ((state.rac.id[i] * 2654435761) >>> 0) / 4294967296;
     const bold = idHash; // [0,1)
-    const seekKEff = profile.targetSeekK * (1 + bold);
-    const cohKEff = profile.cohesionK * (1 - bold * 0.8);
+    const seekKEff = profile.targetSeekK * (1 + bold) * dMod.seekKMul;
+    const cohKEff = profile.cohesionK * (1 - bold * 0.8) * dMod.cohesionKMul;
     const alignKEff = profile.alignmentK * (1 - bold * 0.8);
 
     // ---- Cohesion: toward local same-side same-role centroid. ----
@@ -320,7 +331,7 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // tiny self-overlap density gradient remaining) would still go
     // at full speed in the noise direction. The threshold separates
     // "I want to GO" from "I want to STAY."
-    const maxV = state.rac.effSpeed[i] * (surrounded ? SURROUND_SPEED_MUL : 1);
+    const maxV = state.rac.effSpeed[i] * (surrounded ? SURROUND_SPEED_MUL : 1) * dMod.speedMul;
     const desiredLen = Math.hypot(dvx, dvy);
     const COMMIT_THRESHOLD = 0.5; // intent must exceed this to maxV-go
     let newVx: number;

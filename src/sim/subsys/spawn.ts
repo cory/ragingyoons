@@ -33,6 +33,11 @@ import {
   getFormation,
   isValidFormationId,
 } from "../formations.js";
+import {
+  DOCTRINE_TEAM_SIZE,
+  DOCTRINE_TO_IDX,
+  doctrineFor,
+} from "../doctrines.js";
 import type { Logger } from "../log.js";
 import { rngRange } from "../rng.js";
 import { MAX_GARRISON_SLOTS, SECONDS_PER_TICK, type BattleState } from "../state.js";
@@ -126,6 +131,12 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
       const formationIdx = FORMATION_TO_IDX[formationId];
       const formation = FORMATIONS[formationIdx];
       const profile = state.formationProfile[owner][formationIdx];
+      // Resolve doctrine from (env, cur). Most env+cur combos default;
+      // specific factions get tactical patterns (phalanx, fire-team,
+      // skirmisher, line). Sub-team grouping is doctrine-specific.
+      const doctrineId = doctrineFor(unit.environment, unit.curiosity);
+      const doctrineIdx = DOCTRINE_TO_IDX[doctrineId];
+      const teamSize = DOCTRINE_TEAM_SIZE[doctrineId];
       // Forward direction: side-0 bins are at +x and want enemies at
       // -x, so forward (toward enemy) is -1 along x. side-1 mirrors.
       const forward = owner === 0 ? -1 : 1;
@@ -179,6 +190,8 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         state.rac.dmgTakenMul[racRow] = 1;
         state.rac.surroundedDamageMul[racRow] = 1;
         state.rac.formationIdx[racRow] = formationIdx;
+        state.rac.doctrineIdx[racRow] = doctrineIdx;
+        state.rac.teamId[racRow] = Math.floor(bk / teamSize);
         alive += 1;
 
         log.emit("rac_spawn", {

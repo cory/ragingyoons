@@ -48,12 +48,19 @@ import {
   FORMATION_TO_IDX,
   type FormationId,
 } from "../../src/sim/formations.js";
+import {
+  DOCTRINE_TEAM_SIZE,
+  DOCTRINE_TO_IDX,
+  doctrineFor,
+} from "../../src/sim/doctrines.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
-// Default snapshot timestamps (in ticks) for any scenario.
-const SNAPSHOT_TICKS = [0, 5, 15, 30, 60, 120, 240];
+// Default snapshot timestamps (in ticks) for any scenario. Includes
+// densely-spaced ticks to capture rhythm-pattern doctrines (fire-team
+// has 30-tick cycle; need ticks INSIDE one period to see phases).
+const SNAPSHOT_TICKS = [0, 3, 8, 15, 22, 30, 60, 120, 240];
 
 // Canvas / world bounds for the lab. Same as production.
 const BOUNDS_W = 100;
@@ -170,6 +177,8 @@ function emptyRac() {
     statsDirty: new Uint8Array(MAX_RACS),
     formationIdx: new Uint8Array(MAX_RACS),
     contact: new Uint8Array(MAX_RACS),
+    doctrineIdx: new Uint8Array(MAX_RACS),
+    teamId: new Uint8Array(MAX_RACS),
   };
 }
 
@@ -245,6 +254,15 @@ function placeRac(
   // Default formation per role so boids reads the right profile.
   const fid = DEFAULT_FORMATION_BY_ROLE[unit.role];
   state.rac.formationIdx[slot] = FORMATION_TO_IDX[fid];
+  // Doctrine + team assignment. Lab placeRac is sequential so we use
+  // a coarse "rac slot mod team-size" assignment per call. This
+  // approximates spawn.ts's burst-grouping; for proper test of
+  // doctrine rhythm we'd need to know the burst size, but for the
+  // lab it's good enough that consecutive-placed racs of the same
+  // unit get the same teamId for the first few then increment.
+  const dId = doctrineFor(unit.environment, unit.curiosity);
+  state.rac.doctrineIdx[slot] = DOCTRINE_TO_IDX[dId];
+  state.rac.teamId[slot] = Math.floor(slot / DOCTRINE_TEAM_SIZE[dId]);
   state.rac.sourceBinId[slot] = -1;
   state.rac.sourceSlotIdx[slot] = -1;
   state.rac.count = slot + 1;

@@ -145,6 +145,16 @@ export interface RacTable {
    *  (locked-shields). The Greek phalanx had distinct loose/dense/
    *  synaspismos modes — this is the v0 binary version. */
   contact: Uint8Array;
+  /** Index into DOCTRINES (src/sim/doctrines.ts) — the rac's tactical
+   *  pattern (phalanx, fire-team, skirmisher, line, default). Stamped
+   *  at spawn from (env, cur). Boids modulates seek/cohesion based
+   *  on doctrine rhythm. */
+  doctrineIdx: Uint8Array;
+  /** Sub-team index within bin's burst (0..N-1). Doctrines split a
+   *  burst into teams (fire-team = 4 per team, skirmisher = 2). Teams
+   *  get out-of-phase rhythm cycles so the pack appears to bound
+   *  forward in alternation without per-team coordination logic. */
+  teamId: Uint8Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -290,6 +300,8 @@ function emptyRacs(): RacTable {
     statsDirty: new Uint8Array(MAX_RACS),
     formationIdx: new Uint8Array(MAX_RACS),
     contact: new Uint8Array(MAX_RACS),
+    doctrineIdx: new Uint8Array(MAX_RACS),
+    teamId: new Uint8Array(MAX_RACS),
   };
 }
 
