@@ -20,7 +20,7 @@ import { FORMATIONS } from "./formations.js";
 
 /** Cap on simultaneously-tracked entities. Generous for v0; tighten later. */
 export const MAX_BINS = 32;
-export const MAX_RACS = 512;
+export const MAX_RACS = 1024;
 export const MAX_ATKS = 1024;
 /** Garrison slots per bin for the per-slot respawn timer table. */
 export const MAX_GARRISON_SLOTS = 8;

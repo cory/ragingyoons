@@ -24,6 +24,7 @@ import {
   HemisphericLight,
   MeshBuilder,
   Scene,
+  StandardMaterial,
   Vector3,
 } from "@babylonjs/core";
 import { WebGPUEngine } from "@babylonjs/core/Engines/webgpuEngine";
@@ -56,7 +57,9 @@ interface Props {
   compB?: string;
   /** Boid pool roster (visual variety; no relation to which sim rac drives which boid). */
   rosterSeed?: string;
-  /** Max simultaneous boids — must exceed the largest expected raccoon count. */
+  /** Max simultaneous boids — must exceed the peak alive rac count.
+   *  test-city-swarm hits ~280 alive on its swarm side, so the default
+   *  must comfortably exceed that. */
   maxBoids?: number;
 }
 
@@ -90,7 +93,7 @@ export function BattleField3D({
   compA = "test-city-swarm",
   compB = "test-suburban-wall",
   rosterSeed = "rgyoons-replay",
-  maxBoids = 120,
+  maxBoids = 400,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -183,11 +186,55 @@ export function BattleField3D({
         bounds.alpha = 0.35;
         bounds.isPickable = false;
 
+        // Team marker discs — one mesh per side, thin-instanced per
+        // alive rac. Player (compA, owner=0) = warm accent; enemy
+        // (compB, owner=1) = cool blue. Lifted off the ground enough
+        // to dodge z-fight; double-sided so face culling can't hide it.
+        const teamDiscZ = 0.12;
+        const teamDiscMatA = new StandardMaterial("teamDiscMatA", sc);
+        teamDiscMatA.disableLighting = true;
+        teamDiscMatA.emissiveColor = new Color3(1.0, 0.42, 0.16);
+        teamDiscMatA.alpha = 0.4;
+        const teamDiscMatB = new StandardMaterial("teamDiscMatB", sc);
+        teamDiscMatB.disableLighting = true;
+        teamDiscMatB.emissiveColor = new Color3(0.30, 0.55, 1.0);
+        teamDiscMatB.alpha = 0.4;
+        const DOUBLESIDE = 2; // Mesh.DOUBLESIDE; avoid the import dance
+        const teamDiscA = MeshBuilder.CreateDisc("teamDiscA",
+          { radius: 0.55, tessellation: 24, sideOrientation: DOUBLESIDE }, sc);
+        teamDiscA.material = teamDiscMatA;
+        teamDiscA.isPickable = false;
+        teamDiscA.alwaysSelectAsActiveMesh = true; // master at origin; instances span field
+        const teamDiscB = MeshBuilder.CreateDisc("teamDiscB",
+          { radius: 0.55, tessellation: 24, sideOrientation: DOUBLESIDE }, sc);
+        teamDiscB.material = teamDiscMatB;
+        teamDiscB.isPickable = false;
+        teamDiscB.alwaysSelectAsActiveMesh = true;
+        const teamMatA = new Float32Array(maxBoids * 16);
+        const teamMatB = new Float32Array(maxBoids * 16);
+        // Identity rotation; per-frame we only update translation. Pre-fill
+        // the rotation/scale terms so we touch only translation each frame.
+        for (let i = 0; i < maxBoids; i++) {
+          const off = i * 16;
+          teamMatA[off + 0] = 1; teamMatA[off + 5] = 1; teamMatA[off + 10] = 1; teamMatA[off + 15] = 1;
+          teamMatB[off + 0] = 1; teamMatB[off + 5] = 1; teamMatB[off + 10] = 1; teamMatB[off + 15] = 1;
+        }
+        // Register the buffers up-front (non-static) so the mesh starts
+        // in thin-instance mode and we can just bump count + flag the
+        // buffer dirty each frame.
+        teamDiscA.thinInstanceSetBuffer("matrix", teamMatA, 16, false);
+        teamDiscB.thinInstanceSetBuffer("matrix", teamMatB, 16, false);
+        teamDiscA.thinInstanceCount = 0;
+        teamDiscB.thinInstanceCount = 0;
+
         // Boid pool — visual variety only. Each frame we map sim racs
         // to boid slots by index; the boid's archetype need not match
         // the sim rac's role/env/cur for v0.
         setStatus("spawning boids…");
-        const f = new InstancedBoidsField(sc, { bounds: halfExtent });
+        // renderScale 0.33 (= demo's 0.5 / 1.5) — TFT-style tactical
+        // view wants smaller raccoons than the demo's character-focus
+        // framing.
+        const f = new InstancedBoidsField(sc, { bounds: halfExtent, renderScale: 0.33 });
         field = f;
         const roster = generateTeams(rosterSeed);
         const baseSpec = defaultRaccoonSpec();
@@ -218,10 +265,10 @@ export function BattleField3D({
         // Velocities + facing rotate the same way (facing - π/2).
         const SIM_TO_BABYLON = halfExtent / (simBounds / 2);
 
-        // Per-slot snapshots for sub-tick interpolation. Indexed by sim
-        // rac slot (state.rac is SoA, slot i is stable across ticks for
-        // a given rac, increases when new racs spawn). Sized to maxBoids
-        // — extra slots are simply marked not-alive.
+        // Per-slot snapshots for sub-tick interpolation. Indexed by
+        // boid slot (NOT sim rac slot). The slot allocator below maps
+        // sim rac.id → a stable boid slot via a free list, so slots
+        // get reused as racs die and respawn.
         const prevX = new Float32Array(maxBoids);
         const prevY = new Float32Array(maxBoids);
         const prevFacing = new Float32Array(maxBoids);
@@ -232,24 +279,63 @@ export function BattleField3D({
         const curVx = new Float32Array(maxBoids);
         const curVy = new Float32Array(maxBoids);
         const curAlive = new Uint8Array(maxBoids);
+        const curOwner = new Uint8Array(maxBoids); // 0 = compA (player), 1 = compB (enemy)
 
         let battleState: BattleState | null = null;
         let log: MemoryLogger | null = null;
 
-        const snapshotInto = (xs: Float32Array, ys: Float32Array, fs: Float32Array, as: Uint8Array, vxs?: Float32Array, vys?: Float32Array) => {
+        // sim rac.count is append-only (slots never reused), but alive
+        // racs are sparse within that array. Map sim rac.id → boid slot
+        // via a free-list allocator: when a rac dies, its slot is
+        // released; new racs claim a slot from the free list.
+        const slotByRacId = new Map<number, number>();
+        const freeSlots: number[] = [];
+        for (let i = maxBoids - 1; i >= 0; i--) freeSlots.push(i);
+
+        const snapshotCurrent = () => {
           if (!battleState) return;
           const r = battleState.rac;
-          const N = Math.min(r.count, maxBoids);
-          for (let i = 0; i < N; i++) {
-            // Coord remap: babylon = (sim.y, -sim.x). Facing rotates -π/2.
-            xs[i] = r.y[i] * SIM_TO_BABYLON;
-            ys[i] = -r.x[i] * SIM_TO_BABYLON;
-            fs[i] = r.facing[i] - Math.PI / 2;
-            as[i] = r.alive[i];
-            if (vxs) vxs[i] = r.vy[i] * SIM_TO_BABYLON;
-            if (vys) vys[i] = -r.vx[i] * SIM_TO_BABYLON;
+          // 1. Release slots for racs that died since last snapshot.
+          for (const [racId, slot] of slotByRacId) {
+            const row = battleState.racRowById.get(racId);
+            if (row === undefined || !r.alive[row]) {
+              slotByRacId.delete(racId);
+              freeSlots.push(slot);
+              curAlive[slot] = 0;
+            }
           }
-          for (let i = N; i < maxBoids; i++) as[i] = 0;
+          // 2. Assign slots to alive racs and snapshot state.
+          //    Coord remap: babylon = (sim.y, -sim.x), facing - π/2.
+          for (let i = 0; i < r.count; i++) {
+            if (!r.alive[i]) continue;
+            const racId = r.id[i];
+            const xb = r.y[i] * SIM_TO_BABYLON;
+            const yb = -r.x[i] * SIM_TO_BABYLON;
+            const fb = r.facing[i] - Math.PI / 2;
+            let slot = slotByRacId.get(racId);
+            if (slot === undefined) {
+              const free = freeSlots.pop();
+              if (free === undefined) continue; // pool exhausted
+              slot = free;
+              slotByRacId.set(racId, slot);
+              // Newly assigned slot — initialize prev = cur so the
+              // sub-tick lerp is a no-op for the first frame, even if
+              // the slot was just released by a different rac in the
+              // same tick (otherwise we'd streak from the dead rac's
+              // last position to the new rac's spawn position).
+              prevX[slot] = xb;
+              prevY[slot] = yb;
+              prevFacing[slot] = fb;
+              prevAlive[slot] = 0;
+            }
+            curX[slot] = xb;
+            curY[slot] = yb;
+            curFacing[slot] = fb;
+            curVx[slot] = r.vy[i] * SIM_TO_BABYLON;
+            curVy[slot] = -r.vx[i] * SIM_TO_BABYLON;
+            curAlive[slot] = 1;
+            curOwner[slot] = r.owner[i];
+          }
         };
 
         const startBattle = () => {
@@ -271,10 +357,13 @@ export function BattleField3D({
           });
           log.setTickReader(() => battleState!.tick);
           log.drain();
-          // Initial snapshot — both prev and cur point at tick-0 state.
+          // Reset slot allocator and snapshot tick-0 into both prev and cur.
+          slotByRacId.clear();
+          freeSlots.length = 0;
+          for (let i = maxBoids - 1; i >= 0; i--) freeSlots.push(i);
           prevAlive.fill(0);
           curAlive.fill(0);
-          snapshotInto(curX, curY, curFacing, curAlive, curVx, curVy);
+          snapshotCurrent();
           prevX.set(curX);
           prevY.set(curY);
           prevFacing.set(curFacing);
@@ -303,7 +392,7 @@ export function BattleField3D({
             prevAlive.set(curAlive);
             tick(battleState, content, log);
             log.drain();
-            snapshotInto(curX, curY, curFacing, curAlive, curVx, curVy);
+            snapshotCurrent();
             // Newly-alive slots (just spawned this tick) have no prior
             // position — copy current into prev so the lerp is a no-op
             // and they don't streak from origin.
@@ -327,8 +416,12 @@ export function BattleField3D({
           // Sub-tick interpolation — alpha is the fraction of the next
           // sim tick we've already rendered past, in [0, 1). Iterate
           // boidBySlot (stable order), NOT field.boids (sort-shuffled).
+          // Same loop also packs per-team disc matrices for the team
+          // markers — done in one pass to share the alive-slot scan.
           const alpha = Math.max(0, Math.min(1, simAccumulator / SIM_DT));
           const M = boidBySlot.length;
+          let aCount = 0;
+          let bCount = 0;
           for (let i = 0; i < M; i++) {
             const b = boidBySlot[i];
             if (curAlive[i]) {
@@ -337,11 +430,23 @@ export function BattleField3D({
               b.pos.set(x, y, 0);
               b.vel.set(curVx[i], curVy[i], 0);
               b.heading = lerpAngle(prevFacing[i], curFacing[i], alpha);
+              // Team marker translation. Disc mesh is built in the XY
+              // plane; rotation/scale terms in the matrix were pre-set
+              // to identity, so only the translation row updates.
+              const mat = curOwner[i] === 0 ? teamMatA : teamMatB;
+              const off = (curOwner[i] === 0 ? aCount++ : bCount++) * 16;
+              mat[off + 12] = x;
+              mat[off + 13] = y;
+              mat[off + 14] = teamDiscZ;
             } else {
               b.pos.set(10000, 10000, -1000);
               b.vel.set(0, 0, 0);
             }
           }
+          teamDiscA.thinInstanceCount = aCount;
+          teamDiscB.thinInstanceCount = bCount;
+          teamDiscA.thinInstanceBufferUpdated("matrix");
+          teamDiscB.thinInstanceBufferUpdated("matrix");
 
           field.stepAnimate(dt);
           scene.render();
@@ -387,6 +492,37 @@ export function BattleField3D({
           );
           console.log(`[BattleField3D] side 0 (compA="${compA}"): ${fmt(bySide[0])} → after remap, babylon y=${(-bySide[0].xs[0] * SIM_TO_BABYLON).toFixed(1)} (player at bottom)`);
           console.log(`[BattleField3D] side 1 (compB="${compB}"): ${fmt(bySide[1])} → after remap, babylon y=${(-bySide[1].xs[0] * SIM_TO_BABYLON).toFixed(1)} (enemy at top)`);
+          console.log(`[BattleField3D] boid pool: ${boidBySlot.length} boids, sources=${new Set(boidBySlot.map((b) => b.source.unit.id)).size}`);
+        }
+
+        // Periodic diagnostic so we can see whether both sides spawn racs.
+        let _diagCounter = 0;
+        const diagInterval = setInterval(() => {
+          if (disposed || !battleState) return;
+          _diagCounter++;
+          const r = battleState.rac;
+          let aliveA = 0, aliveB = 0;
+          const aPos: string[] = [];
+          const bPos: string[] = [];
+          for (let i = 0; i < r.count; i++) {
+            if (!r.alive[i]) continue;
+            if (r.owner[i] === 0) {
+              aliveA++;
+              if (aPos.length < 3) aPos.push(`(${r.x[i].toFixed(0)},${r.y[i].toFixed(0)})`);
+            } else {
+              aliveB++;
+              if (bPos.length < 3) bPos.push(`(${r.x[i].toFixed(0)},${r.y[i].toFixed(0)})`);
+            }
+          }
+          console.log(
+            `[BattleField3D diag #${_diagCounter}] tick=${battleState.tick} rac.count=${r.count}`
+            + ` alive A=${aliveA} ${aPos.join(",")}  B=${aliveB} ${bPos.join(",")}`,
+          );
+        }, 2000);
+        // Cleanup the interval on dispose
+        const _origRoDisconnect = ro?.disconnect.bind(ro);
+        if (ro && _origRoDisconnect) {
+          ro.disconnect = () => { clearInterval(diagInterval); _origRoDisconnect(); };
         }
       } catch (err) {
         console.error("[BattleField3D] init failed", err);

@@ -120,6 +120,13 @@ export const DOCTRINE_KNOBS = {
   /** death-rage speed multiplier. */
   deathRageSpeed: 1.3,
 
+  // ---- Global spawn-rate multiplier. ----
+  // Multiplies every bin's spawn burst. 1 = default; 2 = "battle of
+  // marathon" mode. Affects both initial belch and respawns. The
+  // sim's MAX_RACS cap is 1024 so 2x on a 4-bin side is safely
+  // within bounds (worst-case 4 × 10 × 2 × 4 sides = 320 << 1024).
+  globalSpawnBurstMul: 1.0,
+
   // ---- Phalanx anti-cavalry recoil. ----
   // When a cavalry rac attacks a phalanx-doctrine unit that's in
   // formation contact mode (locked-shields), this fraction of the

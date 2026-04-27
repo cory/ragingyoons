@@ -19,6 +19,7 @@ export function App() {
     listPresets()[0]?.id ?? ""
   );
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
+  const [hour, setHour] = useState(12);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -31,6 +32,10 @@ export function App() {
       handles.dispose();
     };
   }, []);
+
+  useEffect(() => {
+    handlesRef.current?.lighting.setTimeOfDay(hour);
+  }, [hour]);
 
   const fireAtPoint = (presetId: string, point: Vector3) => {
     const handles = handlesRef.current;
@@ -97,6 +102,8 @@ export function App() {
         onFire={(id) => fireAtPoint(id, PAWN_CENTER.clone())}
         onToggle={toggle}
         activeIds={activeIds}
+        hour={hour}
+        onHourChange={setHour}
       />
     </div>
   );

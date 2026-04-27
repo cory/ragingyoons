@@ -738,6 +738,10 @@ export interface InstancedBoid {
 export interface InstancedBoidsFieldOpts {
   bounds?: number;
   perSourceCapacity?: number;
+  /** Per-instance render scale override. Defaults to BOID_RENDER_SCALE
+   *  (the value tuned for the boid demo). Lower for tighter tactical
+   *  views (e.g., the battle screen wants ~0.33 for TFT-feel sizing). */
+  renderScale?: number;
 }
 
 export class InstancedBoidsField {
@@ -776,10 +780,12 @@ export class InstancedBoidsField {
    *  = 0). Linear interp + round in between. World-space babylon meters. */
   private furLodNear = 6.0;
   private furLodFar = 20.0;
+  private renderScale: number;
 
   constructor(private scene: Scene, opts: InstancedBoidsFieldOpts = {}) {
     this.bounds = opts.bounds ?? 25;
     this.perSourceCapacity = opts.perSourceCapacity ?? 4096;
+    this.renderScale = opts.renderScale ?? BOID_RENDER_SCALE;
 
     this.fN = Math.max(1, Math.ceil((this.bounds * 2) / FINE_CELL));
     this.cN = Math.max(1, Math.ceil((this.bounds * 2) / COARSE_CELL));
@@ -1407,7 +1413,7 @@ export class InstancedBoidsField {
       // small in the boid view. Babylon matrix is column-major in m[].
       const cosY = Math.cos(b.heading);
       const sinY = Math.sin(b.heading);
-      const s = BOID_RENDER_SCALE;
+      const s = this.renderScale;
       const mb = b.source.bodyMatrixBuffer;
       const mOff = slot * 16;
       mb[mOff +  0] = cosY * s; mb[mOff +  1] = sinY * s; mb[mOff +  2] = 0; mb[mOff +  3] = 0;

@@ -113,9 +113,13 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
 
       // Belch: emit BURST raccoons in jittered positions around the bin.
       // The slot's count tracks alive members; the slot doesn't free
-      // for respawn until that count hits 0.
+      // for respawn until that count hits 0. Global burst multiplier
+      // is applied on top — the default is 1.0; 2.0 doubles every
+      // bin's army for "big battle" mode.
       const roleIdx = ROLE_TO_IDX[unit.role];
-      const burst = unit.bin.spawn_burst ?? ROLE_DEFAULT_BURST[roleIdx];
+      const baseBurst = unit.bin.spawn_burst ?? ROLE_DEFAULT_BURST[roleIdx];
+      const mul = DOCTRINE_KNOBS.globalSpawnBurstMul;
+      const burst = Math.max(1, Math.floor(baseBurst * (Number.isFinite(mul) && mul > 0 ? mul : 1)));
       const owner = state.bin.owner[bi];
       // Resolve formation: card override → per-role default. Validate
       // formation matches the unit's role; mismatch falls back to

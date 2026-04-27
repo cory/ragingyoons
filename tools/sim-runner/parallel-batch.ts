@@ -127,6 +127,7 @@ interface CLIArgs {
   startSeed: number;
   workers: number;
   disableSynergies: boolean;
+  spawnMul: number;
 }
 
 function parseArgs(argv: string[]): CLIArgs {
@@ -137,6 +138,7 @@ function parseArgs(argv: string[]): CLIArgs {
     startSeed: 0xc0ffee,
     workers: 4,
     disableSynergies: false,
+    spawnMul: 1,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -158,6 +160,9 @@ function parseArgs(argv: string[]): CLIArgs {
       i++;
     } else if (a === "--no-synergies") {
       out.disableSynergies = true;
+    } else if (a === "--spawn-mul") {
+      out.spawnMul = Number(v);
+      i++;
     }
   }
   return out;
@@ -193,6 +198,7 @@ async function main(): Promise<void> {
           boundsW: 100,
           boundsH: 100,
           disableSynergies: args.disableSynergies,
+          doctrineKnobs: args.spawnMul !== 1 ? { globalSpawnBurstMul: args.spawnMul } : undefined,
         });
       }
     }

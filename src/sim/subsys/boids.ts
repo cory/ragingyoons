@@ -30,6 +30,7 @@
 
 import type { ContentBundle } from "../content.js";
 import { ROLE_ARCHER, ROLE_CAVALRY } from "../content.js";
+import { forEachNear } from "../grid.js";
 import type { Logger } from "../log.js";
 import {
   SECONDS_PER_TICK,
@@ -105,6 +106,44 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const sepK = profile.separationK;
     let sepX = -gradX * sepK;
     let sepY = -gradY * sepK;
+
+    // ---- Close-range hard separation (anti-overlap). ----
+    // The field-based separation above operates at 4m cell granularity
+    // — two racs 0.5m apart contribute equal density at the sample
+    // point and produce ~zero gradient, so they happily pile on each
+    // other. This explicit per-pair scan within CLOSE_R catches that
+    // case: any neighbor closer than CLOSE_R contributes a 1/r² outward
+    // push, weighted by CLOSE_K. Only neighbors are scanned (grid),
+    // so cost is O(local_density) per rac.
+    const CLOSE_R = 1.6;
+    const CLOSE_R2 = CLOSE_R * CLOSE_R;
+    const CLOSE_K = 6.0;
+    const grid = state._racGrid;
+    if (grid) {
+      forEachNear(grid, myX, myY, CLOSE_R, (j) => {
+        if (j === i) return;
+        if (!state.rac.alive[j]) return;
+        const dx = myX - state.rac.x[j];
+        const dy = myY - state.rac.y[j];
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= CLOSE_R2) return;
+        if (d2 < 1e-6) {
+          // Perfect overlap (e.g., spawn jitter rounded both to the
+          // same point). Push apart along a deterministic direction
+          // derived from the id pair so the system is reproducible
+          // and doesn't lock both at (0,0) forever.
+          const h = ((state.rac.id[i] * 31 + state.rac.id[j]) >>> 0) / 4294967296;
+          const ang = h * Math.PI * 2;
+          sepX += Math.cos(ang) * CLOSE_K;
+          sepY += Math.sin(ang) * CLOSE_K;
+          return;
+        }
+        const d = Math.sqrt(d2);
+        const w = ((CLOSE_R - d) / CLOSE_R) * CLOSE_K;
+        sepX += (dx / d) * w;
+        sepY += (dy / d) * w;
+      });
+    }
 
     // ---- Doctrine modulation: phase-based behavior. ----
     // Compute "in attack range" = rac's target is alive and within

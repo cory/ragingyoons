@@ -13,12 +13,21 @@ export function actionForPreset(p: FxPreset): FxAction {
   return "fire";
 }
 
+const HOUR_PRESETS: Array<{ label: string; hour: number }> = [
+  { label: "Dawn", hour: 6.5 },
+  { label: "Noon", hour: 12 },
+  { label: "Sunset", hour: 18 },
+  { label: "Night", hour: 0 },
+];
+
 export interface SidePanelProps {
   selectedId: string;
   onSelect: (id: string) => void;
   onFire: (id: string) => void;
   onToggle: (id: string) => void;
   activeIds: Set<string>;
+  hour: number;
+  onHourChange: (h: number) => void;
 }
 
 export function SidePanel({
@@ -27,6 +36,8 @@ export function SidePanel({
   onFire,
   onToggle,
   activeIds,
+  hour,
+  onHourChange,
 }: SidePanelProps) {
   const presets = useMemo(() => listPresets(), []);
   const selected = presets.find((p) => p.id === selectedId) ?? presets[0];
@@ -92,6 +103,38 @@ export function SidePanel({
           </ul>
         </>
       )}
+
+      <h2 style={{ marginTop: 24 }}>World</h2>
+      <label>
+        Time of day: {hour.toFixed(1)}h
+      </label>
+      <input
+        type="range"
+        min={0}
+        max={24}
+        step={0.25}
+        value={hour}
+        onChange={(e) => onHourChange(Number(e.target.value))}
+        style={{ width: "100%" }}
+      />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr 1fr",
+          gap: 4,
+          marginTop: 6,
+        }}
+      >
+        {HOUR_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            onClick={() => onHourChange(p.hour)}
+            style={{ padding: "4px 0", fontSize: 11 }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
     </aside>
   );
 }
