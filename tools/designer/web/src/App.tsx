@@ -164,7 +164,7 @@ export function App() {
         </aside>
         <section className="editor">
           {tab === "tune" ? (
-            <TunePage />
+            <TunePage onOpenCompare={() => setTab("compare")} />
           ) : tab === "compare" ? (
             <CompareView />
           ) : tab === "battles" ? (

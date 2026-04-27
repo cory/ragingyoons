@@ -44,12 +44,20 @@ interface AutotuneState {
 
 const POLL_MS = 1000;
 
-export function TunePage() {
+interface TunePageProps {
+  /** Called when the user clicks "Open in Compare" — switches the
+   *  designer's tab to the compare view. The parent App owns tabs. */
+  onOpenCompare?: () => void;
+}
+
+export function TunePage(props: TunePageProps = {}) {
   const [state, setState] = useState<AutotuneState>({ iterations: [], running: false });
   const [duration, setDuration] = useState(300);
   const [seeds, setSeeds] = useState(20);
   const [ticks, setTicks] = useState(1500);
   const [workers, setWorkers] = useState(4);
+  const [pop, setPop] = useState(12);
+  const [resume, setResume] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Poll
@@ -78,13 +86,13 @@ export function TunePage() {
     const r = await fetch("/api/autotune/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ duration, seeds, ticks, workers }),
+      body: JSON.stringify({ duration, seeds, ticks, workers, pop, resume }),
     });
     if (!r.ok) {
       const body = await r.text();
       setError(`start failed: ${body}`);
     }
-  }, [duration, seeds, ticks, workers]);
+  }, [duration, seeds, ticks, workers, pop, resume]);
 
   const stop = useCallback(async () => {
     await fetch("/api/autotune/stop", { method: "POST" });
@@ -135,12 +143,18 @@ export function TunePage() {
         seeds={seeds}
         ticks={ticks}
         workers={workers}
+        pop={pop}
+        resume={resume}
         setDuration={setDuration}
         setSeeds={setSeeds}
         setTicks={setTicks}
         setWorkers={setWorkers}
+        setPop={setPop}
+        setResume={setResume}
         onStart={start}
         onStop={stop}
+        canCompare={!state.running && state.iterations.length > 0}
+        onOpenCompare={props.onOpenCompare}
       />
       {error && <div style={{ color: "#f99", marginTop: 8 }}>{error}</div>}
       {state.iterations.length === 0 || !bestEver ? (
@@ -188,19 +202,37 @@ function Controls(props: {
   seeds: number;
   ticks: number;
   workers: number;
+  pop: number;
+  resume: boolean;
   setDuration: (n: number) => void;
   setSeeds: (n: number) => void;
   setTicks: (n: number) => void;
   setWorkers: (n: number) => void;
+  setPop: (n: number) => void;
+  setResume: (b: boolean) => void;
   onStart: () => void;
   onStop: () => void;
+  canCompare: boolean;
+  onOpenCompare?: () => void;
 }) {
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
       <NumField label="duration (s)" value={props.duration} onChange={props.setDuration} />
+      <NumField label="pop" value={props.pop} onChange={props.setPop} />
       <NumField label="seeds/cell" value={props.seeds} onChange={props.setSeeds} />
       <NumField label="ticks" value={props.ticks} onChange={props.setTicks} />
       <NumField label="workers" value={props.workers} onChange={props.setWorkers} />
+      <label
+        title="Seed initial pop from lab/autotune/all-time-best.json (1 anchor + small mutations + random)"
+        style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#aaa", cursor: "pointer" }}
+      >
+        <input
+          type="checkbox"
+          checked={props.resume}
+          onChange={(e) => props.setResume(e.target.checked)}
+        />
+        resume
+      </label>
       {props.running ? (
         <button onClick={props.onStop} style={btnStyle("#933")}>Stop</button>
       ) : (
@@ -209,6 +241,15 @@ function Controls(props: {
       <span style={{ color: props.running ? "#7d7" : "#888" }}>
         {props.running ? "● running" : "○ idle"}
       </span>
+      {props.canCompare && props.onOpenCompare && (
+        <button
+          onClick={props.onOpenCompare}
+          title="Open Compare with default vs all-time-best preloaded"
+          style={btnStyle("#456")}
+        >
+          Open in Compare →
+        </button>
+      )}
     </div>
   );
 }
@@ -374,55 +415,102 @@ function GenLossChart({ generations }: { generations: GenSummary[] }) {
   );
 }
 
+/** Group knobs by category for small-multiples layout. The category
+ *  derives from the knob name prefix; this is hand-curated so the
+ *  visual flow reads doctrine-by-doctrine (which is what you tune). */
+function categorizeKnobs(keys: string[]): Array<{ label: string; keys: string[] }> {
+  const groups: Record<string, string[]> = {
+    "Phalanx": [],
+    "Fire-team": [],
+    "Modern-patrol": [],
+    "Fanatic": [],
+    "Skirmisher": [],
+    "Reinforce": [],
+    "Last-stand": [],
+    "Other": [],
+  };
+  for (const k of keys) {
+    if (k.startsWith("phalanx")) groups["Phalanx"].push(k);
+    else if (k.startsWith("fireTeam")) groups["Fire-team"].push(k);
+    else if (k.startsWith("modernPatrol")) groups["Modern-patrol"].push(k);
+    else if (k.startsWith("fanatic")) groups["Fanatic"].push(k);
+    else if (k.startsWith("skirmisher")) groups["Skirmisher"].push(k);
+    else if (k === "rushToEngagedSeek" || k === "flankEngagedSeek") groups["Reinforce"].push(k);
+    else if (k.startsWith("lastStand") || k === "routVulnerability" || k === "rallyVulnerability" || k.startsWith("deathRage")) groups["Last-stand"].push(k);
+    else groups["Other"].push(k);
+  }
+  return Object.entries(groups)
+    .filter(([, v]) => v.length > 0)
+    .map(([label, keys]) => ({ label, keys }));
+}
+
 function KnobTimeline({ generations }: { generations: GenSummary[] }) {
-  // Track only the elite (rank-0) individual per generation.
+  // Track only the elite (rank-0) individual per generation, render
+  // as small multiples grouped by category. One tiny chart per knob.
   const elites = generations.map((g) => g.eliteIter);
-  const W = 540;
-  const H = 220;
-  const PAD = 30;
-  const LEGEND_W = 160;
   if (elites.length === 0)
     return (
-      <div style={{ width: W, height: H, background: "#161616", color: "#888", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #2a2a2a", borderRadius: 4 }}>
+      <div style={{ width: 540, height: 120, background: "#161616", color: "#888", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #2a2a2a", borderRadius: 4 }}>
         no generations yet
       </div>
     );
   const knobKeys = Object.keys(elites[0].knobs);
-  const ranges: Record<string, { min: number; max: number }> = {};
-  for (const k of knobKeys) {
-    let mn = Infinity;
-    let mx = -Infinity;
-    for (const it of elites) {
-      const v = it.knobs[k];
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
-    ranges[k] = { min: mn, max: mx === mn ? mn + 1 : mx };
-  }
-  const plotW = W - LEGEND_W;
-  const xAt = (i: number) => (elites.length <= 1 ? PAD : PAD + (i / (elites.length - 1)) * (plotW - 2 * PAD));
-  const yAt = (k: string, v: number) => {
-    const r = ranges[k];
-    const span = r.max - r.min || 1;
-    return H - PAD - ((v - r.min) / span) * (H - 2 * PAD);
-  };
-  const colors = ["#5cd1a0", "#d1a05c", "#c05cd1", "#5cb0d1", "#d1d15c", "#d15c5c", "#5c5cd1", "#a05cd1", "#5cd17a", "#d17a5c"];
+  const groups = categorizeKnobs(knobKeys);
+
+  const CHART_W = 100;
+  const CHART_H = 40;
+
   return (
-    <svg width={W} height={H} style={{ background: "#161616", border: "1px solid #2a2a2a", borderRadius: 4 }}>
-      <line x1={PAD} y1={H - PAD} x2={plotW - PAD} y2={H - PAD} stroke="#333" />
-      {knobKeys.map((k, ki) => {
-        const path = elites.map((it, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)},${yAt(k, it.knobs[k]).toFixed(1)}`).join("");
-        return <path key={k} d={path} stroke={colors[ki % colors.length]} fill="none" strokeWidth="1" opacity="0.7" />;
-      })}
-      {/* Legend on the right */}
-      {knobKeys.map((k, ki) => (
-        <g key={k}>
-          <rect x={plotW + 4} y={8 + ki * 9} width={8} height={3} fill={colors[ki % colors.length]} />
-          <text x={plotW + 16} y={11 + ki * 9} fontSize={8} fill="#aaa" fontFamily="ui-monospace, monospace">
-            {k}
-          </text>
-        </g>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {groups.map((group) => (
+        <div key={group.label}>
+          <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            {group.label}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${CHART_W}px, 1fr))`, gap: 6 }}>
+            {group.keys.map((k) => (
+              <SparkLine key={k} elites={elites} knob={k} W={CHART_W} H={CHART_H} />
+            ))}
+          </div>
+        </div>
       ))}
-    </svg>
+    </div>
+  );
+}
+
+function SparkLine({ elites, knob, W, H }: { elites: Iteration[]; knob: string; W: number; H: number }) {
+  let mn = Infinity, mx = -Infinity;
+  for (const e of elites) {
+    const v = e.knobs[knob];
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  // Pad range so a constant value still has a visible flat line.
+  if (mx - mn < 1e-6) {
+    mn -= 0.05;
+    mx += 0.05;
+  }
+  const PAD = 6;
+  const xAt = (i: number) => (elites.length <= 1 ? PAD : PAD + (i / (elites.length - 1)) * (W - 2 * PAD));
+  const yAt = (v: number) => H - PAD - ((v - mn) / (mx - mn)) * (H - 2 * PAD);
+  const path = elites.map((it, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)},${yAt(it.knobs[knob]).toFixed(1)}`).join("");
+  const last = elites[elites.length - 1].knobs[knob];
+  // Color reflects whether knob is moving: brightest if range is
+  // wide relative to its bounds.
+  const moved = (mx - mn) > 1e-3;
+  const stroke = moved ? "#7dd97d" : "#555";
+  return (
+    <div title={`${knob}: ${mn.toFixed(2)}–${mx.toFixed(2)}, latest ${last.toFixed(2)}`} style={{ display: "flex", flexDirection: "column", background: "#161616", border: "1px solid #2a2a2a", borderRadius: 3, padding: "3px 4px" }}>
+      <div style={{ fontSize: 8, color: "#888", fontFamily: "ui-monospace, monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {knob}
+      </div>
+      <svg width={W - 8} height={H} style={{ display: "block" }}>
+        <path d={path} stroke={stroke} fill="none" strokeWidth="1.2" />
+        <circle cx={xAt(elites.length - 1)} cy={yAt(last)} r="1.8" fill={stroke} />
+      </svg>
+      <div style={{ fontSize: 9, color: "#bbb", fontFamily: "ui-monospace, monospace", textAlign: "right" }}>
+        {last.toFixed(2)}
+      </div>
+    </div>
   );
 }

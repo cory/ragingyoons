@@ -55,7 +55,7 @@ const MAX_CELLS = 4;
 const TICKS = 1500;
 const BOUNDS_W = 100;
 const BOUNDS_H = 100;
-const CANVAS_PX = 360;
+const CANVAS_PX = 420;
 const PX_PER_M = CANVAS_PX / Math.max(BOUNDS_W, BOUNDS_H);
 
 const DEFAULT_KNOBS: DoctrineKnobs = { ...DOCTRINE_KNOBS };
@@ -199,6 +199,10 @@ function drawCell(ctx: CanvasRenderingContext2D, frame: CellFrame): void {
 export function CompareView() {
   const [content, setContent] = useState<ContentBundle | null>(null);
   const [knobsets, setKnobsets] = useState<Knobset[]>([]);
+  // Default to "default vs all-time-best" so the page is immediately
+  // useful — that's the common comparison after a tune run. If
+  // all-time-best doesn't exist yet, both cells fall back to default
+  // and the user picks something else.
   const [cells, setCells] = useState<CellConfig[]>([
     { compA: "doc-fire-team", compB: "doc-phalanx", knobsetId: "default", seed: 0xcafe },
     { compA: "doc-fire-team", compB: "doc-phalanx", knobsetId: "all-time-best", seed: 0xcafe },
@@ -327,10 +331,27 @@ export function CompareView() {
     setResults((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  /** Force every cell to share cell 0's seed (so we can compare
+   *  knobsets/comps without seed variance confounding the result).
+   *  Common workflow: change one knob between cells, run, compare. */
+  const syncSeeds = () => {
+    if (cells.length === 0) return;
+    const s = cells[0].seed;
+    setCells((prev) => prev.map((c) => ({ ...c, seed: s })));
+  };
+
+  /** Force every cell to share cell 0's comps too. Useful when you
+   *  want pure "knobset diff" comparisons. */
+  const syncComps = () => {
+    if (cells.length === 0) return;
+    const { compA, compB } = cells[0];
+    setCells((prev) => prev.map((c) => ({ ...c, compA, compB })));
+  };
+
   return (
     <div style={{ padding: "16px 20px", color: "#ddd", fontFamily: "ui-sans-serif, system-ui" }}>
       <h2 style={{ margin: "0 0 12px", fontSize: 16 }}>Compare battles</h2>
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
         <button onClick={runAll} disabled={running || !content} style={btnStyle("#393")}>
           {running ? "running…" : "Run all"}
         </button>
@@ -343,14 +364,25 @@ export function CompareView() {
           max={maxTick}
           value={tickIdx}
           onChange={(e) => setTickIdx(Number(e.target.value))}
-          style={{ flexGrow: 1 }}
+          style={{ flexGrow: 1, minWidth: 200 }}
         />
-        <span style={{ color: "#888", fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
+        <span style={{ color: "#888", fontFamily: "ui-monospace, monospace", fontSize: 12, width: 100 }}>
           tick {tickIdx} / {maxTick}
         </span>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16, flexWrap: "wrap", fontSize: 12, color: "#aaa" }}>
+        <button onClick={syncSeeds} title="Set every cell's seed to cell 0's" style={btnStyle("#345")}>
+          sync seeds
+        </button>
+        <button onClick={syncComps} title="Set every cell's comps to cell 0's" style={btnStyle("#345")}>
+          sync comps
+        </button>
         {cells.length < MAX_CELLS && (
-          <button onClick={addCell} style={btnStyle("#444")}>+ cell</button>
+          <button onClick={addCell} style={btnStyle("#345")}>+ cell</button>
         )}
+        <span style={{ marginLeft: 12, color: "#666", fontSize: 11 }}>
+          tip: same seed + same comps + different knobsets = pure knob-diff comparison
+        </span>
       </div>
       {error && <div style={{ color: "#f99", marginBottom: 8 }}>{error}</div>}
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${cells.length}, ${CANVAS_PX}px)`, gap: 12 }}>
