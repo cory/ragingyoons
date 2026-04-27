@@ -347,7 +347,9 @@ export function markRacDead(
  *  ignore (or repurpose for a future hybrid model). */
 function computeBinShieldMul(state: BattleState, binRow: number): number {
   const shieldMax = DOCTRINE_KNOBS.binShieldMax;
-  if (shieldMax <= 0) return 1;
+  // Belt-and-suspenders: if knob is undefined / NaN (e.g., resumed
+  // from a json saved before this knob existed), bypass shield.
+  if (!shieldMax || !Number.isFinite(shieldMax) || shieldMax <= 0) return 1;
   const fullAt = Math.max(1, DOCTRINE_KNOBS.binShieldFullAt);
   const binOwner = state.bin.owner[binRow];
   // Count all alive racs on the same side as the bin.

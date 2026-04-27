@@ -402,7 +402,12 @@ async function main(): Promise<void> {
 
   // Seed initial population: anchor at INITIAL_KNOBS or resume best,
   // then small mutations of the anchor + random individuals.
-  const anchor = resumeKnobs ?? INITIAL_KNOBS;
+  // Merge resumed knobs OVER defaults so that any newly-added knobs
+  // (which prior runs didn't include) get sensible defaults instead
+  // of undefined → NaN.
+  const anchor: DoctrineKnobs = resumeKnobs
+    ? { ...INITIAL_KNOBS, ...resumeKnobs }
+    : { ...INITIAL_KNOBS };
   const pop: { knobs: DoctrineKnobs; loss: number }[] = [];
   pop.push({ knobs: { ...anchor }, loss: Infinity });
   // 1/3 of the rest = small mutations of the anchor (exploitation)
