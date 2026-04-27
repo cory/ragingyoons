@@ -101,6 +101,18 @@ export interface TacticProfile {
    *  supportBonusMax. Below threshold the bonus scales linearly. A
    *  good default is ~5 (a tight cluster of 5+ friendlies). */
   supportBonusFullAt: number;
+
+  // ---- Formation tightness ----
+  /** Multiplier on each rac's stored slot offset (set at spawn from
+   *  formation.arrange()). Boids cohesion pulls toward
+   *  `centroid + slot × slotScale`. Default 1.0 = march at the spawn
+   *  pitch. Contact-mode overrides typically drop this below 1 to
+   *  visibly tighten the formation when enemies are close (e.g. phalanx
+   *  synaspismos: ~0.4 collapses the 1.4 m march pitch toward locked
+   *  shields). The close-range pairwise repulsion still imposes a hard
+   *  floor (~0.8 m), so very small slotScale won't actually overlap
+   *  the racs — it just gets them as tight as the anti-overlap allows. */
+  slotScale: number;
 }
 
 /** Per-role default profiles. Tweaking these is a global behavior
@@ -134,6 +146,7 @@ export const DEFAULT_TANK: TacticProfile = {
   flankBiasK: 0.05, // tanks march straight
   supportBonusMax: 0.25, // shields up; tanks lean on each other
   supportBonusFullAt: 4,
+  slotScale: 1.0,
 };
 
 export const DEFAULT_ARCHER: TacticProfile = {
@@ -155,6 +168,7 @@ export const DEFAULT_ARCHER: TacticProfile = {
   flankBiasK: 0.05, // archers mostly aim straight at their kited target
   supportBonusMax: 0, // archers don't get rear-rank shields
   supportBonusFullAt: 4,
+  slotScale: 1.0,
 };
 
 export const DEFAULT_CAVALRY: TacticProfile = {
@@ -176,6 +190,7 @@ export const DEFAULT_CAVALRY: TacticProfile = {
   flankBiasK: 0.4, // cavalry visibly diverges, flanks from sides
   supportBonusMax: 0, // free agents don't pack tight
   supportBonusFullAt: 4,
+  slotScale: 1.0,
 };
 
 export const DEFAULT_INFANTRY: TacticProfile = {
@@ -197,6 +212,7 @@ export const DEFAULT_INFANTRY: TacticProfile = {
   flankBiasK: 0.15, // slight spread to break perfect lockstep
   supportBonusMax: 0.35, // strong rear-rank protection — phalanx core
   supportBonusFullAt: 5,
+  slotScale: 1.0,
 };
 
 export const DEFAULT_PROFILES: TacticProfile[] = [

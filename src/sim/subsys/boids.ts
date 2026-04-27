@@ -215,14 +215,17 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // system is doing the formation work each tick, not just at spawn.
     let cohX = 0;
     let cohY = 0;
+    const slotS = profile.slotScale;
+    const mySlotDx = state.rac.slotDx[i] * slotS;
+    const mySlotDy = state.rac.slotDy[i] * slotS;
     if (cohKEff > 0) {
       const myGroupId = state.rac.groupId[i];
       const stats = groupStats.get(myGroupId);
       if (stats && stats.count >= 2) {
         const cx = stats.sumX / stats.count;
         const cy = stats.sumY / stats.count;
-        const tx = cx + state.rac.slotDx[i];
-        const ty = cy + state.rac.slotDy[i];
+        const tx = cx + mySlotDx;
+        const ty = cy + mySlotDy;
         const tdx = tx - myX;
         const tdy = ty - myY;
         const td = Math.hypot(tdx, tdy);
@@ -303,8 +306,16 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       seekX = dMod.seekDirOverride.dx * seekKEff;
       seekY = dMod.seekDirOverride.dy * seekKEff;
     } else if (tgtFound && !inCombat) {
-      const tdx = tgtX - myX;
-      const tdy = tgtY - myY;
+      // Each rac seeks (target + own slot offset), not the bare target —
+      // otherwise a 10-wide line collapses to a point at the target as
+      // every rac aims at the same x,y. With personal-slot seeks, the
+      // leftmost rac aims slightly left, rightmost slightly right, and
+      // the line ENVELOPS the target instead of converging on it. In
+      // contact mode slotScale drops, so the personal targets cluster
+      // near the bare target — the formation tightens for melee, which
+      // is the "march in line, fight in cluster" combat shape.
+      const tdx = (tgtX + mySlotDx) - myX;
+      const tdy = (tgtY + mySlotDy) - myY;
       const td2 = tdx * tdx + tdy * tdy;
       if (td2 > 1e-6) {
         const td = Math.sqrt(td2);

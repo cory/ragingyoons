@@ -103,7 +103,7 @@ export const FORMATIONS: FormationDef[] = [
     tacticOverride: { alignmentK: 1.4, cohesionK: 0.8 },
     // Tanks in contact: close ranks, hold line. Already stopped by
     // stop-in-combat; this just tightens visually.
-    contactOverride: { alignmentK: 2.0, cohesionK: 1.6, separationK: 0.5 },
+    contactOverride: { alignmentK: 2.0, cohesionK: 1.6, separationK: 0.5, slotScale: 0.7 },
   },
   {
     id: "tank-arrowhead",
@@ -136,6 +136,7 @@ export const FORMATIONS: FormationDef[] = [
       cohesionK: 2.2,
       separationK: 0.5,
       speedMul: 0.3,
+      slotScale: 0.6,
     },
   },
   {
@@ -174,6 +175,7 @@ export const FORMATIONS: FormationDef[] = [
       flankBiasK: 0.0,
       supportBonusMax: 0.55, // phalanx peak: 55% damage reduction at full rear-rank support
       supportBonusFullAt: 4,
+      slotScale: 0.5, // synaspismos collapse: 1.4 m pitch → ~0.7 m (anti-overlap floors at ~0.8 m)
     },
   },
 
