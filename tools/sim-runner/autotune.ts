@@ -71,6 +71,8 @@ const INITIAL_KNOBS: DoctrineKnobs = {
   binShieldMax: 0.85,
   binShieldFullAt: 30,
   binShieldRadius: 12,
+  phalanxAntiCavRecoil: 1.0,
+  phalanxShieldVsProjectile: 0.6,
 };
 
 interface KnobBound {
@@ -116,6 +118,8 @@ const BOUNDS: Record<keyof DoctrineKnobs, KnobBound> = {
   binShieldMax: { min: 0.0, max: 0.95, step: 0.05 },
   binShieldFullAt: { min: 8, max: 80, step: 4 },
   binShieldRadius: { min: 6, max: 30, step: 2 },
+  phalanxAntiCavRecoil: { min: 0.0, max: 2.5, step: 0.15 },
+  phalanxShieldVsProjectile: { min: 0.0, max: 0.95, step: 0.05 },
 };
 
 const KNOB_KEYS = Object.keys(BOUNDS) as Array<keyof DoctrineKnobs>;

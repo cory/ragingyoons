@@ -265,7 +265,7 @@ export function applyRacDamage(
   tgtRow: number,
   dmgRaw: number,
   _srcUnit: UnitDef | null,
-  source: "basic" | "rage" | "dot" = "basic",
+  source: "basic" | "rage" | "dot" | "recoil" | "projectile" = "basic",
   statusId: string | null = null,
 ): void {
   const tgtUnit = content.units.get(state.unitIdTable[state.rac.unitIdIdx[tgtRow]]);
@@ -275,7 +275,18 @@ export function applyRacDamage(
   // Damage-taken multiplier: status mods × surrounded penalty. Both
   // multiply incoming damage (e.g., lonely status +25%, surrounded
   // +15%, both apply at once → ×1.4375 incoming).
-  const taken = (state.rac.dmgTakenMul[tgtRow] || 1) * (state.rac.surroundedDamageMul[tgtRow] || 1);
+  let taken = (state.rac.dmgTakenMul[tgtRow] || 1) * (state.rac.surroundedDamageMul[tgtRow] || 1);
+  // Phalanx shield vs projectiles — when a projectile arrow hits a
+  // phalanx unit in contact mode, the locked shield wall blocks part
+  // of the damage. Stacks multiplicatively with other taken-mods.
+  if (
+    source === "projectile" &&
+    state.rac.doctrineIdx[tgtRow] === 1 /* phalanx */ &&
+    state.rac.contact[tgtRow] !== 0
+  ) {
+    const sv = DOCTRINE_KNOBS.phalanxShieldVsProjectile;
+    if (sv > 0 && Number.isFinite(sv)) taken *= 1 - Math.min(0.95, sv);
+  }
   const dmg = Math.max(MIN_DAMAGE, (dmgRaw - armor) * taken);
   const hpBefore = state.rac.hp[tgtRow];
   const hpAfter = hpBefore - dmg;
@@ -301,6 +312,31 @@ export function applyRacDamage(
   // Rage gain: Tank rule = per damage taken.
   if (state.rac.role[tgtRow] === ROLE_TANK && state.rac.alive[tgtRow]) {
     gainRage(state, tgtRow, dmg * RAGE_PER_DAMAGE_TAKEN);
+  }
+
+  // Phalanx anti-cavalry recoil: cavalry attacking a phalanx-doctrine
+  // unit in formation contact mode (locked-shields synaspismos)
+  // takes recoil damage. Models pikes / braced shields impaling the
+  // charge. Only fires for non-DoT, non-recoil sources to avoid
+  // loops (recoil targets cavalry, never phalanx, so no infinite
+  // ping-pong by construction; the source guard is belt-and-
+  // suspenders against future damage paths).
+  if (
+    source !== "dot" &&
+    source !== "recoil" &&
+    srcRow >= 0 &&
+    state.rac.alive[srcRow] &&
+    state.rac.role[srcRow] === ROLE_CAVALRY &&
+    state.rac.doctrineIdx[tgtRow] === 1 /* phalanx */ &&
+    state.rac.contact[tgtRow] !== 0
+  ) {
+    const recoilFrac = DOCTRINE_KNOBS.phalanxAntiCavRecoil;
+    if (recoilFrac > 0 && Number.isFinite(recoilFrac)) {
+      const recoilDmg = dmg * recoilFrac;
+      // Reverse src/tgt: phalanx unit dishes the recoil to the
+      // cavalry. Source = "recoil" so it can't trigger another loop.
+      applyRacDamage(state, content, log, tgtRow, srcRow, recoilDmg, null, "recoil");
+    }
   }
 
   if (hpAfter <= 0 && state.rac.alive[tgtRow]) {

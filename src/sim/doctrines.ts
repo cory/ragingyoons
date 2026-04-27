@@ -120,6 +120,23 @@ export const DOCTRINE_KNOBS = {
   /** death-rage speed multiplier. */
   deathRageSpeed: 1.3,
 
+  // ---- Phalanx anti-cavalry recoil. ----
+  // When a cavalry rac attacks a phalanx-doctrine unit that's in
+  // formation contact mode (locked-shields), this fraction of the
+  // damage rebounds onto the attacker. Models pikes/braced shields
+  // impaling the charge. 1.0 = full mirror; values >1 mean the
+  // recoil exceeds the dealt damage (very anti-cav).
+  phalanxAntiCavRecoil: 1.0,
+
+  // ---- Phalanx shield-vs-projectile reduction. ----
+  // A phalanx-doctrine unit in contact mode reduces incoming
+  // PROJECTILE damage (arrows) by this fraction. Models the
+  // shield wall raised against missile fire — the second half of
+  // why phalanxes were tactically strong. Without this, fire-team's
+  // archers melt phalanx from range and recoil never fires (cavalry
+  // is cleanup, not the killer).
+  phalanxShieldVsProjectile: 0.6,
+
   // ---- Bin shield from living defenders (side-total). ----
   // Bins take reduced damage scaled by how many friendly raccoons
   // are still alive on the bin's side. Once an army is wiped, its

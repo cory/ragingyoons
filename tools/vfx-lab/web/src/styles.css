@@ -1,0 +1,97 @@
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  background: #0a0a10;
+  color: #e8e8f0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  height: 100vh;
+}
+
+.viewport {
+  position: relative;
+  background: #000;
+}
+
+.viewport canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+}
+
+.fps {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.panel {
+  border-left: 1px solid #1f1f2a;
+  padding: 16px;
+  overflow-y: auto;
+  background: #11111a;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8a8aa0;
+}
+
+.panel label {
+  display: block;
+  font-size: 12px;
+  margin: 8px 0 4px;
+  color: #b0b0c0;
+}
+
+.panel select,
+.panel button {
+  width: 100%;
+  padding: 6px 8px;
+  background: #1a1a26;
+  color: #e8e8f0;
+  border: 1px solid #2a2a3a;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.panel button.fire {
+  margin-top: 12px;
+  background: #4a3aaa;
+  border-color: #5a4abc;
+  font-weight: 600;
+}
+
+.panel button.fire:hover {
+  background: #5a4abc;
+}
+
+.panel .hint {
+  margin-top: 12px;
+  padding: 8px;
+  background: #15151f;
+  border-left: 2px solid #4a3aaa;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #8a8aa0;
+}

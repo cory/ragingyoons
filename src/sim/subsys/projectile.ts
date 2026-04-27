@@ -206,7 +206,7 @@ export function projectileTick(state: BattleState, content: ContentBundle, log: 
         damage: dmg,
       });
       if (bestKind === 1) {
-        applyRacDamage(state, content, log, srcRow, bestRow, dmg, null);
+        applyRacDamage(state, content, log, srcRow, bestRow, dmg, null, "projectile");
       } else {
         applyBinDamage(state, content, log, srcRow, bestRow, dmg);
       }
