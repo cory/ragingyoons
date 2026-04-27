@@ -112,12 +112,18 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // — two racs 0.5m apart contribute equal density at the sample
     // point and produce ~zero gradient, so they happily pile on each
     // other. This explicit per-pair scan within CLOSE_R catches that
-    // case: any neighbor closer than CLOSE_R contributes a 1/r² outward
-    // push, weighted by CLOSE_K. Only neighbors are scanned (grid),
-    // so cost is O(local_density) per rac.
-    const CLOSE_R = 1.6;
+    // case.
+    //
+    // CLOSE_R is intentionally TIGHT (~body diameter): we only want
+    // to fix actual overlap, not disrupt formation pitch. Phalanx
+    // uses 1.4m grid pitch; if CLOSE_R > 1.4m it would push the
+    // ranks apart and the phalanx never forms its block. 0.8m is
+    // ~2× the raccoon body radius (0.5m) — units within that range
+    // are visually overlapping; further apart, the formation's own
+    // cohesion handles spacing.
+    const CLOSE_R = 0.8;
     const CLOSE_R2 = CLOSE_R * CLOSE_R;
-    const CLOSE_K = 6.0;
+    const CLOSE_K = 10.0;
     const grid = state._racGrid;
     if (grid) {
       forEachNear(grid, myX, myY, CLOSE_R, (j) => {
@@ -357,6 +363,42 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       }
     }
 
+    // ---- Cavalry swarm avoidance: route around dense clusters. ----
+    // Cavalry's high seek + low separation makes it plow through
+    // crowds. Sample density along the seek lookahead; if blocked,
+    // deflect perpendicular toward the side with less density. Other
+    // roles (infantry/tank/archer) want to ENGAGE the crowd, not
+    // dodge it, so this only fires for cavalry.
+    let avoidX = 0;
+    let avoidY = 0;
+    if (myRole === ROLE_CAVALRY && tgtFound) {
+      const seekDx = tgtX - myX;
+      const seekDy = tgtY - myY;
+      const seekLen = Math.hypot(seekDx, seekDy);
+      if (seekLen > 1e-3) {
+        const sx = seekDx / seekLen;
+        const sy = seekDy / seekLen;
+        const la = DOCTRINE_KNOBS.cavalrySwarmAvoidLookahead;
+        const px = myX + sx * la;
+        const py = myY + sy * la;
+        const densAhead = sampleField(fields, fields.totalDensity, px, py);
+        const thresh = DOCTRINE_KNOBS.cavalrySwarmAvoidThreshold;
+        if (densAhead > thresh) {
+          // Probe density to either perpendicular side; deflect
+          // toward whichever is lighter.
+          const perpX = -sy;
+          const perpY = sx;
+          const half = la * 0.5;
+          const dLeft = sampleField(fields, fields.totalDensity, px + perpX * half, py + perpY * half);
+          const dRight = sampleField(fields, fields.totalDensity, px - perpX * half, py - perpY * half);
+          const sign = dLeft <= dRight ? 1 : -1;
+          const strength = Math.min(densAhead - thresh, 4) * DOCTRINE_KNOBS.cavalrySwarmAvoidK;
+          avoidX = perpX * sign * strength;
+          avoidY = perpY * sign * strength;
+        }
+      }
+    }
+
     // ---- Per-rac angular flank bias to break lockstep. ----
     // Deterministic offset based on rac id and per-role flankBiasK.
     // Cavalry flanks visibly (K=0.4 → ±23°), infantry slightly
@@ -365,8 +407,8 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const jitterAngle = Math.sin(state.rac.id[i] * 0.7) * profile.flankBiasK;
     const ca = Math.cos(jitterAngle);
     const sa = Math.sin(jitterAngle);
-    let dvx = sepX + cohX + alignX + seekX + hideX;
-    let dvy = sepY + cohY + alignY + seekY + hideY;
+    let dvx = sepX + cohX + alignX + seekX + hideX + avoidX;
+    let dvy = sepY + cohY + alignY + seekY + hideY + avoidY;
     const rotX = dvx * ca - dvy * sa;
     const rotY = dvx * sa + dvy * ca;
     dvx = rotX;

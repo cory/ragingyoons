@@ -26,13 +26,19 @@ import { TraitBadge } from "../components/TraitBadge";
 interface Props {
   go: (s: Screen) => void;
   phase?: BattlePhase;
+  /** Comp ids passed through to the live 3D battlefield. Changes cause
+   *  the canvas to re-init and a fresh battle to start. */
+  battleCompA?: string;
+  battleCompB?: string;
+  /** Bumping this triggers a battlefield reset with the same comps. */
+  battleRestartCounter?: number;
 }
 
 // NOTE: design has 9 bench slots; v0 spec says 10 hand slots. Keeping 9
 // for visual fidelity; bump when wiring real player state.
 const BENCH_LEN = 9;
 
-export function Battle({ go, phase: phaseProp }: Props) {
+export function Battle({ go, phase: phaseProp, battleCompA, battleCompB, battleRestartCounter }: Props) {
   const [board] = useState<BoardUnit[]>(MY_BOARD);
   const [bench, setBench] = useState(MY_BENCH);
   const [enemyBoard] = useState<BoardUnit[]>(ENEMY_BOARD);
@@ -177,7 +183,11 @@ export function Battle({ go, phase: phaseProp }: Props) {
             <div className="bl-meta">88HP · CITY/LOCKPICKERS</div>
           </div>
           <div className="board-wrap battle3d-wrap">
-            <BattleField3D />
+            <BattleField3D
+              compA={battleCompA}
+              compB={battleCompB}
+              restartCounter={battleRestartCounter}
+            />
           </div>
           <div className="board-label mine">
             <div className="bl-side">YOU</div>

@@ -120,6 +120,16 @@ export const DOCTRINE_KNOBS = {
   /** death-rage speed multiplier. */
   deathRageSpeed: 1.3,
 
+  // ---- Cavalry swarm avoidance. ----
+  // Cavalry should route AROUND dense clusters, not plow through.
+  // Sample total density at a point lookahead meters ahead of the
+  // cavalry along its seek direction; if density exceeds threshold,
+  // apply a perpendicular deflection toward the lighter side.
+  // Per-rac (cavalry-role only); other roles ignore.
+  cavalrySwarmAvoidK: 4.0,
+  cavalrySwarmAvoidLookahead: 8.0,
+  cavalrySwarmAvoidThreshold: 1.5,
+
   // ---- Global spawn-rate multiplier. ----
   // Multiplies every bin's spawn burst. 1 = default; 2 = "battle of
   // marathon" mode. Affects both initial belch and respawns. The

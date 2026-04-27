@@ -14,6 +14,10 @@ export function App() {
   const [accent, setAccent] = useState("#ff6a2a");
   const [intensity, setIntensity] = useState<"low" | "med" | "high">("high");
   const [devOpen, setDevOpen] = useState(false);
+  const [comps, setComps] = useState<string[]>([]);
+  const [battleCompA, setBattleCompA] = useState("test-city-swarm");
+  const [battleCompB, setBattleCompB] = useState("test-suburban-wall");
+  const [battleRestartCounter, setBattleRestartCounter] = useState(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -21,6 +25,17 @@ export function App() {
     root.style.setProperty("--accent-glow", `${accent}55`);
     root.dataset.intensity = intensity;
   }, [accent, intensity]);
+
+  // Lazy-load comp ids from the designer API for the battle picker.
+  useEffect(() => {
+    fetch("/api/cards")
+      .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
+      .then((data: { comps?: { id: string }[] }) => {
+        const ids = (data.comps ?? []).map((c) => c.id).sort();
+        setComps(ids);
+      })
+      .catch((e) => console.warn("[App] /api/cards comp list:", e));
+  }, []);
 
   // Backtick toggles the dev panel. Ignore when typing in inputs.
   useEffect(() => {
@@ -42,7 +57,7 @@ export function App() {
     case "home":        view = <Home go={go} />; break;
     case "lobby":       view = <Lobby go={go} />; break;
     case "pregame":     view = <PreGame go={go} />; break;
-    case "battle":      view = <Battle go={go} phase={phase} />; break;
+    case "battle":      view = <Battle go={go} phase={phase} battleCompA={battleCompA} battleCompB={battleCompB} battleRestartCounter={battleRestartCounter} />; break;
     case "results":     view = <Results go={go} />; break;
     case "progression": view = <Progression go={go} />; break;
     default:            view = <Home go={go} />;
@@ -62,6 +77,12 @@ export function App() {
           intensity={intensity}
           setIntensity={setIntensity}
           onClose={() => setDevOpen(false)}
+          comps={comps}
+          battleCompA={battleCompA}
+          setBattleCompA={setBattleCompA}
+          battleCompB={battleCompB}
+          setBattleCompB={setBattleCompB}
+          onRestartBattle={() => setBattleRestartCounter((n) => n + 1)}
         />
       )}
     </>

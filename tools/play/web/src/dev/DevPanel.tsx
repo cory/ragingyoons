@@ -34,6 +34,12 @@ interface Props {
   intensity: "low" | "med" | "high";
   setIntensity: (i: "low" | "med" | "high") => void;
   onClose: () => void;
+  comps: string[];
+  battleCompA: string;
+  setBattleCompA: (id: string) => void;
+  battleCompB: string;
+  setBattleCompB: (id: string) => void;
+  onRestartBattle: () => void;
 }
 
 export function DevPanel(props: Props) {
@@ -54,16 +60,48 @@ export function DevPanel(props: Props) {
       </div>
 
       {props.screen === "battle" && (
-        <div className="dev-panel-row">
-          <label>BATTLE PHASE</label>
-          <div className="dev-panel-segs">
-            {(["planning", "combat"] as BattlePhase[]).map((p) => (
-              <button key={p} className={p === props.phase ? "on" : ""} onClick={() => props.setPhase(p)}>
-                {p}
-              </button>
-            ))}
+        <>
+          <div className="dev-panel-row">
+            <label>BATTLE PHASE</label>
+            <div className="dev-panel-segs">
+              {(["planning", "combat"] as BattlePhase[]).map((p) => (
+                <button key={p} className={p === props.phase ? "on" : ""} onClick={() => props.setPhase(p)}>
+                  {p}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+
+          <div className="dev-panel-row">
+            <label>COMP A (PLAYER)</label>
+            <select value={props.battleCompA} onChange={(e) => props.setBattleCompA(e.target.value)}>
+              {props.comps.length === 0 && <option value={props.battleCompA}>{props.battleCompA}</option>}
+              {props.comps.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="dev-panel-row">
+            <label>COMP B (ENEMY)</label>
+            <select value={props.battleCompB} onChange={(e) => props.setBattleCompB(e.target.value)}>
+              {props.comps.length === 0 && <option value={props.battleCompB}>{props.battleCompB}</option>}
+              {props.comps.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="dev-panel-row">
+            <button
+              className="dev-panel-toggle"
+              style={{ width: "100%", padding: "6px 10px" }}
+              onClick={props.onRestartBattle}
+            >
+              ↻ RESTART BATTLE
+            </button>
+          </div>
+        </>
       )}
 
       <div className="dev-panel-row">

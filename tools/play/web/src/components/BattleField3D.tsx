@@ -61,6 +61,9 @@ interface Props {
    *  test-city-swarm hits ~280 alive on its swarm side, so the default
    *  must comfortably exceed that. */
   maxBoids?: number;
+  /** Bump to force a full re-mount (engine + sim restart) without
+   *  changing comps. Useful for "restart this matchup" buttons. */
+  restartCounter?: number;
 }
 
 const SIM_DT = 1 / 15;
@@ -94,6 +97,7 @@ export function BattleField3D({
   compB = "test-suburban-wall",
   rosterSeed = "rgyoons-replay",
   maxBoids = 400,
+  restartCounter = 0,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -226,6 +230,82 @@ export function BattleField3D({
         teamDiscB.thinInstanceSetBuffer("matrix", teamMatB, 16, false);
         teamDiscA.thinInstanceCount = 0;
         teamDiscB.thinInstanceCount = 0;
+
+        // ─── Spawn bins ────────────────────────────────────────────────
+        // Box per bin: 0.9×0.9 cross-section × 1.6 tall. Thin-instanced
+        // per side, packed into the front of each per-team buffer each
+        // frame so dying bins drop out cleanly. Matrix is column-major,
+        // pre-filled with Rx(π/2) so the box's local Y dimension (1.6)
+        // becomes vertical in our z-up world; per frame we update only
+        // the translation columns.
+        const MAX_BINS_PER_SIDE = 8;
+        const BIN_HALF_HEIGHT = 0.8;
+        const binMatA = new StandardMaterial("binMatA", sc);
+        binMatA.diffuseColor = new Color3(0.30, 0.18, 0.10);
+        binMatA.specularColor = new Color3(0.20, 0.10, 0.05);
+        binMatA.emissiveColor = new Color3(0.40, 0.18, 0.06);
+        const binMatB = new StandardMaterial("binMatB", sc);
+        binMatB.diffuseColor = new Color3(0.12, 0.18, 0.30);
+        binMatB.specularColor = new Color3(0.08, 0.12, 0.20);
+        binMatB.emissiveColor = new Color3(0.10, 0.20, 0.50);
+        const binMeshA = MeshBuilder.CreateBox("binMeshA", { width: 0.9, height: 1.6, depth: 0.9 }, sc);
+        binMeshA.material = binMatA;
+        binMeshA.isPickable = false;
+        binMeshA.alwaysSelectAsActiveMesh = true;
+        const binMeshB = MeshBuilder.CreateBox("binMeshB", { width: 0.9, height: 1.6, depth: 0.9 }, sc);
+        binMeshB.material = binMatB;
+        binMeshB.isPickable = false;
+        binMeshB.alwaysSelectAsActiveMesh = true;
+        const binBufA = new Float32Array(MAX_BINS_PER_SIDE * 16);
+        const binBufB = new Float32Array(MAX_BINS_PER_SIDE * 16);
+        // Pre-fill Rx(π/2) rotation + identity translation for all slots.
+        // Column-major: col0=(1,0,0,0), col1=(0,0,1,0), col2=(0,-1,0,0), col3=(0,0,0,1).
+        for (let i = 0; i < MAX_BINS_PER_SIDE; i++) {
+          const off = i * 16;
+          for (const buf of [binBufA, binBufB]) {
+            buf[off + 0] = 1;  buf[off + 1] = 0;  buf[off + 2] = 0;  buf[off + 3] = 0;
+            buf[off + 4] = 0;  buf[off + 5] = 0;  buf[off + 6] = 1;  buf[off + 7] = 0;
+            buf[off + 8] = 0;  buf[off + 9] = -1; buf[off + 10] = 0; buf[off + 11] = 0;
+            buf[off + 12] = 0; buf[off + 13] = 0; buf[off + 14] = 0; buf[off + 15] = 1;
+          }
+        }
+        binMeshA.thinInstanceSetBuffer("matrix", binBufA, 16, false);
+        binMeshB.thinInstanceSetBuffer("matrix", binBufB, 16, false);
+        binMeshA.thinInstanceCount = 0;
+        binMeshB.thinInstanceCount = 0;
+
+        // ─── Projectiles ──────────────────────────────────────────────
+        // Small glowing spheres tracking state.atk positions. Per-side
+        // colored. Identity rotation; per frame we just write translation.
+        const MAX_ATKS_PER_SIDE = 256;
+        const ATK_Z = 1.0; // chest-height
+        const atkMatA = new StandardMaterial("atkMatA", sc);
+        atkMatA.disableLighting = true;
+        atkMatA.emissiveColor = new Color3(1.0, 0.75, 0.35);
+        const atkMatB = new StandardMaterial("atkMatB", sc);
+        atkMatB.disableLighting = true;
+        atkMatB.emissiveColor = new Color3(0.45, 0.80, 1.0);
+        const atkMeshA = MeshBuilder.CreateSphere("atkMeshA", { diameter: 0.30, segments: 6 }, sc);
+        atkMeshA.material = atkMatA;
+        atkMeshA.isPickable = false;
+        atkMeshA.alwaysSelectAsActiveMesh = true;
+        const atkMeshB = MeshBuilder.CreateSphere("atkMeshB", { diameter: 0.30, segments: 6 }, sc);
+        atkMeshB.material = atkMatB;
+        atkMeshB.isPickable = false;
+        atkMeshB.alwaysSelectAsActiveMesh = true;
+        const atkBufA = new Float32Array(MAX_ATKS_PER_SIDE * 16);
+        const atkBufB = new Float32Array(MAX_ATKS_PER_SIDE * 16);
+        // Pre-fill identity rotation/scale; per-frame writes only translation.
+        for (let i = 0; i < MAX_ATKS_PER_SIDE; i++) {
+          const off = i * 16;
+          for (const buf of [atkBufA, atkBufB]) {
+            buf[off + 0] = 1; buf[off + 5] = 1; buf[off + 10] = 1; buf[off + 15] = 1;
+          }
+        }
+        atkMeshA.thinInstanceSetBuffer("matrix", atkBufA, 16, false);
+        atkMeshB.thinInstanceSetBuffer("matrix", atkBufB, 16, false);
+        atkMeshA.thinInstanceCount = 0;
+        atkMeshB.thinInstanceCount = 0;
 
         // Boid pool — visual variety only. Each frame we map sim racs
         // to boid slots by index; the boid's archetype need not match
@@ -448,6 +528,44 @@ export function BattleField3D({
           teamDiscA.thinInstanceBufferUpdated("matrix");
           teamDiscB.thinInstanceBufferUpdated("matrix");
 
+          // Pack alive spawn bins into per-team buffers. Coord remap
+          // matches the rac one (babylon = (sim.y, -sim.x)).
+          const bn = battleState.bin;
+          let aBins = 0, bBins = 0;
+          for (let i = 0; i < bn.count; i++) {
+            if (!bn.alive[i]) continue;
+            const owner = bn.owner[i];
+            if (owner === 0 ? aBins >= MAX_BINS_PER_SIDE : bBins >= MAX_BINS_PER_SIDE) continue;
+            const buf = owner === 0 ? binBufA : binBufB;
+            const off = (owner === 0 ? aBins++ : bBins++) * 16;
+            buf[off + 12] = bn.y[i] * SIM_TO_BABYLON;
+            buf[off + 13] = -bn.x[i] * SIM_TO_BABYLON;
+            buf[off + 14] = BIN_HALF_HEIGHT;
+          }
+          binMeshA.thinInstanceCount = aBins;
+          binMeshB.thinInstanceCount = bBins;
+          binMeshA.thinInstanceBufferUpdated("matrix");
+          binMeshB.thinInstanceBufferUpdated("matrix");
+
+          // Pack alive in-flight projectiles per team. Same coord remap
+          // as bins/racs (babylon = (sim.y, -sim.x)).
+          const ak = battleState.atk;
+          let aAtks = 0, bAtks = 0;
+          for (let i = 0; i < ak.count; i++) {
+            if (!ak.alive[i]) continue;
+            const owner = ak.sourceOwner[i];
+            if (owner === 0 ? aAtks >= MAX_ATKS_PER_SIDE : bAtks >= MAX_ATKS_PER_SIDE) continue;
+            const buf = owner === 0 ? atkBufA : atkBufB;
+            const off = (owner === 0 ? aAtks++ : bAtks++) * 16;
+            buf[off + 12] = ak.y[i] * SIM_TO_BABYLON;
+            buf[off + 13] = -ak.x[i] * SIM_TO_BABYLON;
+            buf[off + 14] = ATK_Z;
+          }
+          atkMeshA.thinInstanceCount = aAtks;
+          atkMeshB.thinInstanceCount = bAtks;
+          atkMeshA.thinInstanceBufferUpdated("matrix");
+          atkMeshB.thinInstanceBufferUpdated("matrix");
+
           field.stepAnimate(dt);
           scene.render();
         });
@@ -538,7 +656,7 @@ export function BattleField3D({
       try { scene?.dispose(); } catch (e) { console.warn("dispose scene", e); }
       try { engine?.dispose(); } catch (e) { console.warn("dispose engine", e); }
     };
-  }, [compA, compB, halfExtent, maxBoids, rosterSeed, simBounds]);
+  }, [compA, compB, halfExtent, maxBoids, rosterSeed, simBounds, restartCounter]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>

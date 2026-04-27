@@ -148,6 +148,10 @@ interface CLIArgs {
   comps: string[];
   pop: number;
   resume: boolean;
+  /** Override globalSpawnBurstMul for every battle. The GA does not
+   *  tune this knob itself (it's a designer choice — "we're balancing
+   *  for big battles" vs "small battles"). Default 1.0. */
+  spawnMul: number;
 }
 
 function parseArgs(argv: string[]): CLIArgs {
@@ -158,6 +162,7 @@ function parseArgs(argv: string[]): CLIArgs {
     ticks: 1500,
     pop: 12,
     resume: false,
+    spawnMul: 1,
     comps: ["doc-phalanx", "doc-fire-team", "doc-modern-patrol", "doc-fanatic"],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -169,6 +174,7 @@ function parseArgs(argv: string[]): CLIArgs {
     else if (a === "--ticks") { out.ticks = Number(v); i++; }
     else if (a === "--pop") { out.pop = Number(v); i++; }
     else if (a === "--resume") { out.resume = true; }
+    else if (a === "--spawn-mul") { out.spawnMul = Number(v); i++; }
     else if (a === "--comps") {
       out.comps = String(v).split(",").map((s) => s.trim()).filter(Boolean);
       i++;
@@ -313,6 +319,11 @@ async function evaluate(
   for (const a of comps) {
     for (const b of comps) {
       for (let s = 0; s < args.seeds; s++) {
+        // Layer the user's spawn-mul on top of whatever the GA's
+        // candidate knobs say. The GA's knob set may not include
+        // globalSpawnBurstMul (it's a designer-chosen scale, not
+        // a balance knob), so we always pin it from CLI here.
+        const jobKnobs = { ...knobs, globalSpawnBurstMul: args.spawnMul };
         jobs.push({
           battleId: `auto-${a}-${b}-${startSeed + s}`,
           seed: startSeed + s,
@@ -322,7 +333,7 @@ async function evaluate(
           boundsW: 100,
           boundsH: 100,
           disableSynergies: true,
-          doctrineKnobs: knobs,
+          doctrineKnobs: jobKnobs,
         });
       }
     }
