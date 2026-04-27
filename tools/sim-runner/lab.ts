@@ -562,8 +562,11 @@ function scenarioSpawn(unitId: string, seed: number) {
 
 /** scenario: formation — one unit's burst arranged by a specified
  *  formation, then settled for N ticks. Lets you visualize a formation
- *  shape without the rest of the battle's complications. */
-function scenarioFormation(unitId: string, formationId: FormationId | null) {
+ *  shape without the rest of the battle's complications.
+ *  If `targetDistance > 0`, also places a static dummy enemy that
+ *  distance away so seek/cohesion/hide-behind have something to
+ *  resolve against. */
+function scenarioFormation(unitId: string, formationId: FormationId | null, targetDistance: number = 0) {
   return (state: BattleState, content: ContentBundle) => {
     const u = getUnit(content, unitId);
     const fid = formationId ?? DEFAULT_FORMATION_BY_ROLE[u.role];
@@ -576,12 +579,26 @@ function scenarioFormation(unitId: string, formationId: FormationId | null) {
       );
     }
     const burst = u.bin.spawn_burst ?? [2, 5, 5, 10][ROLE_TO_IDX[u.role]];
-    // Use the formation's arrange() directly. forward = -1 means
-    // enemies are at -x (canonical side-0 placement).
+    const dummy = getUnit(content, "city-barbarian-tank-brick");
+    // Place dummy first if requested. Will be at -targetDistance/2;
+    // friendlies at +targetDistance/2 (canonical side-0 placement).
+    let dummyId = -1;
+    if (targetDistance > 0) {
+      const dRow = placeRac(state, dummy, 1, -targetDistance / 2, 0);
+      state.rac.hp[dRow] = 1e9;
+      state.rac.hpMax[dRow] = 1e9;
+      dummyId = state.rac.id[dRow];
+    }
+    // forward = -1 means enemies are at -x (canonical side-0 placement).
     for (let k = 0; k < burst; k++) {
       const off = def.arrange({ burstIdx: k, burstSize: burst, forward: -1 });
-      const slot = placeRac(state, u, 0, off.dx, off.dy);
+      const baseX = targetDistance > 0 ? targetDistance / 2 : 0;
+      const slot = placeRac(state, u, 0, baseX + off.dx, off.dy);
       state.rac.formationIdx[slot] = formationIdx;
+      if (dummyId >= 0) {
+        state.rac.targetId[slot] = dummyId;
+        state.rac.targetKind[slot] = TARGET_KIND_RAC;
+      }
     }
   };
 }
@@ -782,14 +799,15 @@ async function main(): Promise<void> {
     case "formation": {
       const unit = args.positional[0];
       const formationId = (args.positional[1] ?? null) as FormationId | null;
-      if (!unit) throw new Error("usage: lab formation <unit-id> [formation-id]");
+      const targetDistance = Number(args.flags.target ?? 0);
+      if (!unit) throw new Error("usage: lab formation <unit-id> [formation-id] [--target=<m>]");
       await runScenario(
         {
           scenario: "formation",
-          args: { unit, formation: formationId ?? "default" },
+          args: { unit, formation: formationId ?? "default", target: targetDistance },
           seed,
           ticks,
-          setupFn: scenarioFormation(unit, formationId),
+          setupFn: scenarioFormation(unit, formationId, targetDistance),
         },
         content,
       );

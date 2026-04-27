@@ -192,13 +192,16 @@ export const FORMATIONS: FormationDef[] = [
     role: "archer",
     arrange(args) {
       // 5 archers → front row of 3, back row of 2 (offset by half pitch).
+      // forward=-1 means enemy is at -x; the FRONT row (closer to
+      // enemy) gets dx = +forward*0.6 (i.e., toward enemy = negative
+      // x for side 0). Back row sits behind, +x for side 0.
       const front = args.burstIdx < 3;
       const idxInRow = front ? args.burstIdx : args.burstIdx - 3;
       const sizeInRow = front ? 3 : 2;
       const pitch = 1.6;
       const center = (sizeInRow - 1) * 0.5;
       const yOffset = (idxInRow - center) * pitch + (front ? 0 : pitch * 0.5);
-      const xOffset = front ? -args.forward * 0.6 : args.forward * 0.6;
+      const xOffset = front ? args.forward * 0.6 : -args.forward * 0.6;
       return { dx: xOffset, dy: yOffset };
     },
     tacticOverride: { hideBehindK: 3.0, alignmentK: 1.2 },
