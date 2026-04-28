@@ -105,6 +105,18 @@ const FLANK_PINNED_DENSITY = 0.3;
 /** Step size for the density-gradient finite difference (meters).
  *  One cell = 4 m, so half a cell is enough resolution. */
 const FLANK_GRAD_H = 2;
+/** Edge-finding probe step (meters). Walks perpendicular to the
+ *  density gradient in this increment until density drops past the
+ *  edge threshold. One field cell = 4 m, so this samples ~one cell
+ *  per step. */
+const FLANK_PROBE_STEP = 4;
+/** Density below which we treat the lateral probe point as PAST the
+ *  enemy formation edge. Lower than FLANK_PINNED_DENSITY so we don't
+ *  exit FLANK while still partially in the line. */
+const FLANK_EDGE_DENSITY = 0.05;
+/** Max edge-probe steps. Caps the lateral search so cavalry doesn't
+ *  aim 200 m sideways when no edge is found nearby. */
+const FLANK_MAX_STEPS = 8;
 
 /** Should this cavalry rac flank? Two cases:
  *   1. PINNED: enemy density at cavalry's own position is high — it's
@@ -239,15 +251,12 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const maxV = state.rac.effSpeed[i];
 
     if (behavior === BEHAVIOR_FLANK) {
-      // Cavalry flank — sweep ALONG the local enemy line edge. The
-      // enemy-density gradient at cavalry's position points INTO the
-      // line; perpendicular to the gradient is along the line. Pick
-      // the perpendicular direction that has the most forward bias
-      // toward the target (so we drift toward the open wing rather
-      // than away from the fight). Result: a cavalry rac stuck in
-      // melee against a phalanx slides sideways out of the line,
-      // arrives at the flank, then exits FLANK as density drops and
-      // re-enters MARCH/ENGAGE from a new angle.
+      // Cavalry flank: find the EDGE of the enemy formation by
+      // probing density laterally, then aim PAST it. The user's
+      // signal: cavalry was sliding along the line but didn't
+      // understand where the line ended. Now we walk perpendicular
+      // (away from the gradient) in 4 m steps until density drops to
+      // ~0, that's the edge. Aim a few meters past.
       const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
       const h = FLANK_GRAD_H;
       const dxDens =
@@ -258,6 +267,10 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         sampleField(fields, fields.density[enemyCh], myX, myY - h);
       const gMag = Math.hypot(dxDens, dyDens);
       if (gMag > 1e-3) {
+        // Perpendicular to the gradient = along the line. Two
+        // choices; pick the one with positive forward-bias toward
+        // the target (so we sweep toward the side closer to the
+        // enemy's flank, not away from the fight).
         const perpX = -dyDens / gMag;
         const perpY = dxDens / gMag;
         let fwdBias = 0;
@@ -266,15 +279,34 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
             (perpX * (tgtX - myX) + perpY * (tgtY - myY)) / distToTarget;
         }
         const sign = fwdBias >= 0 ? 1 : -1;
-        // Pure lateral move — no forward component, otherwise cavalry
-        // would drift back into the line. Once we're around the edge
-        // and density drops, the next decision flips back to MARCH.
-        desiredVx = perpX * sign * maxV;
-        desiredVy = perpY * sign * maxV;
+        // Edge-finding probe: walk along the perpendicular until
+        // enemy density drops to clearly-past-the-line. The first
+        // probe at 0 is for sanity (we're already in the line). We
+        // step by FLANK_PROBE_STEP up to FLANK_MAX_STEPS times.
+        let edgeAt = FLANK_PROBE_STEP * FLANK_MAX_STEPS;
+        for (let k = 1; k <= FLANK_MAX_STEPS; k++) {
+          const probeX = myX + perpX * sign * k * FLANK_PROBE_STEP;
+          const probeY = myY + perpY * sign * k * FLANK_PROBE_STEP;
+          const d = sampleField(fields, fields.density[enemyCh], probeX, probeY);
+          if (d < FLANK_EDGE_DENSITY) {
+            // Found the edge at step k. Aim PAST it by another step
+            // so cavalry commits to clearing the formation entirely.
+            edgeAt = (k + 1) * FLANK_PROBE_STEP;
+            break;
+          }
+        }
+        const aimX = myX + perpX * sign * edgeAt;
+        const aimY = myY + perpY * sign * edgeAt;
+        const dx = aimX - myX;
+        const dy = aimY - myY;
+        const d = Math.hypot(dx, dy);
+        if (d > 1e-3) {
+          desiredVx = (dx / d) * maxV;
+          desiredVy = (dy / d) * maxV;
+        }
       } else if (tgtFound && distToTarget > 1e-3) {
-        // No gradient (no enemies near us) — we're already past the
-        // line. Aim at target; the next decision will switch us out
-        // of FLANK on the cadence tick.
+        // No gradient — already past the line. Aim at target; next
+        // decision will switch us out of FLANK on the cadence tick.
         desiredVx = ((tgtX - myX) / distToTarget) * maxV;
         desiredVy = ((tgtY - myY) / distToTarget) * maxV;
       }
