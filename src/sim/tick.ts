@@ -24,6 +24,7 @@ import { TICK_RATE_HZ, summarize } from "./state.js";
 import { buildRacGrid, DEFAULT_CELL_SIZE } from "./grid.js";
 import { makeRng, rngInt } from "./rng.js";
 import { boidsTick } from "./subsys/boids.js";
+import { squadTick } from "./subsys/squad.js";
 import { combatTick } from "./subsys/combat.js";
 import { decayTick } from "./subsys/decay.js";
 import { projectileTick } from "./subsys/projectile.js";
@@ -77,6 +78,7 @@ export function tick(state: BattleState, content: ContentBundle, log: Logger): v
   // randomness path; deterministic across runs.
   buildTickIterOrder(state);
   targetTick(state, content, log);
+  squadTick(state);
   boidsTick(state, content, log);
   combatTick(state, content, log);
   // Projectiles tick AFTER combat so freshly-fired arrows get one tick

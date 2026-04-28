@@ -114,6 +114,7 @@ export function emptyState(opts: { seed?: number; bounds?: { w: number; h: numbe
     nextRacId: 1,
     nextAtkId: 1,
     nextGroupId: 1,
+    nextSquadId: 1,
     winner: -1,
     endReason: null,
     tacticPerSide: composeTactics(),
@@ -178,6 +179,9 @@ export function addRac(
     sourceBinId?: number;
     slotDx?: number;
     slotDy?: number;
+    squadId?: number;
+    /** Defaults to the rac's own id (= solo squad, this rac is its leader). */
+    squadLeaderId?: number;
   },
 ): number {
   const slot = state.rac.count;
@@ -214,6 +218,8 @@ export function addRac(
   state.rac.surroundedDamageMul[slot] = 1;
   state.rac.slotDx[slot] = opts.slotDx ?? 0;
   state.rac.slotDy[slot] = opts.slotDy ?? 0;
+  state.rac.squadId[slot] = opts.squadId ?? (state.nextSquadId++);
+  state.rac.squadLeaderId[slot] = opts.squadLeaderId ?? state.rac.id[slot];
   state.rac.count = slot + 1;
   state.racRowById.set(state.rac.id[slot], slot);
   return slot;

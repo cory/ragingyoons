@@ -472,6 +472,35 @@ export interface DoctrineDef {
    *  to the enemy axis (cardinal +x). "random" = id-hash. "none" =
    *  formation never splits. */
   splitAxis: SplitAxisId;
+  /** When true, followers in contact mode (any enemy within
+   *  CONTACT_RADIUS) drop the leader-pull and act independently with
+   *  full boid forces. Skirmishers / fire-teams use this — once the
+   *  shooting starts they break formation and do their own thing.
+   *  Phalanx / line / fanatic stay disciplined under fire. */
+  independentInContact: boolean;
+}
+
+/** Role-tier sizes — how many racs make up each level of the unit
+ *  hierarchy: [squad, platoon, company, battalion]. The leader of each
+ *  tier is a single rac promoted from its members; higher tiers are
+ *  units-of-units (a platoon is 3 squad-leaders, etc).
+ *
+ *  Per-role differences match the design brief: tanks are rare and
+ *  elite (1/4/12/36); archers and cavalry are mid-density (8/24/72/288);
+ *  infantry are the bulk (12/36/108/648).
+ *
+ *  v0 only consumes the squad size (tier 0). Platoon and beyond are
+ *  reserved for the next slice. */
+export const ROLE_TIER_SIZES: Record<import("./content.js").RoleId, readonly [number, number, number, number]> = {
+  tank: [1, 4, 12, 36],
+  archer: [8, 24, 72, 288],
+  cavalry: [8, 24, 72, 288],
+  infantry: [12, 36, 108, 648],
+};
+
+/** Convenience: squad size (tier 0) for a role. */
+export function squadSizeFor(role: import("./content.js").RoleId): number {
+  return ROLE_TIER_SIZES[role][0];
 }
 
 export const DOCTRINES: readonly DoctrineDef[] = [
@@ -485,6 +514,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     lastStand: "fight-on",
     maxFormationSize: 32,
     splitAxis: "lateral",
+    independentInContact: false,
   },
   // 1 — Suburban+Barbarians: tight wall, hold ground, fight to death.
   // Big block formation; splits along depth (front/back ranks).
@@ -497,6 +527,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     lastStand: "fight-on",
     maxFormationSize: 64,
     splitAxis: "front-rear",
+    independentInContact: false, // shield wall holds at all costs
   },
   // 2 — City+Lockpickers / Coastal+Lockpickers: bounding overwatch.
   // Real fire teams are 4-12 strong; we cap at 12.
@@ -509,6 +540,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     lastStand: "rally-cluster",
     maxFormationSize: 12,
     splitAxis: "lateral",
+    independentInContact: true, // fight in pairs, individual decisions
   },
   // 3 — Park+Tinkerers: sprint-halt, harass. Tiny groups by design.
   {
@@ -520,6 +552,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     lastStand: "rout-to-bin",
     maxFormationSize: 6,
     splitAxis: "random",
+    independentInContact: true, // skirmishers ALWAYS act on their own once shooting starts
   },
   // 4 — City+Farmers / Coastal+Farmers: wide line.
   {
@@ -531,6 +564,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     lastStand: "rally-cluster",
     maxFormationSize: 40,
     splitAxis: "lateral",
+    independentInContact: false,
   },
   // 5 — Roaming patrol that swarms first contact.
   {
@@ -542,6 +576,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     lastStand: "rout-to-bin",
     maxFormationSize: 16,
     splitAxis: "front-rear",
+    independentInContact: true,
   },
   // 6 — Fanatic: never breaks, dies advancing. No formation discipline.
   {
@@ -553,6 +588,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     lastStand: "death-rage",
     maxFormationSize: 30,
     splitAxis: "none",
+    independentInContact: true, // dies advancing as a wave of individuals
   },
 ];
 

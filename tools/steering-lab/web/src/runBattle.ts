@@ -53,6 +53,9 @@ export interface RacFrame {
   contact: 0 | 1;
   slotDx: number;
   slotDy: number;
+  squadId: number;
+  squadLeaderId: number;
+  isLeader: boolean;
   /** Per-component forces captured by boidsTick (12 floats). */
   forces: Float32Array;
 }
@@ -124,8 +127,10 @@ function snapshotFrame(state: ReturnType<typeof setupShapeBattle>, dbg: Float32A
   for (let i = 0; i < state.rac.count; i++) {
     const f = new Float32Array(FORCE_FLOATS_PER_RAC);
     f.set(dbg.subarray(i * FORCE_FLOATS_PER_RAC, (i + 1) * FORCE_FLOATS_PER_RAC));
+    const racId = state.rac.id[i];
+    const leaderId = state.rac.squadLeaderId[i];
     racs.push({
-      id: state.rac.id[i],
+      id: racId,
       x: state.rac.x[i],
       y: state.rac.y[i],
       vx: state.rac.vx[i],
@@ -136,6 +141,9 @@ function snapshotFrame(state: ReturnType<typeof setupShapeBattle>, dbg: Float32A
       contact: state.rac.contact[i] as 0 | 1,
       slotDx: state.rac.slotDx[i],
       slotDy: state.rac.slotDy[i],
+      squadId: state.rac.squadId[i],
+      squadLeaderId: leaderId,
+      isLeader: leaderId === racId || leaderId < 0,
       forces: f,
     });
   }

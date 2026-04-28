@@ -269,25 +269,52 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const mySlotDx = state.rac.slotDx[i] * slotMul;
     const mySlotDy = state.rac.slotDy[i] * slotMul;
 
+    // Squad cohesion: followers pull toward (leaderPos + slot). The
+    // leader itself has slot=(0,0) so it has zero cohesion (leaders
+    // don't pull on themselves). Followers in `independentInContact`
+    // doctrine drop the leader-pull when contact[i]==1 — skirmisher /
+    // fire-team / fanatic break formation under fire. Leaders always
+    // drive the squad.
+    const myRacId = state.rac.id[i];
+    const myLeaderId = state.rac.squadLeaderId[i];
+    const isLeader = myLeaderId === myRacId || myLeaderId < 0;
+    const doc = DOCTRINES[state.rac.doctrineIdx[i]];
+    const inIndependentContact =
+      !!doc && doc.independentInContact && state.rac.contact[i] === 1;
+    const followsLeader = !isLeader && !inIndependentContact;
     let cohX = 0;
     let cohY = 0;
-    if (cohKEff > 0 && f_cohesion) {
-      const myGroupId = state.rac.groupId[i];
-      const stats = groupStats.get(myGroupId);
-      if (stats && stats.count >= 2) {
-        const cx = stats.sumX / stats.count;
-        const cy = stats.sumY / stats.count;
-        const tx = cx + mySlotDx;
-        const ty = cy + mySlotDy;
-        const tdx = tx - myX;
-        const tdy = ty - myY;
-        const td = Math.hypot(tdx, tdy);
-        if (td > 1e-3) {
-          cohX = (tdx / td) * cohKEff;
-          cohY = (tdy / td) * cohKEff;
+    let leaderTx = 0, leaderTy = 0;
+    let leaderTargetFound = false;
+    if (followsLeader) {
+      const leaderRow = findRacRowById(state, myLeaderId);
+      if (leaderRow >= 0) {
+        leaderTx = state.rac.x[leaderRow] + mySlotDx;
+        leaderTy = state.rac.y[leaderRow] + mySlotDy;
+        leaderTargetFound = true;
+        if (cohKEff > 0 && f_cohesion) {
+          const tdx = leaderTx - myX;
+          const tdy = leaderTy - myY;
+          const td = Math.hypot(tdx, tdy);
+          if (td > 1e-3) {
+            cohX = (tdx / td) * cohKEff;
+            cohY = (tdy / td) * cohKEff;
+          }
         }
       }
     }
+    // Shape error = distance from rac to its slot target. Only
+    // meaningful for followers; leaders / independents have no slot.
+    const shapeError = leaderTargetFound
+      ? Math.hypot(leaderTx - myX, leaderTy - myY)
+      : 0;
+    // "In slot" = follower close enough to its (leaderPos + slot) target
+    // that the squad-leader is fully driving — separation, alignment,
+    // seek, hide, avoid all gate off and only cohesion remains. Far
+    // away (just spawned, or knocked out of formation), full boid
+    // forces fire to bring the rac back.
+    const IN_SLOT_R = 1.5;
+    const inSlot = followsLeader && leaderTargetFound && shapeError < IN_SLOT_R;
 
     // ---- Alignment: toward local same-side same-role average velocity. ----
     let alignX = 0;
@@ -345,13 +372,27 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     } else if (f_doctrineMod && dMod.seekDirOverride) {
       seekX = dMod.seekDirOverride.dx * seekKEff;
       seekY = dMod.seekDirOverride.dy * seekKEff;
+    } else if (followsLeader && leaderTargetFound) {
+      // Followers seek their LEADER-relative slot, not the world
+      // target. The leader does the world-targeting; the follower
+      // just rejoins. Out-of-slot followers feel both seek + cohesion
+      // pulling them home, which gets them back to the squad faster
+      // than cohesion alone would (cohesion alone is unit-speed-capped,
+      // same as the leader's march, so a lagging follower never closes
+      // — adding seek toward the slot makes "rejoin" actually work).
+      const tdx = leaderTx - myX;
+      const tdy = leaderTy - myY;
+      const td2 = tdx * tdx + tdy * tdy;
+      if (td2 > 1e-6) {
+        const td = Math.sqrt(td2);
+        seekX = (tdx / td) * seekKEff;
+        seekY = (tdy / td) * seekKEff;
+      }
     } else if (tgtFound && !inCombat) {
-      // Each rac seeks (target + slot × envelopFactor). Envelop factor
-      // and slot magnitude both decay with distance to target (computed
-      // above as `effSlotS`), so far away the line marches at full
-      // pitch with each rac aiming at its slot offset; close in, the
-      // slot collapses and every rac aims directly at the bare target.
-      // Visually: line tightens uniformly as it closes.
+      // Leader (or independent-in-contact follower): seek world target
+      // with envelopment falloff. (target + slot × envelopFactor) so
+      // far away the line marches wide, close in the slot collapses
+      // and the formation tightens onto the target.
       const aimX = tgtX + mySlotDx;
       const aimY = tgtY + mySlotDy;
       const tdx = aimX - myX;
@@ -462,6 +503,18 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // Cavalry flanks visibly (K=0.4 → ±23°), infantry slightly
     // spreads (0.15), archer/tank mostly straight. Adjacent racs
     // from the same spawn pick different sides of the approach.
+    // In-slot gate: when a follower is at its leader-relative slot,
+    // the squad-leader is driving — this rac just holds. Zero out
+    // alignment / seek / hide / avoid; keep separation (so the rac
+    // doesn't overlap a neighbor under any micro-jitter) and keep
+    // cohesion (the leader-pull that reels the rac in if it drifts).
+    if (inSlot) {
+      alignX = 0; alignY = 0;
+      seekX = 0; seekY = 0;
+      hideX = 0; hideY = 0;
+      avoidX = 0; avoidY = 0;
+    }
+
     // Steering-lab debug capture: store the raw per-component forces
     // before the flank-bias rotation and velocity normalization. The
     // viz draws these as colored arrows centered on the rac.

@@ -22,7 +22,7 @@ import {
   FORMATION_TO_IDX,
   type FormationId,
 } from "./formations.js";
-import { DOCTRINE_TO_IDX, doctrineFor, teamSizeFor } from "./doctrines.js";
+import { DOCTRINE_TO_IDX, doctrineFor, squadSizeFor, teamSizeFor } from "./doctrines.js";
 
 /** Cap on simultaneously-tracked entities. Generous for v0; tighten later. */
 export const MAX_BINS = 32;
@@ -171,15 +171,25 @@ export interface RacTable {
    *  get out-of-phase rhythm cycles so the pack appears to bound
    *  forward in alternation without per-team coordination logic. */
   teamId: Uint8Array;
-  /** Per-rac formation slot offset (formation-space, with forward
-   *  already mirrored by side at spawn). Boids cohesion pulls each rac
-   *  toward `groupCentroid + slot` so the formation holds its shape
-   *  instead of collapsing to a single point. Set once at spawn from
-   *  `formation.arrange()`. Splits don't recompute slots — a split
-   *  group inherits the parent's slot vectors, which is fine since the
-   *  centroid moves to the new sub-group's centroid. */
+  /** Per-rac slot offset relative to the rac's SQUAD LEADER (formation-
+   *  space, with forward already mirrored by side at spawn). Boids
+   *  cohesion pulls each follower toward `leaderPos + slot` so the
+   *  squad holds its shape relative to its leader rather than to a
+   *  drifting centroid. The leader itself has slot = (0, 0). Set once
+   *  at spawn from `formation.arrange()`. */
   slotDx: Float32Array;
   slotDy: Float32Array;
+  /** Squad membership. All racs in the same squad cohere around their
+   *  leader. v0: assigned at spawn, never re-shuffled. Hierarchy
+   *  beyond the squad (platoon, company, battalion) lands in a later
+   *  slice. 0 = no squad (sentinel; spawn always assigns a real id). */
+  squadId: Uint16Array;
+  /** Rac id (NOT row) of this rac's squad leader. Followers point to
+   *  their leader; leaders point to themselves. On leader death, the
+   *  squad promotes its lowest-id surviving member; every follower's
+   *  squadLeaderId gets rewritten to point at the new leader. -1 if
+   *  the squad has been wiped. */
+  squadLeaderId: Int32Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -229,6 +239,9 @@ export interface BattleState {
   /** Monotonic group id counter — incremented at each burst spawn
    *  and at each formation split. */
   nextGroupId: number;
+  /** Monotonic squad id counter — incremented for every new squad
+   *  assigned at spawn time. v0: never reused. */
+  nextSquadId: number;
   winner: -1 | 0 | 1;
   endReason: "last-raccoon" | "all-bins" | "timeout" | "tiebreak" | "draw" | null;
   /** Per-side per-role tactic profile, set at setup. Subsystems read
@@ -378,6 +391,8 @@ export function emptyRacs(): RacTable {
     groupId: new Uint16Array(MAX_RACS),
     slotDx: new Float32Array(MAX_RACS),
     slotDy: new Float32Array(MAX_RACS),
+    squadId: new Uint16Array(MAX_RACS),
+    squadLeaderId: new Int32Array(MAX_RACS),
   };
 }
 
@@ -464,6 +479,7 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
     nextRacId: 1,
     nextAtkId: 1,
     nextGroupId: 1,
+    nextSquadId: 1,
     winner: -1,
     endReason: null,
     tacticPerSide: composeTactics(),
@@ -522,6 +538,16 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   // boids cohesion pulls it back toward (centroid + slot) — that's
   // what holds shape on the march. Small RNG jitter so spawn positions
   // aren't pixel-identical.
+  // Squads inside a platoon: tier-0 unit, sized by role
+  // (infantry 12, cavalry/archer 8, tank 1). Each squad gets its own
+  // squadId + groupId + leader. Slot offsets are relative to the
+  // squad LEADER (set as the middle rac of the squad), not relative
+  // to a drifting centroid — so cohesion in boids becomes leader-pull
+  // and the squad holds shape regardless of how the platoon drifts.
+  // Squads in the same platoon are stacked laterally (perpendicular
+  // to march) within the platoon footprint; platoons stack along the
+  // march axis. Result: column of platoons, each platoon is a row of
+  // squads, each squad is a small line/grid.
   const baseX = -halfW * 0.6;
   const baseY = 0;
   const profile = state.formationProfile[0][formationIdx];
@@ -530,61 +556,99 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   const maxPlatoon = cfg.maxPlatoonSize && cfg.maxPlatoonSize > 0 ? cfg.maxPlatoonSize : cfg.count;
   const platoonCount = Math.max(1, Math.ceil(cfg.count / maxPlatoon));
   const platoonStride = cfg.platoonStride ?? 6;
+  const squadSize = squadSizeFor(unit.role);
+  // Lateral stride between squad centers within a platoon. Sized to
+  // give a visible gap between adjacent squads' lines.
+  const squadStrideY = (squadSize + 2) * 1.4;
   let remaining = cfg.count;
   for (let p = 0; p < platoonCount; p++) {
     const thisPlatoonSize = Math.min(maxPlatoon, remaining);
     if (thisPlatoonSize <= 0) break;
     remaining -= thisPlatoonSize;
-    // Platoon p centered at (baseX - p*stride, baseY) — p=0 is the
-    // front; later platoons are reserves trailing behind.
-    const px = baseX - p * platoonStride;
-    const py = baseY;
-    const groupId = state.nextGroupId++;
-    for (let k = 0; k < thisPlatoonSize; k++) {
-      if (state.rac.count >= state.rac.id.length) break;
-      const off = formation.arrange({ burstIdx: k, burstSize: thisPlatoonSize, forward });
-      const jx = (rngFloat(state.rng) - 0.5) * 0.2;
-      const jy = (rngFloat(state.rng) - 0.5) * 0.2;
-      const racRow = state.rac.count;
-      const racId = state.nextRacId++;
-      state.rac.id[racRow] = racId;
-      state.racRowById.set(racId, racRow);
-      state.rac.owner[racRow] = 0;
-      state.rac.sourceBinId[racRow] = -1;
-      state.rac.sourceSlotIdx[racRow] = -1;
-      state.rac.unitIdIdx[racRow] = internUnitId(state, unit.id);
-      state.rac.role[racRow] = ROLE_TO_IDX[unit.role];
-      state.rac.env[racRow] = ENV_TO_IDX[unit.environment];
-      state.rac.cur[racRow] = CURIOSITY_TO_IDX[unit.curiosity];
-      state.rac.hp[racRow] = unit.stats.hp;
-      state.rac.hpMax[racRow] = unit.stats.hp;
-      state.rac.rage[racRow] = 0;
-      state.rac.rageCap[racRow] = unit.rage.capacity;
-      state.rac.x[racRow] = px + off.dx + jx;
-      state.rac.y[racRow] = py + off.dy + jy;
-      state.rac.vx[racRow] = 0;
-      state.rac.vy[racRow] = 0;
-      state.rac.facing[racRow] = 0; // +x toward enemy
-      state.rac.prevFacing[racRow] = 0;
-      state.rac.targetId[racRow] = state.bin.id[binSlot];
-      state.rac.targetKind[racRow] = TARGET_KIND_BIN;
-      state.rac.attackCooldown[racRow] = 0;
-      state.rac.statuses[racRow] = [];
-      state.rac.alive[racRow] = 1;
-      state.rac.effSpeed[racRow] = unit.stats.speed * profile.speedMul;
-      state.rac.effDamage[racRow] = unit.stats.damage;
-      state.rac.effRange[racRow] = unit.stats.range;
-      state.rac.effAttackRate[racRow] = unit.stats.attack_rate;
-      state.rac.effArmor[racRow] = unit.stats.armor;
-      state.rac.dmgTakenMul[racRow] = 1;
-      state.rac.surroundedDamageMul[racRow] = 1;
-      state.rac.formationIdx[racRow] = formationIdx;
-      state.rac.doctrineIdx[racRow] = doctrineIdx;
-      state.rac.teamId[racRow] = Math.floor(k / teamSize);
-      state.rac.groupId[racRow] = groupId;
-      state.rac.slotDx[racRow] = off.dx;
-      state.rac.slotDy[racRow] = off.dy;
-      state.rac.count = racRow + 1;
+    const platoonX = baseX - p * platoonStride;
+    const platoonY = baseY;
+    const squadCount = Math.max(1, Math.ceil(thisPlatoonSize / squadSize));
+    let platoonRemaining = thisPlatoonSize;
+    for (let s = 0; s < squadCount; s++) {
+      const thisSquadSize = Math.min(squadSize, platoonRemaining);
+      if (thisSquadSize <= 0) break;
+      platoonRemaining -= thisSquadSize;
+      const squadId = state.nextSquadId++;
+      const groupId = state.nextGroupId++;
+      // Stack squads laterally within the platoon. squadCount-1 odd ->
+      // squad 0 at most-negative y, squadCount-1 at most-positive.
+      const sCenterY = platoonY + (s - (squadCount - 1) * 0.5) * squadStrideY;
+      const sCenterX = platoonX;
+      // Leader = middle rac of the squad (so slot offsets are roughly
+      // symmetric around 0, and the leader sits at the center of the
+      // squad's line/grid). Spawn order is still 0..N-1 — we just
+      // remember the leader's row to back-fill squadLeaderId once the
+      // leader's racId is known.
+      const leaderBurstIdx = Math.floor(thisSquadSize / 2);
+      const leaderOff = formation.arrange({
+        burstIdx: leaderBurstIdx,
+        burstSize: thisSquadSize,
+        forward,
+      });
+      const squadStartRow = state.rac.count;
+      for (let k = 0; k < thisSquadSize; k++) {
+        if (state.rac.count >= state.rac.id.length) break;
+        const off = formation.arrange({ burstIdx: k, burstSize: thisSquadSize, forward });
+        const jx = (rngFloat(state.rng) - 0.5) * 0.2;
+        const jy = (rngFloat(state.rng) - 0.5) * 0.2;
+        const racRow = state.rac.count;
+        const racId = state.nextRacId++;
+        state.rac.id[racRow] = racId;
+        state.racRowById.set(racId, racRow);
+        state.rac.owner[racRow] = 0;
+        state.rac.sourceBinId[racRow] = -1;
+        state.rac.sourceSlotIdx[racRow] = -1;
+        state.rac.unitIdIdx[racRow] = internUnitId(state, unit.id);
+        state.rac.role[racRow] = ROLE_TO_IDX[unit.role];
+        state.rac.env[racRow] = ENV_TO_IDX[unit.environment];
+        state.rac.cur[racRow] = CURIOSITY_TO_IDX[unit.curiosity];
+        state.rac.hp[racRow] = unit.stats.hp;
+        state.rac.hpMax[racRow] = unit.stats.hp;
+        state.rac.rage[racRow] = 0;
+        state.rac.rageCap[racRow] = unit.rage.capacity;
+        state.rac.x[racRow] = sCenterX + off.dx + jx;
+        state.rac.y[racRow] = sCenterY + off.dy + jy;
+        state.rac.vx[racRow] = 0;
+        state.rac.vy[racRow] = 0;
+        state.rac.facing[racRow] = 0; // +x toward enemy
+        state.rac.prevFacing[racRow] = 0;
+        state.rac.targetId[racRow] = state.bin.id[binSlot];
+        state.rac.targetKind[racRow] = TARGET_KIND_BIN;
+        state.rac.attackCooldown[racRow] = 0;
+        state.rac.statuses[racRow] = [];
+        state.rac.alive[racRow] = 1;
+        state.rac.effSpeed[racRow] = unit.stats.speed * profile.speedMul;
+        state.rac.effDamage[racRow] = unit.stats.damage;
+        state.rac.effRange[racRow] = unit.stats.range;
+        state.rac.effAttackRate[racRow] = unit.stats.attack_rate;
+        state.rac.effArmor[racRow] = unit.stats.armor;
+        state.rac.dmgTakenMul[racRow] = 1;
+        state.rac.surroundedDamageMul[racRow] = 1;
+        state.rac.formationIdx[racRow] = formationIdx;
+        state.rac.doctrineIdx[racRow] = doctrineIdx;
+        state.rac.teamId[racRow] = Math.floor(k / teamSize);
+        state.rac.groupId[racRow] = groupId;
+        // Slot is relative to the leader's slot in the squad's
+        // formation arrangement — leader has slot (0,0), followers
+        // are offset by their formation pos minus the leader's.
+        state.rac.slotDx[racRow] = off.dx - leaderOff.dx;
+        state.rac.slotDy[racRow] = off.dy - leaderOff.dy;
+        state.rac.squadId[racRow] = squadId;
+        // Placeholder; back-filled below once we know the leader's id.
+        state.rac.squadLeaderId[racRow] = -1;
+        state.rac.count = racRow + 1;
+      }
+      // Back-fill squadLeaderId for everyone in this squad.
+      const leaderRow = squadStartRow + leaderBurstIdx;
+      const leaderRacId = state.rac.id[leaderRow];
+      for (let r = squadStartRow; r < state.rac.count; r++) {
+        state.rac.squadLeaderId[r] = leaderRacId;
+      }
     }
   }
   return state;
@@ -614,6 +678,7 @@ export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleSt
     nextRacId: 1,
     nextAtkId: 1,
     nextGroupId: 1,
+    nextSquadId: 1,
     winner: -1,
     endReason: null,
     tacticPerSide: composeTactics(cfg.tacticsA, cfg.tacticsB),

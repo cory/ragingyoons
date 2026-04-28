@@ -349,12 +349,15 @@ function Legend() {
     </div>
   );
 }
-function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; forces: Float32Array } }) {
+function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; forces: Float32Array } }) {
   const { forces } = rac;
   const speed = Math.hypot(rac.vx, rac.vy);
   return (
-    <div style={{ position: "absolute", right: 8, top: 8, background: "#000c", padding: 8, borderRadius: 3, fontSize: 11, color: "#ddd", minWidth: 180 }}>
-      <div>rac #{rac.id} group {rac.groupId} {rac.contact ? "[contact]" : ""}</div>
+    <div style={{ position: "absolute", right: 8, top: 8, background: "#000c", padding: 8, borderRadius: 3, fontSize: 11, color: "#ddd", minWidth: 200 }}>
+      <div>
+        rac #{rac.id} {rac.isLeader ? <span style={{ color: "#fc6" }}>[leader]</span> : null} {rac.contact ? "[contact]" : ""}
+      </div>
+      <div style={{ color: "#888" }}>squad {rac.squadId} → leader #{rac.squadLeaderId}</div>
       <div style={{ color: "#888" }}>pos ({rac.x.toFixed(1)}, {rac.y.toFixed(1)})  v {speed.toFixed(2)}m/s</div>
       <div style={{ color: "#888" }}>slot ({rac.slotDx.toFixed(2)}, {rac.slotDy.toFixed(2)})</div>
       <div style={{ marginTop: 4, borderTop: "1px solid #333", paddingTop: 4 }}>
@@ -498,39 +501,44 @@ function drawFrame(
     }
   }
 
-  // Slot-target markers
+  // Slot-target markers — each rac's (leaderPos + slot) cohesion target.
   if (cfg.overlays.slotTarget) {
-    const groupCentroid = new Map<number, { sx: number; sy: number; n: number }>();
+    const leaderPos = new Map<number, { x: number; y: number }>();
     for (const r of frame.racs) {
       if (!r.alive) continue;
-      const g = groupCentroid.get(r.groupId) ?? { sx: 0, sy: 0, n: 0 };
-      g.sx += r.x; g.sy += r.y; g.n++;
-      groupCentroid.set(r.groupId, g);
+      if (r.isLeader) leaderPos.set(r.id, { x: r.x, y: r.y });
     }
     ctx.fillStyle = "#7adde0";
     for (const r of frame.racs) {
-      if (!r.alive) continue;
-      const c = groupCentroid.get(r.groupId);
-      if (!c || c.n < 2) continue;
-      const tx = c.sx / c.n + r.slotDx;
-      const ty = c.sy / c.n + r.slotDy;
+      if (!r.alive || r.isLeader) continue;
+      const lp = leaderPos.get(r.squadLeaderId);
+      if (!lp) continue;
+      const tx = lp.x + r.slotDx;
+      const ty = lp.y + r.slotDy;
       const [px, py] = worldToPx(tx, ty);
       ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
     }
   }
 
-  // Racs — color by groupId hash so platoons are visually distinct.
+  // Racs — color by squadId hash so squads are visually distinct.
+  // Leaders get a white ring so the senior member of each squad stands
+  // out at a glance.
   for (const r of frame.racs) {
     if (!r.alive) continue;
     const [px, py] = worldToPx(r.x, r.y);
-    ctx.fillStyle = r.id === hoverId ? "#fff" : groupColor(r.groupId, r.contact === 1);
+    ctx.fillStyle = r.id === hoverId ? "#fff" : squadColor(r.squadId, r.contact === 1);
     ctx.fillRect(px - 3, py - 3, 6, 6);
+    if (r.isLeader) {
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(px - 4.5, py - 4.5, 9, 9);
+    }
   }
 }
 
-function groupColor(gid: number, contact: boolean): string {
-  // Hash gid → hue; saturation/lightness vary slightly between platoons.
-  const h = ((gid * 2654435761) >>> 0) / 4294967296;
+function squadColor(sid: number, contact: boolean): string {
+  // Hash squadId → hue; saturation/lightness vary slightly with contact.
+  const h = ((sid * 2654435761) >>> 0) / 4294967296;
   const hue = Math.floor(h * 360);
   const sat = contact ? 80 : 65;
   const lit = contact ? 70 : 60;
