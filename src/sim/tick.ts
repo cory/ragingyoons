@@ -24,6 +24,7 @@ import { TICK_RATE_HZ, summarize } from "./state.js";
 import { buildRacGrid, DEFAULT_CELL_SIZE } from "./grid.js";
 import { makeRng, rngInt } from "./rng.js";
 import { boidsTick } from "./subsys/boids.js";
+import { moraleTick } from "./subsys/morale.js";
 import { squadTick } from "./subsys/squad.js";
 import { combatTick } from "./subsys/combat.js";
 import { decayTick } from "./subsys/decay.js";
@@ -86,6 +87,10 @@ export function tick(state: BattleState, content: ContentBundle, log: Logger): v
   // hit something this tick: if their target was point-blank, they
   // resolve on the spawn segment and damage applies before status tick.
   projectileTick(state, content, log);
+  // Routing-ally cascade: held racs near broken racs lose morale this
+  // tick (capped per-rac, soft floor). Runs after combat so newly-
+  // broken racs from this tick's damage are visible to neighbors.
+  moraleTick(state);
   statusTick(state, content, log);
   rageTick(state, content, log);
   // Decay applies AFTER combat each tick so combat-driven kills get

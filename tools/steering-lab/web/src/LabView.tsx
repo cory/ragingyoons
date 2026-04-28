@@ -44,22 +44,25 @@ const COMPONENT_COLORS: Record<keyof typeof FORCE_COMPONENT_INDEX, string> = {
   avoid: "#e0b07a", // orange
 };
 
-interface CellConfig {
+interface SideConfig {
   unitId: string;
   count: number;
   formation: FormationId | "default";
+  maxPlatoonSize: number;
+  platoonStride: number;
+}
+
+interface CellConfig {
+  blue: SideConfig;
   enemyBin: string;
+  /** When true, red side spawns real units instead of the punching-bag bin. */
+  redEnabled: boolean;
+  red: SideConfig;
   seed: number;
   ticks: number;
   flags: ForceFlagMap;
   overlays: Record<OverlayKey, boolean>;
-  /** Force-arrow scale multiplier (drawn in meters per force-unit). */
   arrowScale: number;
-  /** Max racs per platoon (column of platoons stacked behind the front). */
-  maxPlatoonSize: number;
-  /** Spacing between platoon centers along march axis (meters). */
-  platoonStride: number;
-  /** Tick at which to forcibly break all formations (morale → 0). 0 = never. */
   breakAtTick: number;
 }
 
@@ -88,17 +91,15 @@ export function LabView() {
   const [content, setContent] = useState<ContentBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cfg, setCfg] = useState<CellConfig>({
-    unitId: "",
-    count: 12,
-    formation: "default",
+    blue: { unitId: "", count: 12, formation: "default", maxPlatoonSize: 20, platoonStride: 6 },
     enemyBin: "",
+    redEnabled: false,
+    red: { unitId: "", count: 12, formation: "default", maxPlatoonSize: 20, platoonStride: 6 },
     seed: 1,
     ticks: 240,
     flags: DEFAULT_FLAGS,
     overlays: DEFAULT_OVERLAYS,
     arrowScale: 1.5,
-    maxPlatoonSize: 20,
-    platoonStride: 6,
     breakAtTick: 0,
   });
   const [result, setResult] = useState<LabRunResult | null>(null);
@@ -114,52 +115,71 @@ export function LabView() {
       .then((c) => {
         setContent(c);
         const firstUnit = [...c.units.keys()].sort()[0] ?? "";
-        setCfg((p) => ({ ...p, unitId: firstUnit, enemyBin: firstUnit }));
+        setCfg((p) => ({
+          ...p,
+          blue: { ...p.blue, unitId: firstUnit },
+          red: { ...p.red, unitId: firstUnit },
+          enemyBin: firstUnit,
+        }));
       })
       .catch((e) => setError(String(e)));
   }, []);
 
   const unitIds = useMemo(() => (content ? [...content.units.keys()].sort() : []), [content]);
 
-  const formationOptions = useMemo<(FormationId | "default")[]>(() => {
-    if (!content || !cfg.unitId) return ["default"];
-    const u = content.units.get(cfg.unitId);
-    if (!u) return ["default"];
-    const list: (FormationId | "default")[] = ["default"];
-    for (const f of FORMATIONS) if (f.role === u.role) list.push(f.id);
-    return list;
-  }, [content, cfg.unitId]);
+  const formationOptionsFor = useCallback(
+    (unitId: string): (FormationId | "default")[] => {
+      if (!content || !unitId) return ["default"];
+      const u = content.units.get(unitId);
+      if (!u) return ["default"];
+      const list: (FormationId | "default")[] = ["default"];
+      for (const f of FORMATIONS) if (f.role === u.role) list.push(f.id);
+      return list;
+    },
+    [content],
+  );
 
-  // Doctrine readout — derived from the unit's (env, cur). Shows what
-  // doctrine the lab is actually using and what the resolved squad
-  // size will be (doctrine override > role default).
-  const doctrineInfo = useMemo(() => {
-    if (!content || !cfg.unitId) return null;
-    const u = content.units.get(cfg.unitId);
-    if (!u) return null;
-    const docId = doctrineFor(u.environment, u.curiosity);
-    const docDef = DOCTRINES.find((d) => d.id === docId);
-    const sSize = docDef ? squadSizeFor(u.role, docDef) : 0;
-    return { docId, sSize, role: u.role };
-  }, [content, cfg.unitId]);
+  const doctrineInfoFor = useCallback(
+    (unitId: string) => {
+      if (!content || !unitId) return null;
+      const u = content.units.get(unitId);
+      if (!u) return null;
+      const docId = doctrineFor(u.environment, u.curiosity);
+      const docDef = DOCTRINES.find((d) => d.id === docId);
+      const sSize = docDef ? squadSizeFor(u.role, docDef) : 0;
+      return { docId, sSize, role: u.role };
+    },
+    [content],
+  );
 
   const run = useCallback(() => {
-    if (!content || !cfg.unitId || !cfg.enemyBin) return;
+    if (!content || !cfg.blue.unitId) return;
+    if (!cfg.redEnabled && !cfg.enemyBin) return;
+    if (cfg.redEnabled && !cfg.red.unitId) return;
     setRunning(true);
     setError(null);
     try {
       const r = runLabBattle(content, {
         seed: cfg.seed,
-        unitId: cfg.unitId,
-        count: cfg.count,
-        formationId: cfg.formation === "default" ? undefined : cfg.formation,
+        unitId: cfg.blue.unitId,
+        count: cfg.blue.count,
+        formationId: cfg.blue.formation === "default" ? undefined : cfg.blue.formation,
         enemyBinUnitId: cfg.enemyBin,
         ticks: cfg.ticks,
         flags: cfg.flags,
         bounds: { w: 120, h: 80 },
-        maxPlatoonSize: cfg.maxPlatoonSize,
-        platoonStride: cfg.platoonStride,
+        maxPlatoonSize: cfg.blue.maxPlatoonSize,
+        platoonStride: cfg.blue.platoonStride,
         breakAtTick: cfg.breakAtTick,
+        redSide: cfg.redEnabled
+          ? {
+              unitId: cfg.red.unitId,
+              count: cfg.red.count,
+              formationId: cfg.red.formation === "default" ? undefined : cfg.red.formation,
+              maxPlatoonSize: cfg.red.maxPlatoonSize,
+              platoonStride: cfg.red.platoonStride,
+            }
+          : undefined,
       });
       setResult(r);
       setTickIdx(0);
@@ -226,24 +246,48 @@ export function LabView() {
         {!content && !error && <div style={{ color: "#888" }}>loading content…</div>}
         {content && (
           <>
-            <Group title="setup">
-              <Field label="unit"><Select value={cfg.unitId} options={unitIds} onChange={(v) => setCfg({ ...cfg, unitId: v })} /></Field>
-              <Field label="count"><Num value={cfg.count} min={1} max={500} onChange={(n) => setCfg({ ...cfg, count: n })} /></Field>
-              <Field label="form"><Select value={cfg.formation} options={formationOptions} onChange={(v) => setCfg({ ...cfg, formation: v as FormationId | "default" })} /></Field>
-              <Field label="enemy bin"><Select value={cfg.enemyBin} options={unitIds} onChange={(v) => setCfg({ ...cfg, enemyBin: v })} /></Field>
-              {doctrineInfo && (
-                <div style={{ fontSize: 11, color: "#6cf", paddingLeft: 76 }}>
-                  doctrine: <span style={{ color: "#fc6" }}>{doctrineInfo.docId}</span> · squad: <span style={{ color: "#fc6" }}>{doctrineInfo.sSize}</span> ({doctrineInfo.role})
-                </div>
+            <SidePanel
+              title="blue (side A)"
+              accent="#6cf"
+              side={cfg.blue}
+              unitIds={unitIds}
+              formationOptions={formationOptionsFor(cfg.blue.unitId)}
+              doctrine={doctrineInfoFor(cfg.blue.unitId)}
+              onChange={(s) => setCfg({ ...cfg, blue: s })}
+            />
+            <Group title="opponent">
+              <Toggle
+                label="vs real units (red side)"
+                checked={cfg.redEnabled}
+                onChange={(v) => setCfg({ ...cfg, redEnabled: v })}
+              />
+              {!cfg.redEnabled && (
+                <Field label="enemy bin">
+                  <Select
+                    value={cfg.enemyBin}
+                    options={unitIds}
+                    onChange={(v) => setCfg({ ...cfg, enemyBin: v })}
+                  />
+                </Field>
               )}
+            </Group>
+            {cfg.redEnabled && (
+              <SidePanel
+                title="red (side B)"
+                accent="#f88"
+                side={cfg.red}
+                unitIds={unitIds}
+                formationOptions={formationOptionsFor(cfg.red.unitId)}
+                doctrine={doctrineInfoFor(cfg.red.unitId)}
+                onChange={(s) => setCfg({ ...cfg, red: s })}
+              />
+            )}
+            <Group title="run">
               <Field label="seed"><Num value={cfg.seed} onChange={(n) => setCfg({ ...cfg, seed: n })} /></Field>
               <Field label="ticks"><Num value={cfg.ticks} min={10} max={2000} onChange={(n) => setCfg({ ...cfg, ticks: n })} /></Field>
-              <Field label="platoon"><Num value={cfg.maxPlatoonSize} min={1} max={500} onChange={(n) => setCfg({ ...cfg, maxPlatoonSize: n })} /></Field>
-              <Field label="stride"><Num value={cfg.platoonStride} min={1} max={50} step={0.5} onChange={(n) => setCfg({ ...cfg, platoonStride: n })} /></Field>
               <Field label="break tick"><Num value={cfg.breakAtTick} min={0} max={2000} onChange={(n) => setCfg({ ...cfg, breakAtTick: n })} /></Field>
               <button
                 onClick={() => {
-                  // Snap break tick to current scrubber position and re-run.
                   setCfg({ ...cfg, breakAtTick: Math.max(1, tickIdx) });
                   setTimeout(run, 0);
                 }}
@@ -317,6 +361,35 @@ export function LabView() {
 }
 
 // ---- Tiny UI primitives (lab-local; no shared design system) ----
+
+function SidePanel(props: {
+  title: string;
+  accent: string;
+  side: SideConfig;
+  unitIds: string[];
+  formationOptions: (FormationId | "default")[];
+  doctrine: { docId: string; sSize: number; role: string } | null;
+  onChange: (s: SideConfig) => void;
+}) {
+  const { title, accent, side, unitIds, formationOptions, doctrine, onChange } = props;
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: accent, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{title}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingLeft: 6, borderLeft: `2px solid ${accent}` }}>
+        <Field label="unit"><Select value={side.unitId} options={unitIds} onChange={(v) => onChange({ ...side, unitId: v })} /></Field>
+        <Field label="count"><Num value={side.count} min={1} max={500} onChange={(n) => onChange({ ...side, count: n })} /></Field>
+        <Field label="form"><Select value={side.formation} options={formationOptions} onChange={(v) => onChange({ ...side, formation: v as FormationId | "default" })} /></Field>
+        <Field label="platoon"><Num value={side.maxPlatoonSize} min={1} max={500} onChange={(n) => onChange({ ...side, maxPlatoonSize: n })} /></Field>
+        <Field label="stride"><Num value={side.platoonStride} min={1} max={50} step={0.5} onChange={(n) => onChange({ ...side, platoonStride: n })} /></Field>
+        {doctrine && (
+          <div style={{ fontSize: 11, color: accent, paddingLeft: 76 }}>
+            doctrine <span style={{ color: "#fc6" }}>{doctrine.docId}</span> · squad <span style={{ color: "#fc6" }}>{doctrine.sSize}</span> ({doctrine.role})
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (

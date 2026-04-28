@@ -14,6 +14,9 @@ import type { Logger } from "../log.js";
 import {
   CASUALTY_SHOCK,
   CASUALTY_SHOCK_RADIUS,
+  FORMATION_FRONTAL_DAMAGE_MUL,
+  FORMATION_FRONTAL_DEFENSE_MUL,
+  FORMATION_FRONTAL_HALF_CONE,
   MAX_GARRISON_SLOTS,
   MORALE_DAMAGE_MUL,
   SECONDS_PER_TICK,
@@ -290,7 +293,40 @@ export function applyRacDamage(
     const sv = DOCTRINE_KNOBS.phalanxShieldVsProjectile;
     if (sv > 0 && Number.isFinite(sv)) taken *= 1 - Math.min(0.95, sv);
   }
-  const dmg = Math.max(MIN_DAMAGE, (dmgRaw - armor) * taken);
+  // In-formation frontal bonus: a rac in slot attacking the front of
+  // its target hits harder; a rac in slot attacked from its front
+  // takes less damage. Flank/rear bypasses the defense bonus (no
+  // shield over there). Skips for ranged sources — projectile damage
+  // already has its own modifiers.
+  let attackMul = 1;
+  if (
+    source === "basic" &&
+    srcRow >= 0 &&
+    state.rac.alive[srcRow] &&
+    state.rac.inFormation[srcRow]
+  ) {
+    const dx = state.rac.x[tgtRow] - state.rac.x[srcRow];
+    const dy = state.rac.y[tgtRow] - state.rac.y[srcRow];
+    const angToTgt = Math.atan2(dy, dx);
+    let rel = angToTgt - state.rac.facing[srcRow];
+    while (rel > Math.PI) rel -= 2 * Math.PI;
+    while (rel < -Math.PI) rel += 2 * Math.PI;
+    if (Math.abs(rel) < FORMATION_FRONTAL_HALF_CONE) {
+      attackMul *= FORMATION_FRONTAL_DAMAGE_MUL;
+    }
+  }
+  if (state.rac.inFormation[tgtRow] && srcRow >= 0 && state.rac.alive[srcRow]) {
+    const dx = state.rac.x[srcRow] - state.rac.x[tgtRow];
+    const dy = state.rac.y[srcRow] - state.rac.y[tgtRow];
+    const angToSrc = Math.atan2(dy, dx);
+    let rel = angToSrc - state.rac.facing[tgtRow];
+    while (rel > Math.PI) rel -= 2 * Math.PI;
+    while (rel < -Math.PI) rel += 2 * Math.PI;
+    if (Math.abs(rel) < FORMATION_FRONTAL_HALF_CONE) {
+      taken *= FORMATION_FRONTAL_DEFENSE_MUL;
+    }
+  }
+  const dmg = Math.max(MIN_DAMAGE, (dmgRaw * attackMul - armor) * taken);
   const hpBefore = state.rac.hp[tgtRow];
   const hpAfter = hpBefore - dmg;
   state.rac.hp[tgtRow] = hpAfter;

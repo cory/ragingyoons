@@ -27,7 +27,7 @@ export {
   TARGET_KIND_RAC,
   TARGET_KIND_BIN,
 } from "./state.js";
-export type { ShapeBattleConfig } from "./state.js";
+export type { ShapeBattleConfig, ShapeBattleSide } from "./state.js";
 export { tick, TICK_SUMMARY_EVERY } from "./tick.js";
 export { resolveTimeout } from "./subsys/win.js";
 export { SUDDEN_DEATH_TICK, DECAY_FRAC_PER_SEC } from "./subsys/decay.js";

@@ -24,25 +24,30 @@ import type { FormationId } from "@sim/formations.js";
 
 export type ForceFlagMap = Partial<Record<ForceFlag, boolean>>;
 
-export interface LabRunConfig {
-  seed: number;
+export interface LabSideConfig {
   unitId: string;
   count: number;
   formationId?: FormationId;
+  maxPlatoonSize?: number;
+  platoonStride?: number;
+}
+
+export interface LabRunConfig {
+  seed: number;
+  /** Side 0 (blue). */
+  unitId: string;
+  count: number;
+  formationId?: FormationId;
+  /** Punching-bag mode bin (only used when redSide is undefined). */
   enemyBinUnitId: string;
   ticks: number;
-  /** Per-force gates. Missing flag = enabled. */
   flags: ForceFlagMap;
-  /** Bounds (meters). Lab keeps it small for tight visuals. */
   bounds: { w: number; h: number };
-  /** Max racs per platoon. count > this → spawn ceil(count/max) platoons. */
   maxPlatoonSize?: number;
-  /** Spacing (meters) between platoon centers along march axis. */
   platoonStride?: number;
-  /** Tick at which to crash every alive rac's morale to 0 (lab only).
-   *  Lets us see the immediate effect of a forced break — formation
-   *  discipline drops, racs scatter to boids. 0 = never. */
   breakAtTick?: number;
+  /** When set, spawn red side instead of the punching-bag bin. */
+  redSide?: LabSideConfig;
 }
 
 export interface RacFrame {
@@ -99,6 +104,7 @@ export function runLabBattle(content: ContentBundle, cfg: LabRunConfig): LabRunR
     disableSynergies: true,
     maxPlatoonSize: cfg.maxPlatoonSize,
     platoonStride: cfg.platoonStride,
+    redSide: cfg.redSide,
   };
   const state = setupShapeBattle(content, battleCfg);
   state.forceFlags = cfg.flags;

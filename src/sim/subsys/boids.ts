@@ -164,30 +164,49 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const CLOSE_R = 0.8;
     const CLOSE_R2 = CLOSE_R * CLOSE_R;
     const CLOSE_K = 10.0;
+    // Cross-unit repulsion: same-side racs in DIFFERENT squads push
+    // each other apart out to a wider radius so adjacent friendly
+    // squads don't merge into one blob. Lower force than close-range
+    // (we want the squads near each other, just not on top).
+    const CROSS_UNIT_R = 1.5;
+    const CROSS_UNIT_R2 = CROSS_UNIT_R * CROSS_UNIT_R;
+    const CROSS_UNIT_K = 3.0;
+    const SCAN_R = Math.max(CLOSE_R, CROSS_UNIT_R);
+    const mySquadId = state.rac.squadId[i];
     const grid = state._racGrid;
     if (grid && f_closeRange) {
-      forEachNear(grid, myX, myY, CLOSE_R, (j) => {
+      forEachNear(grid, myX, myY, SCAN_R, (j) => {
         if (j === i) return;
         if (!state.rac.alive[j]) return;
         const dx = myX - state.rac.x[j];
         const dy = myY - state.rac.y[j];
         const d2 = dx * dx + dy * dy;
-        if (d2 >= CLOSE_R2) return;
-        if (d2 < 1e-6) {
-          // Perfect overlap (e.g., spawn jitter rounded both to the
-          // same point). Push apart along a deterministic direction
-          // derived from the id pair so the system is reproducible
-          // and doesn't lock both at (0,0) forever.
-          const h = ((state.rac.id[i] * 31 + state.rac.id[j]) >>> 0) / 4294967296;
-          const ang = h * Math.PI * 2;
-          closeSepX += Math.cos(ang) * CLOSE_K;
-          closeSepY += Math.sin(ang) * CLOSE_K;
+        // Close-range hard separation (any rac, any side, any squad).
+        if (d2 < CLOSE_R2) {
+          if (d2 < 1e-6) {
+            const h = ((state.rac.id[i] * 31 + state.rac.id[j]) >>> 0) / 4294967296;
+            const ang = h * Math.PI * 2;
+            closeSepX += Math.cos(ang) * CLOSE_K;
+            closeSepY += Math.sin(ang) * CLOSE_K;
+            return;
+          }
+          const d = Math.sqrt(d2);
+          const w = ((CLOSE_R - d) / CLOSE_R) * CLOSE_K;
+          closeSepX += (dx / d) * w;
+          closeSepY += (dy / d) * w;
           return;
         }
-        const d = Math.sqrt(d2);
-        const w = ((CLOSE_R - d) / CLOSE_R) * CLOSE_K;
-        closeSepX += (dx / d) * w;
-        closeSepY += (dy / d) * w;
+        // Cross-unit soft repulsion (same side, different squad).
+        if (
+          d2 < CROSS_UNIT_R2 &&
+          state.rac.owner[j] === myOwner &&
+          state.rac.squadId[j] !== mySquadId
+        ) {
+          const d = Math.sqrt(d2);
+          const w = ((CROSS_UNIT_R - d) / CROSS_UNIT_R) * CROSS_UNIT_K;
+          closeSepX += (dx / d) * w;
+          closeSepY += (dy / d) * w;
+        }
       });
     }
 
@@ -318,6 +337,9 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // skip the entire force pipeline for movement.
     const inFormation =
       !isLeader && leaderTargetFound && !broken && !inIndependentContact;
+    // Persist to state so combat / moraleTick / viz can read it without
+    // recomputing.
+    state.rac.inFormation[i] = inFormation ? 1 : 0;
     // For racs NOT in formation (leader, broken, independent), boids
     // computes forces normally. We keep `cohX/cohY` for the leader-pull
     // intent only when actively pulling — but since inFormation racs
