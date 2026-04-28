@@ -67,6 +67,8 @@ export interface RacFrame {
   behavior: number;
   /** True if this rac is currently pinned by a tank (slowed). */
   pinned: boolean;
+  /** This rac's squad's flank/rear threat: 0=none, 1=flank, 2=rear. */
+  squadThreat: number;
   /** Per-rac flank debug data (FLANK_DEBUG_FLOATS_PER_RAC floats).
    *  Slot 0 (inFlank) is 1 only when this rac was in BEHAVIOR_FLANK
    *  this tick. The lab reads probe XY pairs + aim point + grad +
@@ -177,6 +179,7 @@ function snapshotFrame(
         (MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD),
       behavior: state.rac.behavior[i],
       pinned: state.rac.pinnedUntilTick[i] > state.tick,
+      squadThreat: state.squadFlankThreat?.get(state.rac.squadId[i]) ?? 0,
       flankDebug: fl,
     });
   }

@@ -335,6 +335,11 @@ export interface BattleState {
    *  saturation penalty in target scoring so a target with many
    *  attackers gets deprioritized vs a less-saturated one. */
   attackerCount?: Map<number, number>;
+  /** Built each tick by moraleTick: squadId → flank/rear threat level
+   *  (0=none, 1=flank, 2=rear). Used by the lab to surface "this
+   *  squad is being outflanked" in the tooltip; the morale penalty
+   *  itself is applied per-rac in moraleTick. */
+  squadFlankThreat?: Map<number, number>;
   /** Steering-lab: when set, motionTick writes per-rac FLANK probe
    *  data here so the lab can show what the edge-finding search is
    *  actually finding. Layout: FLANK_DEBUG_FLOATS_PER_RAC floats per
@@ -1086,6 +1091,23 @@ export const RALLY_RADIUS = 25;
  *  settling permanently broken near the leader. With break thresh
  *  0.1–0.5, recovery from 0 takes 2–10 s. */
 export const RALLY_RECOVERY_RATE = 0.06;
+
+/** Unit-level flank/rear threat. Each tick, every squad checks for
+ *  enemies in its leader's flank (60–150° off forward) or rear
+ *  (>150°) quadrant within FLANK_THREAT_RADIUS. If detected, every
+ *  alive squad member loses morale per second — flank is unsettling,
+ *  rear is panic. Models the unit-wide news that "the line is being
+ *  rolled up" without the back-rank racs needing direct contact. */
+export const FLANK_THREAT_RADIUS = 25;
+export const FLANK_THREAT_RATE = 0.04;
+export const REAR_THREAT_RATE = 0.08;
+/** Half-cone above which we consider the angle "off the front" — racs
+ *  facing within ±60° toward an enemy treat them as a frontal threat
+ *  (no flank penalty). Same constant as the formation-frontal cone. */
+export const FLANK_THREAT_FRONT_CONE = Math.PI / 3;
+/** Half-cone above which we consider the angle "in the rear" —
+ *  enemies more than 150° off the leader's facing. */
+export const FLANK_THREAT_REAR_CONE = (Math.PI * 5) / 6;
 
 /** Tank pin: when a tank lands a basic melee hit, the target gets a
  *  pinned timer of TANK_PIN_DURATION_TICKS ticks during which their
