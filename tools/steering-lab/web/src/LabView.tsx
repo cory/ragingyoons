@@ -8,12 +8,14 @@ import { runLabBattle, type LabFrame, type LabRunResult } from "./runBattle.js";
 type OverlayKey =
   | "slotTarget"
   | "velocityArrow"
-  | "flankProbes";
+  | "flankProbes"
+  | "behaviorColor";
 
 const ALL_OVERLAYS: { key: OverlayKey; label: string }[] = [
   { key: "slotTarget", label: "slot target (formation)" },
   { key: "velocityArrow", label: "velocity arrow" },
   { key: "flankProbes", label: "cavalry flank probes" },
+  { key: "behaviorColor", label: "color by behavior" },
 ];
 
 interface SideConfig {
@@ -40,6 +42,7 @@ const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
   slotTarget: false,
   velocityArrow: false,
   flankProbes: true,
+  behaviorColor: false,
 };
 
 export function LabView() {
@@ -383,8 +386,8 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
     </label>
   );
 }
-const BEHAVIOR_LABEL = ["march", "engage", "rout", "kite", "flank"];
-const BEHAVIOR_COLOR = ["#9cf", "#fc6", "#f88", "#bef", "#fbd"];
+const BEHAVIOR_LABEL = ["march", "engage", "rout", "kite", "flank", "rally"];
+const BEHAVIOR_COLOR = ["#9cf", "#fc6", "#f88", "#bef", "#fbd", "#cf8"];
 
 function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number } }) {
   const speed = Math.hypot(rac.vx, rac.vy);
@@ -535,16 +538,20 @@ function drawFrame(
     }
   }
 
-  // Racs — color by squadId hash so squads are visually distinct.
-  // Leaders get a white ring; broken racs get a red ring + desaturated
-  // body so the discipline → boids transition is visible at a glance.
+  // Racs — default color is squadId hash (squads are distinct), but
+  // the "color by behavior" overlay overrides with the state palette
+  // (march/engage/rout/kite/flank/rally) so the whole field reads at
+  // a glance. Leaders get a white ring; broken racs (rout) get a red
+  // outline regardless of color overlay.
   for (const r of frame.racs) {
     if (!r.alive) continue;
     const [px, py] = worldToPx(r.x, r.y);
     if (r.id === hoverId) {
       ctx.fillStyle = "#fff";
+    } else if (cfg.overlays.behaviorColor) {
+      ctx.fillStyle = BEHAVIOR_COLOR[r.behavior] ?? "#888";
     } else if (r.broken) {
-      ctx.fillStyle = "#666"; // desaturated — formation discipline gone
+      ctx.fillStyle = "#666";
     } else {
       ctx.fillStyle = squadColor(r.squadId, r.contact === 1);
     }

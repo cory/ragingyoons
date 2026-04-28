@@ -39,12 +39,14 @@ import {
   BEHAVIOR_FLANK,
   BEHAVIOR_KITE,
   BEHAVIOR_MARCH,
+  BEHAVIOR_RALLY,
   BEHAVIOR_ROUT,
   FLANK_DEBUG_FLOATS_PER_RAC,
   FLANK_DEBUG_OFFSET,
   MAX_ACCEL_BY_ROLE,
   MORALE_BREAK_THRESHOLD,
   MORALE_BREAK_THRESHOLD_BY_ENV,
+  RALLY_RADIUS,
   ROUT_SPEED_MUL,
   SECONDS_PER_TICK,
   TARGET_KIND_BIN,
@@ -121,6 +123,37 @@ const FLANK_EDGE_DENSITY = 0.05;
 /** Max edge-probe steps. Caps the lateral search so cavalry doesn't
  *  aim 200 m sideways when no edge is found nearby. */
 const FLANK_MAX_STEPS = 8;
+
+/** Find the nearest alive friendly squad-leader within RALLY_RADIUS,
+ *  excluding self. Returns row index or -1. Used by the broken
+ *  decision branch to choose between RALLY and ROUT. */
+function findRallyLeader(state: BattleState, i: number): number {
+  const grid = state._racGrid;
+  if (!grid) return -1;
+  const myOwner = state.rac.owner[i];
+  const myRacId = state.rac.id[i];
+  const myX = state.rac.x[i];
+  const myY = state.rac.y[i];
+  let bestRow = -1;
+  let bestD2 = RALLY_RADIUS * RALLY_RADIUS;
+  forEachNear(grid, myX, myY, RALLY_RADIUS, (j) => {
+    if (j === i) return;
+    if (!state.rac.alive[j]) return;
+    if (state.rac.owner[j] !== myOwner) return;
+    // Leader = squadLeaderId === own racId. Excludes followers.
+    const leaderId = state.rac.squadLeaderId[j];
+    if (leaderId !== state.rac.id[j]) return;
+    if (leaderId === myRacId) return; // can't rally on self
+    const dx = state.rac.x[j] - myX;
+    const dy = state.rac.y[j] - myY;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestRow = j;
+    }
+  });
+  return bestRow;
+}
 
 /** Should this cavalry rac flank? Two cases:
  *   1. PINNED: enemy density at cavalry's own position is high — it's
@@ -227,7 +260,10 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     if (tickNow >= state.rac.nextDecisionTick[i]) {
       let next = state.rac.behavior[i];
       if (broken) {
-        next = BEHAVIOR_ROUT;
+        // Look for a friendly leader within RALLY_RADIUS — if one
+        // exists, rally toward them and recover morale. Else rout.
+        const rallyLeader = findRallyLeader(state, i);
+        next = rallyLeader >= 0 ? BEHAVIOR_RALLY : BEHAVIOR_ROUT;
       } else if (
         role === ROLE_CAVALRY &&
         tgtFound &&
@@ -267,7 +303,26 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     let desiredVy = 0;
     const maxV = state.rac.effSpeed[i];
 
-    if (behavior === BEHAVIOR_FLANK) {
+    if (behavior === BEHAVIOR_RALLY) {
+      // Rally: head toward the nearest friendly squad leader.
+      // Morale recovers (in moraleTick) while rallying. Once it
+      // crosses back above the break threshold, the next cadence
+      // decision flips back to MARCH and the rac re-enters the fight.
+      const leaderRallyRow = findRallyLeader(state, i);
+      if (leaderRallyRow >= 0) {
+        const lx = state.rac.x[leaderRallyRow];
+        const ly = state.rac.y[leaderRallyRow];
+        const dx = lx - myX;
+        const dy = ly - myY;
+        const d = Math.hypot(dx, dy);
+        if (d > 1e-3) {
+          desiredVx = (dx / d) * maxV;
+          desiredVy = (dy / d) * maxV;
+        }
+      }
+      // No leader in range — fall through to zero velocity (will get
+      // re-decided as ROUT next cadence).
+    } else if (behavior === BEHAVIOR_FLANK) {
       // Cavalry flank: locate the LINE (highest-density spot along
       // the seek path), measure the gradient AT the line (perpendicular
       // to the line direction), probe laterally from the line position

@@ -1040,14 +1040,15 @@ export const FORMATION_FRONTAL_HALF_CONE = Math.PI / 3;
 
 /** Behavior states for the motion state machine. Slice 1: march,
  *  engage, rout. Slice 2 adds kite (archer back-pedal). Slice 3 adds
- *  flank (cavalry tangent path around blocked lines). Future slices
- *  add rally (broken-recovering rejoin squad). Stored as Uint8 in
+ *  flank (cavalry tangent path around blocked lines). Slice 4 adds
+ *  rally (broken-recovering rejoin squad). Stored as Uint8 in
  *  state.rac.behavior. */
 export const BEHAVIOR_MARCH = 0;
 export const BEHAVIOR_ENGAGE = 1;
 export const BEHAVIOR_ROUT = 2;
 export const BEHAVIOR_KITE = 3;
 export const BEHAVIOR_FLANK = 4;
+export const BEHAVIOR_RALLY = 5;
 
 /** How often each role re-evaluates its behavior, in ticks (15 Hz).
  *  Cavalry reacts every frame — they're scout-fast and reroute on
@@ -1066,6 +1067,17 @@ export const BEHAVIOR_CADENCE_BY_ROLE: readonly number[] = [
  *  faster than their normal march. Tuned so they actually escape
  *  pursuers that share their base speed. */
 export const ROUT_SPEED_MUL = 1.5;
+/** Rally search radius (meters). A broken rac will head toward the
+ *  nearest friendly squad leader within this distance instead of
+ *  fleeing — that's a rally. Beyond this they go BEHAVIOR_ROUT and
+ *  scatter. */
+export const RALLY_RADIUS = 25;
+/** Morale gained per second while in BEHAVIOR_RALLY. Slow enough that
+ *  rally takes a few seconds (recovery isn't instant), fast enough
+ *  that a rallied unit actually rejoins the fight rather than
+ *  settling permanently broken near the leader. With break thresh
+ *  0.1–0.5, recovery from 0 takes 2–10 s. */
+export const RALLY_RECOVERY_RATE = 0.06;
 
 /** Cavalry charge bonus: damage dealt by a cavalry attacker scales
  *  with the attacker's CURRENT speed vs its base. At rest the bonus

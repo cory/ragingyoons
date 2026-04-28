@@ -13,12 +13,14 @@
 
 import { forEachNear } from "../grid.js";
 import {
+  BEHAVIOR_RALLY,
   MORALE_BREAK_THRESHOLD,
   MORALE_BREAK_THRESHOLD_BY_ENV,
   MORALE_ROUTING_FLOOR,
   MORALE_ROUTING_MAX,
   MORALE_ROUTING_RADIUS,
   MORALE_ROUTING_RATE,
+  RALLY_RECOVERY_RATE,
   SECONDS_PER_TICK,
   type BattleState,
 } from "../state.js";
@@ -32,7 +34,20 @@ export function moraleTick(state: BattleState): void {
     if (!state.rac.alive[i]) continue;
     const myThreshold =
       MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD;
-    // Already broken — skip; routing-ally cascade only affects held racs.
+    // Rally recovery: a rac heading back toward a friendly leader
+    // gains morale per second. Once back above the break threshold
+    // the next motion decision will flip them out of RALLY (broken
+    // = false → MARCH/ENGAGE). Capped at 1.0 to avoid drifting past
+    // full morale.
+    if (state.rac.behavior[i] === BEHAVIOR_RALLY) {
+      state.rac.morale[i] = Math.min(
+        1,
+        state.rac.morale[i] + RALLY_RECOVERY_RATE * dt,
+      );
+      continue;
+    }
+    // Already broken (and not rallying) — skip; routing-ally cascade
+    // only affects held racs.
     if (state.rac.morale[i] < myThreshold) continue;
 
     let routingNearby = 0;
