@@ -213,17 +213,36 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // Slot-aware pull also lets shape-mode actually reform into the
     // selected formation: spawn jitter + slot offsets means the boid
     // system is doing the formation work each tick, not just at spawn.
+    // Look up the rac's target early — we need distance-to-target to
+    // collapse the slot offset for envelopment, which then feeds BOTH
+    // cohesion (formation tightens as it closes on target) and seek
+    // (each rac aims at a personal point on the formation that shrinks
+    // toward the bare target as the rac approaches).
+    const tidEarly = state.rac.targetId[i];
+    const tkindEarly = state.rac.targetKind[i];
+    let tgtXEarly = 0, tgtYEarly = 0, tgtFoundEarly = false;
+    if (tidEarly >= 0 && tkindEarly === TARGET_KIND_RAC) {
+      const tRow = findRacRowById(state, tidEarly);
+      if (tRow >= 0) { tgtXEarly = state.rac.x[tRow]; tgtYEarly = state.rac.y[tRow]; tgtFoundEarly = true; }
+    } else if (tidEarly >= 0 && tkindEarly === TARGET_KIND_BIN) {
+      const tRow = findBinRowById(state, tidEarly);
+      if (tRow >= 0) { tgtXEarly = state.bin.x[tRow]; tgtYEarly = state.bin.y[tRow]; tgtFoundEarly = true; }
+    }
+    // Envelopment factor: full slot far from target, collapses to 0
+    // at the target itself. Without this the line marches at full slot
+    // pitch all the way to the target and stops in a wide line — no
+    // visible converge or wrap. With it, the formation tightens
+    // uniformly as it closes (and ends up clustered AT the target,
+    // not lined up beside it).
+    const ENVELOP_R = 15;
+    const distToTarget = tgtFoundEarly ? Math.hypot(tgtXEarly - myX, tgtYEarly - myY) : Number.POSITIVE_INFINITY;
+    const fEnvelop = tgtFoundEarly ? distToTarget / (distToTarget + ENVELOP_R) : 1;
+    const effSlotS = profile.slotScale * fEnvelop;
+    const mySlotDx = state.rac.slotDx[i] * effSlotS;
+    const mySlotDy = state.rac.slotDy[i] * effSlotS;
+
     let cohX = 0;
     let cohY = 0;
-    const slotS = profile.slotScale;
-    const mySlotDx = state.rac.slotDx[i] * slotS;
-    const mySlotDy = state.rac.slotDy[i] * slotS;
-    // Shape-error gate (used below to pause advance during a formation
-    // re-shape, e.g. phalanx → synaspismos compression). Distance from
-    // this rac to its (centroid + slot × slotScale) target. Initialized
-    // to 0 — racs without a group or with cohesion off are "in shape"
-    // by definition and don't dampen.
-    let shapeError = 0;
     if (cohKEff > 0) {
       const myGroupId = state.rac.groupId[i];
       const stats = groupStats.get(myGroupId);
@@ -235,7 +254,6 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
         const tdx = tx - myX;
         const tdy = ty - myY;
         const td = Math.hypot(tdx, tdy);
-        shapeError = td;
         if (td > 1e-3) {
           cohX = (tdx / td) * cohKEff;
           cohY = (tdy / td) * cohKEff;
@@ -271,26 +289,10 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     let seekX = 0;
     let seekY = 0;
     const kiteFrac = profile.archerKiteFraction;
-    const tid = state.rac.targetId[i];
-    const tkind = state.rac.targetKind[i];
-    let tgtX = 0;
-    let tgtY = 0;
-    let tgtFound = false;
-    if (tid >= 0 && tkind === TARGET_KIND_RAC) {
-      const tRow = findRacRowById(state, tid);
-      if (tRow >= 0) {
-        tgtX = state.rac.x[tRow];
-        tgtY = state.rac.y[tRow];
-        tgtFound = true;
-      }
-    } else if (tid >= 0 && tkind === TARGET_KIND_BIN) {
-      const tRow = findBinRowById(state, tid);
-      if (tRow >= 0) {
-        tgtX = state.bin.x[tRow];
-        tgtY = state.bin.y[tRow];
-        tgtFound = true;
-      }
-    }
+    // Reuse the early target lookup (used above for envelopment scaling).
+    const tgtX = tgtXEarly;
+    const tgtY = tgtYEarly;
+    const tgtFound = tgtFoundEarly;
     // Stop-in-combat: when an enemy is within our effective attack
     // range, non-cavalry units stand still and let combat.ts swing.
     // Cavalry uniquely keep moving so they can overrun and chase
@@ -313,37 +315,14 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       seekX = dMod.seekDirOverride.dx * seekKEff;
       seekY = dMod.seekDirOverride.dy * seekKEff;
     } else if (tgtFound && !inCombat) {
-      // Envelopment: each rac seeks a personal aim point that is slot-
-      // offset from the bare target FAR AWAY but collapses to the bare
-      // target as the rac closes. Without the collapse the line marches
-      // parallel forever and never wraps the target ("stays straight,
-      // no envelopment"). With it, leftmost/rightmost racs trace curved
-      // paths that converge on the target — the line bends in like a U
-      // and ideally arrives together (outer racs walk a slightly longer
-      // diagonal but at the same forward speed). ENVELOP_R sets how
-      // tight the curve is: small R = sharp collapse near the target;
-      // large R = gradual lean-in over the whole approach. 18m is about
-      // 2× CONTACT_RADIUS so the envelopment is mostly done by the time
-      // the formation enters contact mode.
-      const dx0 = tgtX - myX;
-      const dy0 = tgtY - myY;
-      const distToTarget = Math.hypot(dx0, dy0);
-      const ENVELOP_R = 18;
-      const fEnvelop = distToTarget / (distToTarget + ENVELOP_R);
-      const aimX = tgtX + mySlotDx * fEnvelop;
-      const aimY = tgtY + mySlotDy * fEnvelop;
-      // Reshape gate: when the formation is mid-transformation (e.g.
-      // phalanx march → synaspismos: slotScale just dropped from 1.0
-      // to 0.5, racs are 0.7m+ from their new slot targets), pause the
-      // advance until the shape settles. shapeError > RESHAPE_R (~1m)
-      // ramps the seek down toward zero; once racs are within the
-      // band, seek returns to full and the formation marches again.
-      // The transformation can be fast — RESHAPE_R is small — but it
-      // should be visible as an interruption of forward motion.
-      const RESHAPE_R = 1.0;
-      const reshapeGate = shapeError > RESHAPE_R
-        ? Math.max(0, 1 - (shapeError - RESHAPE_R) * 0.6)
-        : 1;
+      // Each rac seeks (target + slot × envelopFactor). Envelop factor
+      // and slot magnitude both decay with distance to target (computed
+      // above as `effSlotS`), so far away the line marches at full
+      // pitch with each rac aiming at its slot offset; close in, the
+      // slot collapses and every rac aims directly at the bare target.
+      // Visually: line tightens uniformly as it closes.
+      const aimX = tgtX + mySlotDx;
+      const aimY = tgtY + mySlotDy;
       const tdx = aimX - myX;
       const tdy = aimY - myY;
       const td2 = tdx * tdx + tdy * tdy;
@@ -357,11 +336,11 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
           let k = 0;
           if (td > preferred * 1.1) k = seekKEff;
           else if (td < preferred * 0.9) k = -seekKEff * 1.2;
-          seekX = (tdx / td) * k * reshapeGate;
-          seekY = (tdy / td) * k * reshapeGate;
+          seekX = (tdx / td) * k;
+          seekY = (tdy / td) * k;
         } else {
-          seekX = (tdx / td) * seekKEff * reshapeGate;
-          seekY = (tdy / td) * seekKEff * reshapeGate;
+          seekX = (tdx / td) * seekKEff;
+          seekY = (tdy / td) * seekKEff;
         }
       }
     }
