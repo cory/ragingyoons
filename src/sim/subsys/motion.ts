@@ -609,16 +609,18 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         aimY = state.bin.y[binRow];
         hasAim = true;
       } else {
-        // Find any friendly squad leader (no range cap — when bins
-        // are gone we'll cross the map to rally).
+        // Find any friendly squad leader. Radius set to span the full
+        // map diagonal so we still cross the map to rally if needed —
+        // grid scan just prunes empty cells along the way.
         let bestRow = -1;
         let bestD2 = Number.POSITIVE_INFINITY;
         const myOwn = state.rac.owner[i];
-        for (let j = 0; j < state.rac.count; j++) {
-          if (j === i) continue;
-          if (!state.rac.alive[j]) continue;
-          if (state.rac.owner[j] !== myOwn) continue;
-          if (state.rac.squadLeaderId[j] !== state.rac.id[j]) continue;
+        const rallySearchR = Math.hypot(state.bounds.w, state.bounds.h);
+        const considerLeader = (j: number) => {
+          if (j === i) return;
+          if (!state.rac.alive[j]) return;
+          if (state.rac.owner[j] !== myOwn) return;
+          if (state.rac.squadLeaderId[j] !== state.rac.id[j]) return;
           const dx = state.rac.x[j] - myX;
           const dy = state.rac.y[j] - myY;
           const d2 = dx * dx + dy * dy;
@@ -626,6 +628,11 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
             bestD2 = d2;
             bestRow = j;
           }
+        };
+        if (grid) {
+          forEachNear(grid, myX, myY, rallySearchR, considerLeader);
+        } else {
+          for (let j = 0; j < state.rac.count; j++) considerLeader(j);
         }
         if (bestRow >= 0) {
           aimX = state.rac.x[bestRow];

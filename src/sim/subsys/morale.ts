@@ -30,6 +30,11 @@ import {
   type BattleState,
 } from "../state.js";
 
+/** How often to recompute the per-squad flank/rear threat map. The
+ *  result drives morale drain over seconds (FLANK_THREAT_RATE = 0.04
+ *  / s), so a 6-tick refresh (~250 ms at 24 Hz) is fine. */
+const SQUAD_THREAT_CADENCE = 6;
+
 export function moraleTick(state: BattleState): void {
   const grid = state._racGrid;
   if (!grid) return;
@@ -39,35 +44,61 @@ export function moraleTick(state: BattleState): void {
   // each LEADER (one rep per squad) and classify any enemy within
   // FLANK_THREAT_RADIUS by relative angle to the leader's facing.
   // Result: squadId → max threat level seen this tick (0 / 1 / 2).
-  const squadThreat = new Map<number, number>();
+  //
+  // Cadence-gated: threat changes over seconds (a flanker is still a
+  // flanker 250 ms later), so refreshing every SQUAD_THREAT_CADENCE
+  // ticks is plenty. Cached squadFlankThreat carries between refreshes.
+  if (
+    state.tick % SQUAD_THREAT_CADENCE === 0 ||
+    !state.squadFlankThreat
+  ) {
+    const squadThreat = new Map<number, number>();
+    const frontCos = Math.cos(FLANK_THREAT_FRONT_CONE);
+    const rearCos = Math.cos(FLANK_THREAT_REAR_CONE);
+    for (let i = 0; i < state.rac.count; i++) {
+      if (!state.rac.alive[i]) continue;
+      if (state.rac.squadLeaderId[i] !== state.rac.id[i]) continue;
+      const sqid = state.rac.squadId[i];
+      const lFacing = state.rac.facing[i];
+      const fwdX = Math.cos(lFacing);
+      const fwdY = Math.sin(lFacing);
+      const lx = state.rac.x[i];
+      const ly = state.rac.y[i];
+      const lOwner = state.rac.owner[i];
+      let level = squadThreat.get(sqid) ?? 0;
+      forEachNear(grid, lx, ly, FLANK_THREAT_RADIUS, (j) => {
+        if (j === i) return;
+        if (!state.rac.alive[j]) return;
+        if (state.rac.owner[j] === lOwner) return;
+        const dx = state.rac.x[j] - lx;
+        const dy = state.rac.y[j] - ly;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 1e-6) return;
+        // cos(angle) = (dir · fwd). |angle| > FRONT_CONE  ⇔  cos < cos(FRONT_CONE).
+        const inv = 1 / Math.sqrt(d2);
+        const cosA = (dx * fwdX + dy * fwdY) * inv;
+        if (cosA < rearCos) {
+          if (level < 2) level = 2;
+        } else if (cosA < frontCos && level < 1) {
+          level = 1;
+        }
+      });
+      if (level > 0) squadThreat.set(sqid, level);
+    }
+    state.squadFlankThreat = squadThreat;
+  }
+  const squadThreat = state.squadFlankThreat;
+
+  // Pass 2 prelude: count broken racs per side. The routing-cascade
+  // inner scan is wasted work when nobody on your side is broken (the
+  // common case in steady combat); we early-exit per rac below.
+  const brokenBySide: [number, number] = [0, 0];
   for (let i = 0; i < state.rac.count; i++) {
     if (!state.rac.alive[i]) continue;
-    if (state.rac.squadLeaderId[i] !== state.rac.id[i]) continue;
-    const sqid = state.rac.squadId[i];
-    const lFacing = state.rac.facing[i];
-    const lx = state.rac.x[i];
-    const ly = state.rac.y[i];
-    const lOwner = state.rac.owner[i];
-    let level = squadThreat.get(sqid) ?? 0;
-    forEachNear(grid, lx, ly, FLANK_THREAT_RADIUS, (j) => {
-      if (j === i) return;
-      if (!state.rac.alive[j]) return;
-      if (state.rac.owner[j] === lOwner) return;
-      const dx = state.rac.x[j] - lx;
-      const dy = state.rac.y[j] - ly;
-      let rel = Math.atan2(dy, dx) - lFacing;
-      while (rel > Math.PI) rel -= 2 * Math.PI;
-      while (rel < -Math.PI) rel += 2 * Math.PI;
-      const a = Math.abs(rel);
-      if (a > FLANK_THREAT_REAR_CONE) {
-        if (level < 2) level = 2;
-      } else if (a > FLANK_THREAT_FRONT_CONE && level < 1) {
-        level = 1;
-      }
-    });
-    if (level > 0) squadThreat.set(sqid, level);
+    const t =
+      MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD;
+    if (state.rac.morale[i] < t) brokenBySide[state.rac.owner[i]]++;
   }
-  state.squadFlankThreat = squadThreat;
 
   for (let i = 0; i < state.rac.count; i++) {
     if (!state.rac.alive[i]) continue;
@@ -101,6 +132,9 @@ export function moraleTick(state: BattleState): void {
     // Already broken (and not rallying) — skip; routing-ally cascade
     // only affects held racs.
     if (state.rac.morale[i] < myThreshold) continue;
+    // Routing-cascade short-circuit: if no friendly is broken, no
+    // neighbor will be a router, so skip the spatial scan entirely.
+    if (brokenBySide[state.rac.owner[i]] === 0) continue;
 
     let routingNearby = 0;
     forEachNear(grid, state.rac.x[i], state.rac.y[i], MORALE_ROUTING_RADIUS, (j) => {

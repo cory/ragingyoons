@@ -75,6 +75,12 @@ const DPS_NORM_MAX = 50;
  *  distant target while the bin is dying. */
 const BIN_DEFENSE_RADIUS = 20;
 const BIN_DEFENSE_MUL = 4;
+/** Max distance considered when scoring enemy targets. Past this we
+ *  drop the target from the search — its score (1/d²) is too low to
+ *  beat any closer enemy anyway, and limiting the scan to a spatial-
+ *  grid neighborhood is the big perf win on this subsystem. Big
+ *  enough to cover the full lab field (120×80) end-to-end. */
+const MAX_TARGET_RADIUS = 80;
 
 export function targetTick(state: BattleState, content: ContentBundle, log: Logger): void {
   void content;
@@ -100,6 +106,38 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     attackerCount.set(tid, (attackerCount.get(tid) ?? 0) + 1);
   }
   state.attackerCount = attackerCount;
+
+  // Pre-compute the set of enemy rac ROWS that are within
+  // BIN_DEFENSE_RADIUS of any friendly bin. Per side. Lifts the
+  // O(rac × target × bin) check out of the inner scoring loop —
+  // we now look up each candidate target's row in a Set, O(1).
+  const defenseSetBySide: [Set<number>, Set<number>] = [new Set(), new Set()];
+  const defR2 = BIN_DEFENSE_RADIUS * BIN_DEFENSE_RADIUS;
+  for (let k = 0; k < m; k++) {
+    if (!state.bin.alive[k]) continue;
+    const owner = state.bin.owner[k];
+    const enemyOf = (1 - owner) as 0 | 1;
+    const bx = state.bin.x[k];
+    const by = state.bin.y[k];
+    const set = defenseSetBySide[owner];
+    if (state._racGrid) {
+      forEachNear(state._racGrid, bx, by, BIN_DEFENSE_RADIUS, (r) => {
+        if (!state.rac.alive[r]) return;
+        if (state.rac.owner[r] !== enemyOf) return;
+        const dx = state.rac.x[r] - bx;
+        const dy = state.rac.y[r] - by;
+        if (dx * dx + dy * dy < defR2) set.add(r);
+      });
+    } else {
+      for (let r = 0; r < n; r++) {
+        if (!state.rac.alive[r]) continue;
+        if (state.rac.owner[r] !== enemyOf) continue;
+        const dx = state.rac.x[r] - bx;
+        const dy = state.rac.y[r] - by;
+        if (dx * dx + dy * dy < defR2) set.add(r);
+      }
+    }
+  }
   // Iterate via the per-tick shuffled permutation so retarget order
   // doesn't systematically favor lower-row (= side-0) racs.
   const order = state._tickIterOrder;
@@ -166,46 +204,30 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     let bestRacScore = -Infinity;
     let bestRacD2 = Infinity;
     const myCurTargetId = curKind === TARGET_KIND_RAC ? curId : -1;
-    for (let j = 0; j < n; j++) {
-      if (j === i) continue;
-      if (!state.rac.alive[j]) continue;
-      if (state.rac.owner[j] === myOwner) continue;
+    const myDefenseSet = defenseSetBySide[myOwner];
+    const scoreOne = (j: number) => {
+      if (j === i) return;
+      if (!state.rac.alive[j]) return;
+      if (state.rac.owner[j] === myOwner) return;
       const dx = state.rac.x[j] - myX;
       const dy = state.rac.y[j] - myY;
       const d2 = dx * dx + dy * dy;
-      if (d2 < 1) continue;
+      if (d2 < 1) return;
       const tgtRole = state.rac.role[j];
       const affinity = affRow[tgtRole];
       const hpFrac = state.rac.hpMax[j] > 0 ? state.rac.hp[j] / state.rac.hpMax[j] : 1;
       const lowHpBoost = 1 + LOW_HP_BONUS * (1 - Math.max(0, Math.min(1, hpFrac)));
       const id = state.rac.id[j];
-      // DPS bonus: prioritize high-damage targets. Score × (1 + K × dpsNorm).
       const tgtDps = state.rac.effDamage[j] * state.rac.effAttackRate[j];
       const dpsBoost = 1 + DPS_BONUS * Math.min(1, tgtDps / DPS_NORM_MAX);
-      // Saturation: only penalize OUT-OF-RANGE targets. In range we
-      // want everyone shooting the same enemy until it dies.
       const inRange = d2 <= myEffRange2;
       let saturationPenalty = 1;
       if (!inRange) {
-        let attackers = state.attackerCount?.get(id) ?? 0;
+        let attackers = attackerCount.get(id) ?? 0;
         if (id === myCurTargetId && attackers > 0) attackers -= 1;
         saturationPenalty = 1 / (1 + TARGET_SATURATION_K * attackers);
       }
-      // Bin defense: if this enemy is within BIN_DEFENSE_RADIUS of
-      // any of our bins, treat them as a high-priority threat — they
-      // need to die before they reach the bin.
-      let defenseMul = 1;
-      const defR2 = BIN_DEFENSE_RADIUS * BIN_DEFENSE_RADIUS;
-      for (let k = 0; k < m; k++) {
-        if (!state.bin.alive[k]) continue;
-        if (state.bin.owner[k] !== myOwner) continue;
-        const bdx = state.rac.x[j] - state.bin.x[k];
-        const bdy = state.rac.y[j] - state.bin.y[k];
-        if (bdx * bdx + bdy * bdy < defR2) {
-          defenseMul = BIN_DEFENSE_MUL;
-          break;
-        }
-      }
+      const defenseMul = myDefenseSet.has(j) ? BIN_DEFENSE_MUL : 1;
       const score =
         (affinity * lowHpBoost * dpsBoost * saturationPenalty * defenseMul) / d2;
       if (score > bestRacScore || (score === bestRacScore && id < bestRacId)) {
@@ -213,6 +235,11 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
         bestRacId = id;
         bestRacD2 = d2;
       }
+    };
+    if (state._racGrid) {
+      forEachNear(state._racGrid, myX, myY, MAX_TARGET_RADIUS, scoreOne);
+    } else {
+      for (let j = 0; j < n; j++) scoreOne(j);
     }
 
     // Find nearest enemy bin

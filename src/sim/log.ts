@@ -82,6 +82,21 @@ export abstract class BaseLogger implements Logger {
   abstract flush(): Promise<void>;
 }
 
+// ---------- Null (perf benches / discarded output) ----------
+
+/** No-op logger: skips JSON.stringify entirely. Use for perf
+ *  benchmarks or any callsite that throws away the events anyway. */
+export class NullLogger implements Logger {
+  emit(_eventKind: string, _fields: Record<string, unknown>): void {
+    void _eventKind;
+    void _fields;
+  }
+  async flush(): Promise<void> {}
+  setTickReader(_read: () => number): void {
+    void _read;
+  }
+}
+
 // ---------- Memory (browser / tests) ----------
 
 export class MemoryLogger extends BaseLogger {
