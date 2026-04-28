@@ -608,17 +608,21 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
 
     let nx = myX + newVx * dt;
     let ny = myY + newVy * dt;
-    if (nx > halfW) {
+    // Bounds: only stop racs that were INSIDE and are about to cross
+    // out. A rac that spawned off-screen (e.g. a deep platoon column
+    // poking past the bounds) is allowed to march in toward the field
+    // — no infinite "smash to edge" tick after tick.
+    if (myX <= halfW && nx > halfW) {
       nx = halfW;
       state.rac.vx[i] = 0;
-    } else if (nx < -halfW) {
+    } else if (myX >= -halfW && nx < -halfW) {
       nx = -halfW;
       state.rac.vx[i] = 0;
     }
-    if (ny > halfH) {
+    if (myY <= halfH && ny > halfH) {
       ny = halfH;
       state.rac.vy[i] = 0;
-    } else if (ny < -halfH) {
+    } else if (myY >= -halfH && ny < -halfH) {
       ny = -halfH;
       state.rac.vy[i] = 0;
     }
