@@ -22,7 +22,7 @@ import {
   FORMATION_TO_IDX,
   type FormationId,
 } from "./formations.js";
-import { DOCTRINE_TO_IDX, doctrineFor, squadSizeFor, teamSizeFor } from "./doctrines.js";
+import { DOCTRINE_TO_IDX, DOCTRINES, doctrineFor, squadSizeFor, teamSizeFor } from "./doctrines.js";
 
 /** Cap on simultaneously-tracked entities. Generous for v0; tighten later. */
 export const MAX_BINS = 32;
@@ -554,15 +554,21 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   // forward = +1 because the enemy is in +x direction from us.
   const forward = 1;
   const maxPlatoon = cfg.maxPlatoonSize && cfg.maxPlatoonSize > 0 ? cfg.maxPlatoonSize : cfg.count;
-  const platoonCount = Math.max(1, Math.ceil(cfg.count / maxPlatoon));
   const platoonStride = cfg.platoonStride ?? 6;
-  const squadSize = squadSizeFor(unit.role);
+  const squadSize = squadSizeFor(unit.role, DOCTRINES[doctrineIdx]);
+  // Platoon must be at least one squad — otherwise we'd sub-block a
+  // doctrine that wants a single big cohesive unit (e.g. phalanx
+  // squad=48 with maxPlatoonSize=20 → 20-rac sub-phalanxes that fight
+  // as four small lines instead of one wall). Bump up silently.
+  const effMaxPlatoon = Math.max(maxPlatoon, squadSize);
+  // Re-derive platoonCount from the bumped platoon size.
+  const effPlatoonCount = Math.max(1, Math.ceil(cfg.count / effMaxPlatoon));
   // Lateral stride between squad centers within a platoon. Sized to
   // give a visible gap between adjacent squads' lines.
   const squadStrideY = (squadSize + 2) * 1.4;
   let remaining = cfg.count;
-  for (let p = 0; p < platoonCount; p++) {
-    const thisPlatoonSize = Math.min(maxPlatoon, remaining);
+  for (let p = 0; p < effPlatoonCount; p++) {
+    const thisPlatoonSize = Math.min(effMaxPlatoon, remaining);
     if (thisPlatoonSize <= 0) break;
     remaining -= thisPlatoonSize;
     const platoonX = baseX - p * platoonStride;

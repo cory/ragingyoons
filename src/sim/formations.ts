@@ -143,9 +143,16 @@ export const FORMATIONS: FormationDef[] = [
     id: "infantry-phalanx",
     role: "infantry",
     arrange(args) {
-      // 4-wide × 3-deep grid in MARCH (loose) spacing. Contact mode
-      // tightens via the contactOverride below.
-      return gridPerp(args.burstIdx, args.burstSize, 4, 1.4, 1.4, args.forward);
+      // Greek hoplite block: 8 ranks deep with width scaling to fit
+      // the squad. A 48-rac phalanx (the doctrine's tier-0 squad) is
+      // 6 wide × 8 deep — recognizably a hoplite block. Sub-32 bursts
+      // fall back to the legacy 4-wide × 3-deep so a small spawn
+      // doesn't end up as a sub-rank column.
+      const cols =
+        args.burstSize >= 32
+          ? Math.max(4, Math.ceil(args.burstSize / 8))
+          : 4;
+      return gridPerp(args.burstIdx, args.burstSize, cols, 1.4, 1.4, args.forward);
     },
     tacticOverride: {
       // MARCH mode: loose-enough spacing to move without collapsing.

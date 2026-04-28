@@ -142,10 +142,21 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
       const doctrineId = doctrineFor(unit.environment, unit.curiosity);
       const doctrineIdx = DOCTRINE_TO_IDX[doctrineId];
       const teamSize = teamSizeFor(doctrineIdx);
-      // Each burst spawn = one fresh group. Splits later assign new
-      // group ids; respawns from the same slot get a fresh group too,
-      // because they're a new tactical unit on the field.
+      // Each burst spawn = one fresh group AND one fresh squad. Splits
+      // later assign new group ids; respawns from the same slot get a
+      // fresh group too, because they're a new tactical unit on the
+      // field. Squad partitioning matches groupId for v0 (one bin's
+      // burst = one squad); the slice-2 platoon/company hierarchy will
+      // attach squad leaders to higher-tier units.
       const groupId = state.nextGroupId++;
+      const squadId = state.nextSquadId++;
+      const squadStartRow = state.rac.count;
+      // Leader = middle rac of the squad (so slot offsets are roughly
+      // symmetric around 0). Computed from burst-fixed leader idx;
+      // back-filled into squadLeaderId once the leader's racId is
+      // known after spawn. (leaderOff is computed below once `forward`
+      // is in scope.)
+      const leaderBurstIdx = Math.floor(burst / 2);
       // Per-doctrine stat scalars (autotuner balance levers). Default
       // 1.0 = no change. Indexed by doctrine id.
       const docHpMul =
@@ -166,6 +177,7 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
       // Forward direction: side-0 bins are at +x and want enemies at
       // -x, so forward (toward enemy) is -1 along x. side-1 mirrors.
       const forward = owner === 0 ? -1 : 1;
+      const leaderOff = formation.arrange({ burstIdx: leaderBurstIdx, burstSize: burst, forward });
       let alive = 0;
       for (let bk = 0; bk < burst; bk++) {
         const racRow = state.rac.count;
@@ -219,8 +231,13 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         state.rac.doctrineIdx[racRow] = doctrineIdx;
         state.rac.teamId[racRow] = Math.floor(bk / teamSize);
         state.rac.groupId[racRow] = groupId;
-        state.rac.slotDx[racRow] = off.dx;
-        state.rac.slotDy[racRow] = off.dy;
+        state.rac.squadId[racRow] = squadId;
+        // Placeholder leaderId; back-filled below.
+        state.rac.squadLeaderId[racRow] = -1;
+        // Slot is leader-relative — leader has slot (0,0), followers
+        // are offset by their formation pos minus the leader's.
+        state.rac.slotDx[racRow] = off.dx - leaderOff.dx;
+        state.rac.slotDy[racRow] = off.dy - leaderOff.dy;
         alive += 1;
 
         log.emit("rac_spawn", {
@@ -246,6 +263,14 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
           x: state.rac.x[racRow],
           y: state.rac.y[racRow],
         });
+      }
+      // Back-fill squadLeaderId for everyone in this burst.
+      const leaderAbsRow = squadStartRow + leaderBurstIdx;
+      if (leaderAbsRow < state.rac.count) {
+        const leaderRacId = state.rac.id[leaderAbsRow];
+        for (let r = squadStartRow; r < state.rac.count; r++) {
+          state.rac.squadLeaderId[r] = leaderRacId;
+        }
       }
       state.bin.slotOccupant[slotIdx] = alive;
     }

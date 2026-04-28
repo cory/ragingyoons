@@ -478,6 +478,12 @@ export interface DoctrineDef {
    *  shooting starts they break formation and do their own thing.
    *  Phalanx / line / fanatic stay disciplined under fire. */
   independentInContact: boolean;
+  /** Optional override on the role's tier sizes — [squad, platoon,
+   *  company, battalion]. Phalanx is a *bigger cohesive unit* than
+   *  generic infantry: a Greek hoplite block of ~48 fights as one
+   *  squad, not as 4 squads of 12. When undefined, fall back to
+   *  ROLE_TIER_SIZES[role]. */
+  tierSizes?: readonly [number, number, number, number];
 }
 
 /** Role-tier sizes — how many racs make up each level of the unit
@@ -498,9 +504,11 @@ export const ROLE_TIER_SIZES: Record<import("./content.js").RoleId, readonly [nu
   infantry: [12, 36, 108, 648],
 };
 
-/** Convenience: squad size (tier 0) for a role. */
-export function squadSizeFor(role: import("./content.js").RoleId): number {
-  return ROLE_TIER_SIZES[role][0];
+/** Convenience: squad size (tier 0) for a (role, doctrine). Doctrine
+ *  override wins when present — phalanx infantry is a 48-rac block,
+ *  not a 12-rac line. */
+export function squadSizeFor(role: import("./content.js").RoleId, doctrine?: DoctrineDef): number {
+  return doctrine?.tierSizes?.[0] ?? ROLE_TIER_SIZES[role][0];
 }
 
 export const DOCTRINES: readonly DoctrineDef[] = [
@@ -518,6 +526,11 @@ export const DOCTRINES: readonly DoctrineDef[] = [
   },
   // 1 — Suburban+Barbarians: tight wall, hold ground, fight to death.
   // Big block formation; splits along depth (front/back ranks).
+  // Phalanx is a *single cohesive block* of ~48 (vs the 12-rac default
+  // infantry squad). Historically a Greek hoplite phalanx fought as
+  // one unit eight ranks deep — modeling that as a single squad keeps
+  // the shield-wall mechanic intact (no boid forces ripping the line
+  // into 4 sub-squads).
   {
     id: "phalanx",
     teamSize: 99,
@@ -528,6 +541,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     maxFormationSize: 64,
     splitAxis: "front-rear",
     independentInContact: false, // shield wall holds at all costs
+    tierSizes: [48, 144, 432, 1296],
   },
   // 2 — City+Lockpickers / Coastal+Lockpickers: bounding overwatch.
   // Real fire teams are 4-12 strong; we cap at 12.
