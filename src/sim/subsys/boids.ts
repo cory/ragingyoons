@@ -335,10 +335,22 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // inFormation: this rac is a non-broken follower with a live
     // leader and no doctrine override. Use slot-direct steering and
     // skip the entire force pipeline for movement.
+    //
+    // Archers and cavalry are EXEMPT — their useful behaviors live in
+    // the force pipeline (archer: kite + hide-behind; cavalry: swarm-
+    // avoid that routes around dense friendly lines). A formation-
+    // disciplined archer would freeze in slot while a tank closes; a
+    // formation-disciplined cavalry follower would plow into the same
+    // wall its swarm-avoid was supposed to dodge. Tanks are tier-0
+    // squad of 1 (always leaders → already exempt). Only infantry
+    // actually uses slot-direct formation steering in v0.
     const inFormation =
-      !isLeader && leaderTargetFound && !broken && !inIndependentContact;
-    // Persist to state so combat / moraleTick / viz can read it without
-    // recomputing.
+      !isLeader &&
+      leaderTargetFound &&
+      !broken &&
+      !inIndependentContact &&
+      myRole !== ROLE_ARCHER &&
+      myRole !== ROLE_CAVALRY;
     state.rac.inFormation[i] = inFormation ? 1 : 0;
     // For racs NOT in formation (leader, broken, independent), boids
     // computes forces normally. We keep `cohX/cohY` for the leader-pull
@@ -506,15 +518,27 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
         const densAhead = sampleField(fields, fields.totalDensity, px, py);
         const thresh = DOCTRINE_KNOBS.cavalrySwarmAvoidThreshold;
         if (densAhead > thresh) {
-          // Probe density to either perpendicular side; deflect
-          // toward whichever is lighter.
+          // Probe perpendicular far enough to find the END of a line —
+          // a 12-rac infantry line at 1.4m pitch is 16.8m wide, so a
+          // 0.5×lookahead probe (4m) lands inside the line on both
+          // sides and reports equal density. Probe at 1.5× lookahead
+          // (~21m) to actually see past the formation's edge. Two
+          // probes per side at 1× and 2× to bias toward the more open
+          // wing for very long obstructions.
           const perpX = -sy;
           const perpY = sx;
-          const half = la * 0.5;
-          const dLeft = sampleField(fields, fields.totalDensity, px + perpX * half, py + perpY * half);
-          const dRight = sampleField(fields, fields.totalDensity, px - perpX * half, py - perpY * half);
+          const wide = la * 2.0;
+          const mid = la * 1.0;
+          const dLeftMid = sampleField(fields, fields.totalDensity, px + perpX * mid, py + perpY * mid);
+          const dLeftWide = sampleField(fields, fields.totalDensity, px + perpX * wide, py + perpY * wide);
+          const dRightMid = sampleField(fields, fields.totalDensity, px - perpX * mid, py - perpY * mid);
+          const dRightWide = sampleField(fields, fields.totalDensity, px - perpX * wide, py - perpY * wide);
+          const dLeft = dLeftMid + dLeftWide * 0.5;
+          const dRight = dRightMid + dRightWide * 0.5;
           const sign = dLeft <= dRight ? 1 : -1;
-          const strength = Math.min(densAhead - thresh, 4) * DOCTRINE_KNOBS.cavalrySwarmAvoidK;
+          // Stronger deflection when the line is dense: scale by
+          // (densAhead - thresh) clamped, multiplied by avoidK.
+          const strength = Math.min(densAhead - thresh, 6) * DOCTRINE_KNOBS.cavalrySwarmAvoidK;
           avoidX = perpX * sign * strength;
           avoidY = perpY * sign * strength;
         }

@@ -126,9 +126,9 @@ export const DOCTRINE_KNOBS = {
   // cavalry along its seek direction; if density exceeds threshold,
   // apply a perpendicular deflection toward the lighter side.
   // Per-rac (cavalry-role only); other roles ignore.
-  cavalrySwarmAvoidK: 4.0,
-  cavalrySwarmAvoidLookahead: 8.0,
-  cavalrySwarmAvoidThreshold: 1.5,
+  cavalrySwarmAvoidK: 9.0,
+  cavalrySwarmAvoidLookahead: 14.0,
+  cavalrySwarmAvoidThreshold: 0.8,
 
   // ---- Global spawn-rate multiplier. ----
   // Multiplies every bin's spawn burst. 1 = default; 2 = "battle of
