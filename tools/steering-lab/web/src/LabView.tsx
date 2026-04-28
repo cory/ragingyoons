@@ -4,6 +4,7 @@ import type { ContentBundle } from "@sim/content.js";
 import type { ForceFlag } from "@sim/state.js";
 import { FORCE_COMPONENT_INDEX } from "@sim/state.js";
 import { FORMATIONS, type FormationId } from "@sim/formations.js";
+import { DOCTRINES, doctrineFor, squadSizeFor } from "@sim/doctrines.js";
 import { runLabBattle, type LabFrame, type LabRunResult, type ForceFlagMap } from "./runBattle.js";
 
 type OverlayKey =
@@ -126,6 +127,19 @@ export function LabView() {
     return list;
   }, [content, cfg.unitId]);
 
+  // Doctrine readout — derived from the unit's (env, cur). Shows what
+  // doctrine the lab is actually using and what the resolved squad
+  // size will be (doctrine override > role default).
+  const doctrineInfo = useMemo(() => {
+    if (!content || !cfg.unitId) return null;
+    const u = content.units.get(cfg.unitId);
+    if (!u) return null;
+    const docId = doctrineFor(u.environment, u.curiosity);
+    const docDef = DOCTRINES.find((d) => d.id === docId);
+    const sSize = docDef ? squadSizeFor(u.role, docDef) : 0;
+    return { docId, sSize, role: u.role };
+  }, [content, cfg.unitId]);
+
   const run = useCallback(() => {
     if (!content || !cfg.unitId || !cfg.enemyBin) return;
     setRunning(true);
@@ -213,6 +227,11 @@ export function LabView() {
               <Field label="count"><Num value={cfg.count} min={1} max={500} onChange={(n) => setCfg({ ...cfg, count: n })} /></Field>
               <Field label="form"><Select value={cfg.formation} options={formationOptions} onChange={(v) => setCfg({ ...cfg, formation: v as FormationId | "default" })} /></Field>
               <Field label="enemy bin"><Select value={cfg.enemyBin} options={unitIds} onChange={(v) => setCfg({ ...cfg, enemyBin: v })} /></Field>
+              {doctrineInfo && (
+                <div style={{ fontSize: 11, color: "#6cf", paddingLeft: 76 }}>
+                  doctrine: <span style={{ color: "#fc6" }}>{doctrineInfo.docId}</span> · squad: <span style={{ color: "#fc6" }}>{doctrineInfo.sSize}</span> ({doctrineInfo.role})
+                </div>
+              )}
               <Field label="seed"><Num value={cfg.seed} onChange={(n) => setCfg({ ...cfg, seed: n })} /></Field>
               <Field label="ticks"><Num value={cfg.ticks} min={10} max={2000} onChange={(n) => setCfg({ ...cfg, ticks: n })} /></Field>
               <Field label="platoon"><Num value={cfg.maxPlatoonSize} min={1} max={500} onChange={(n) => setCfg({ ...cfg, maxPlatoonSize: n })} /></Field>
