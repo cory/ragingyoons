@@ -179,6 +179,14 @@ export interface RacTable {
    *  at spawn from `formation.arrange()`. */
   slotDx: Float32Array;
   slotDy: Float32Array;
+  /** Per-rac morale in [0, 1]. Starts at 1.0 at spawn. Drops on damage
+   *  taken; below MORALE_BREAK_THRESHOLD the rac is "broken" and falls
+   *  back to full boid steering (it's no longer holding formation).
+   *  Non-broken followers ignore boid forces entirely and aim straight
+   *  at their slot — that's the formation discipline. Broken racs
+   *  fight for themselves. v0 only decreases morale; rallying / repair
+   *  is a future iteration. */
+  morale: Float32Array;
   /** Squad membership. All racs in the same squad cohere around their
    *  leader. v0: assigned at spawn, never re-shuffled. Hierarchy
    *  beyond the squad (platoon, company, battalion) lands in a later
@@ -391,6 +399,7 @@ export function emptyRacs(): RacTable {
     groupId: new Uint16Array(MAX_RACS),
     slotDx: new Float32Array(MAX_RACS),
     slotDy: new Float32Array(MAX_RACS),
+    morale: new Float32Array(MAX_RACS),
     squadId: new Uint16Array(MAX_RACS),
     squadLeaderId: new Int32Array(MAX_RACS),
   };
@@ -644,6 +653,7 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
         // are offset by their formation pos minus the leader's.
         state.rac.slotDx[racRow] = off.dx - leaderOff.dx;
         state.rac.slotDy[racRow] = off.dy - leaderOff.dy;
+        state.rac.morale[racRow] = 1.0;
         state.rac.squadId[racRow] = squadId;
         // Placeholder; back-filled below once we know the leader's id.
         state.rac.squadLeaderId[racRow] = -1;
@@ -894,3 +904,25 @@ export function findBinRowById(state: BattleState, id: number): number {
 export const TARGET_KIND_NONE = 0;
 export const TARGET_KIND_RAC = 1;
 export const TARGET_KIND_BIN = 2;
+
+/** Morale below this fraction → rac is "broken" — drops formation
+ *  discipline and switches to full boid steering (everyone-for-itself).
+ *  This is the FALLBACK; per-env values below override per-rac. */
+export const MORALE_BREAK_THRESHOLD = 0.3;
+/** Per-environment break threshold. Discipline is an environmental
+ *  trait: city raccoons grew up in tight crowded streets and hold
+ *  formation longer; coastal raccoons are independent beach scavengers
+ *  who break to lone-wolf mode at the slightest pressure. Values are
+ *  *threshold* — lower means harder to break. Indexed by ENV_TO_IDX
+ *  ordering (city=0, suburban=1, park=2, coastal=3). */
+export const MORALE_BREAK_THRESHOLD_BY_ENV: readonly number[] = [
+  0.1, // city: tight discipline
+  0.2, // suburban: hold the line (phalanx fits this)
+  0.4, // park: tricksters, easier to scatter
+  0.5, // coastal: lone rangers, break fast
+];
+/** Damage → morale loss multiplier. damage / hpMax × this is subtracted
+ *  from morale on each damage application. 0.6 means a single hit for
+ *  half max HP drops morale by 0.3 — past the default break threshold
+ *  in one big blow, but small ticks of damage barely move the needle. */
+export const MORALE_DAMAGE_MUL = 0.6;

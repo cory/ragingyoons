@@ -238,6 +238,7 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         // are offset by their formation pos minus the leader's.
         state.rac.slotDx[racRow] = off.dx - leaderOff.dx;
         state.rac.slotDy[racRow] = off.dy - leaderOff.dy;
+        state.rac.morale[racRow] = 1.0;
         alive += 1;
 
         log.emit("rac_spawn", {

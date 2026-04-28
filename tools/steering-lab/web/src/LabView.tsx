@@ -59,6 +59,8 @@ interface CellConfig {
   maxPlatoonSize: number;
   /** Spacing between platoon centers along march axis (meters). */
   platoonStride: number;
+  /** Tick at which to forcibly break all formations (morale → 0). 0 = never. */
+  breakAtTick: number;
 }
 
 const DEFAULT_FLAGS: ForceFlagMap = {
@@ -97,6 +99,7 @@ export function LabView() {
     arrowScale: 1.5,
     maxPlatoonSize: 20,
     platoonStride: 6,
+    breakAtTick: 0,
   });
   const [result, setResult] = useState<LabRunResult | null>(null);
   const [tickIdx, setTickIdx] = useState(0);
@@ -156,6 +159,7 @@ export function LabView() {
         bounds: { w: 120, h: 80 },
         maxPlatoonSize: cfg.maxPlatoonSize,
         platoonStride: cfg.platoonStride,
+        breakAtTick: cfg.breakAtTick,
       });
       setResult(r);
       setTickIdx(0);
@@ -236,6 +240,18 @@ export function LabView() {
               <Field label="ticks"><Num value={cfg.ticks} min={10} max={2000} onChange={(n) => setCfg({ ...cfg, ticks: n })} /></Field>
               <Field label="platoon"><Num value={cfg.maxPlatoonSize} min={1} max={500} onChange={(n) => setCfg({ ...cfg, maxPlatoonSize: n })} /></Field>
               <Field label="stride"><Num value={cfg.platoonStride} min={1} max={50} step={0.5} onChange={(n) => setCfg({ ...cfg, platoonStride: n })} /></Field>
+              <Field label="break tick"><Num value={cfg.breakAtTick} min={0} max={2000} onChange={(n) => setCfg({ ...cfg, breakAtTick: n })} /></Field>
+              <button
+                onClick={() => {
+                  // Snap break tick to current scrubber position and re-run.
+                  setCfg({ ...cfg, breakAtTick: Math.max(1, tickIdx) });
+                  setTimeout(run, 0);
+                }}
+                disabled={running || !result}
+                style={{ background: "#742", color: "#fde" }}
+              >
+                break now (tick {Math.max(1, tickIdx)})
+              </button>
             </Group>
             <Group title="forces">
               {ALL_FORCES.map((f) => (
@@ -368,15 +384,18 @@ function Legend() {
     </div>
   );
 }
-function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; forces: Float32Array } }) {
+function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; forces: Float32Array } }) {
   const { forces } = rac;
   const speed = Math.hypot(rac.vx, rac.vy);
   return (
     <div style={{ position: "absolute", right: 8, top: 8, background: "#000c", padding: 8, borderRadius: 3, fontSize: 11, color: "#ddd", minWidth: 200 }}>
       <div>
-        rac #{rac.id} {rac.isLeader ? <span style={{ color: "#fc6" }}>[leader]</span> : null} {rac.contact ? "[contact]" : ""}
+        rac #{rac.id} {rac.isLeader ? <span style={{ color: "#fc6" }}>[leader]</span> : null} {rac.contact ? "[contact]" : ""} {rac.broken ? <span style={{ color: "#f88" }}>[broken]</span> : null}
       </div>
       <div style={{ color: "#888" }}>squad {rac.squadId} → leader #{rac.squadLeaderId}</div>
+      <div style={{ color: "#888" }}>
+        morale <span style={{ color: rac.broken ? "#f88" : "#cc8" }}>{rac.morale.toFixed(2)}</span>
+      </div>
       <div style={{ color: "#888" }}>pos ({rac.x.toFixed(1)}, {rac.y.toFixed(1)})  v {speed.toFixed(2)}m/s</div>
       <div style={{ color: "#888" }}>slot ({rac.slotDx.toFixed(2)}, {rac.slotDy.toFixed(2)})</div>
       <div style={{ marginTop: 4, borderTop: "1px solid #333", paddingTop: 4 }}>
@@ -540,16 +559,26 @@ function drawFrame(
   }
 
   // Racs — color by squadId hash so squads are visually distinct.
-  // Leaders get a white ring so the senior member of each squad stands
-  // out at a glance.
+  // Leaders get a white ring; broken racs get a red ring + desaturated
+  // body so the discipline → boids transition is visible at a glance.
   for (const r of frame.racs) {
     if (!r.alive) continue;
     const [px, py] = worldToPx(r.x, r.y);
-    ctx.fillStyle = r.id === hoverId ? "#fff" : squadColor(r.squadId, r.contact === 1);
+    if (r.id === hoverId) {
+      ctx.fillStyle = "#fff";
+    } else if (r.broken) {
+      ctx.fillStyle = "#666"; // desaturated — formation discipline gone
+    } else {
+      ctx.fillStyle = squadColor(r.squadId, r.contact === 1);
+    }
     ctx.fillRect(px - 3, py - 3, 6, 6);
     if (r.isLeader) {
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1.2;
+      ctx.strokeRect(px - 4.5, py - 4.5, 9, 9);
+    } else if (r.broken) {
+      ctx.strokeStyle = "#f88";
+      ctx.lineWidth = 1;
       ctx.strokeRect(px - 4.5, py - 4.5, 9, 9);
     }
   }

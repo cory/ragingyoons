@@ -13,6 +13,7 @@ import { ROLE_ARCHER, ROLE_CAVALRY, ROLE_TANK } from "../content.js";
 import type { Logger } from "../log.js";
 import {
   MAX_GARRISON_SLOTS,
+  MORALE_DAMAGE_MUL,
   SECONDS_PER_TICK,
   TARGET_KIND_BIN,
   TARGET_KIND_NONE,
@@ -291,6 +292,18 @@ export function applyRacDamage(
   const hpBefore = state.rac.hp[tgtRow];
   const hpAfter = hpBefore - dmg;
   state.rac.hp[tgtRow] = hpAfter;
+  // Morale: take a hit proportional to damage / hpMax. A single big
+  // blow can break a rac in one strike (hp/hpMax × MORALE_DAMAGE_MUL
+  // crosses the break threshold past ~50% damage); ticks of small
+  // damage chip morale slowly so a rac surviving a long fight can
+  // still hold formation.
+  const hpMax = state.rac.hpMax[tgtRow];
+  if (hpMax > 0) {
+    state.rac.morale[tgtRow] = Math.max(
+      0,
+      state.rac.morale[tgtRow] - (dmg / hpMax) * MORALE_DAMAGE_MUL,
+    );
+  }
 
   const fields: Record<string, unknown> = {
     src_rac: srcRow >= 0 ? state.rac.id[srcRow] : -1,

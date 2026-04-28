@@ -19,7 +19,7 @@ import {
 } from "@sim/index.js";
 import type { ContentBundle } from "@sim/content.js";
 import type { ForceFlag } from "@sim/state.js";
-import { FORCE_FLOATS_PER_RAC, MAX_RACS } from "@sim/state.js";
+import { FORCE_FLOATS_PER_RAC, MAX_RACS, MORALE_BREAK_THRESHOLD, MORALE_BREAK_THRESHOLD_BY_ENV } from "@sim/state.js";
 import type { FormationId } from "@sim/formations.js";
 
 export type ForceFlagMap = Partial<Record<ForceFlag, boolean>>;
@@ -39,6 +39,10 @@ export interface LabRunConfig {
   maxPlatoonSize?: number;
   /** Spacing (meters) between platoon centers along march axis. */
   platoonStride?: number;
+  /** Tick at which to crash every alive rac's morale to 0 (lab only).
+   *  Lets us see the immediate effect of a forced break — formation
+   *  discipline drops, racs scatter to boids. 0 = never. */
+  breakAtTick?: number;
 }
 
 export interface RacFrame {
@@ -56,6 +60,8 @@ export interface RacFrame {
   squadId: number;
   squadLeaderId: number;
   isLeader: boolean;
+  morale: number;
+  broken: boolean;
   /** Per-component forces captured by boidsTick (12 floats). */
   forces: Float32Array;
 }
@@ -113,9 +119,19 @@ export function runLabBattle(content: ContentBundle, cfg: LabRunConfig): LabRunR
   // Capture tick 0 (pre-tick state)
   frames.push(snapshotFrame(state, dbg));
 
+  const breakAtTick = cfg.breakAtTick && cfg.breakAtTick > 0 ? cfg.breakAtTick : null;
   for (let t = 0; t < cfg.ticks; t++) {
     state.tick = t + 1;
     tick(state, content, log);
+    // Lab-only forced break: at the configured tick, crash every alive
+    // rac's morale to 0 so the formation falls apart and the broken-rac
+    // boid path engages immediately. Use it to validate the discipline
+    // → boids transition without waiting for combat damage.
+    if (breakAtTick !== null && state.tick === breakAtTick) {
+      for (let i = 0; i < state.rac.count; i++) {
+        if (state.rac.alive[i]) state.rac.morale[i] = 0;
+      }
+    }
     frames.push(snapshotFrame(state, dbg));
     if (state.winner !== -1) break;
   }
@@ -144,6 +160,10 @@ function snapshotFrame(state: ReturnType<typeof setupShapeBattle>, dbg: Float32A
       squadId: state.rac.squadId[i],
       squadLeaderId: leaderId,
       isLeader: leaderId === racId || leaderId < 0,
+      morale: state.rac.morale[i],
+      broken:
+        state.rac.morale[i] <
+        (MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD),
       forces: f,
     });
   }

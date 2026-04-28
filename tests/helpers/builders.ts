@@ -218,6 +218,7 @@ export function addRac(
   state.rac.surroundedDamageMul[slot] = 1;
   state.rac.slotDx[slot] = opts.slotDx ?? 0;
   state.rac.slotDy[slot] = opts.slotDy ?? 0;
+  state.rac.morale[slot] = 1.0;
   state.rac.squadId[slot] = opts.squadId ?? (state.nextSquadId++);
   state.rac.squadLeaderId[slot] = opts.squadLeaderId ?? state.rac.id[slot];
   state.rac.count = slot + 1;

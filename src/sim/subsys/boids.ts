@@ -33,6 +33,8 @@ import { ROLE_ARCHER, ROLE_CAVALRY } from "../content.js";
 import { forEachNear } from "../grid.js";
 import type { Logger } from "../log.js";
 import {
+  MORALE_BREAK_THRESHOLD,
+  MORALE_BREAK_THRESHOLD_BY_ENV,
   SECONDS_PER_TICK,
   TARGET_KIND_BIN,
   TARGET_KIND_RAC,
@@ -278,52 +280,55 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const mySlotDx = state.rac.slotDx[i] * slotMul;
     const mySlotDy = state.rac.slotDy[i] * slotMul;
 
-    // Squad cohesion: followers pull toward (leaderPos + slot). The
-    // leader itself has slot=(0,0) so it has zero cohesion (leaders
-    // don't pull on themselves). Followers in `independentInContact`
-    // doctrine drop the leader-pull when contact[i]==1 — skirmisher /
-    // fire-team / fanatic break formation under fire. Leaders always
-    // drive the squad.
+    // Formation discipline: a rac with morale above the break
+    // threshold ignores boid forces entirely and aims directly at its
+    // slot. Boids only kick in when broken (morale crashed under
+    // damage) or when doctrine says independent-in-contact.
+    //
+    // Leaders are never followers (they drive); broken racs go full
+    // boid (the whole point of breaking is they stop holding the
+    // line); independent-in-contact doctrines (skirmisher, fire-team,
+    // fanatic) drop the leader-pull on first contact.
     const myRacId = state.rac.id[i];
     const myLeaderId = state.rac.squadLeaderId[i];
     const isLeader = myLeaderId === myRacId || myLeaderId < 0;
     const doc = DOCTRINES[state.rac.doctrineIdx[i]];
     const inIndependentContact =
       !!doc && doc.independentInContact && state.rac.contact[i] === 1;
-    const followsLeader = !isLeader && !inIndependentContact;
-    let cohX = 0;
-    let cohY = 0;
+    // Per-environment break threshold (city=0.1 holds tight, coastal=
+    // 0.5 breaks fast). Falls back to the global default if the env
+    // table is somehow short.
+    const breakThreshold =
+      MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD;
+    const broken = state.rac.morale[i] < breakThreshold;
+    let leaderRow = -1;
     let leaderTx = 0, leaderTy = 0;
     let leaderTargetFound = false;
-    if (followsLeader) {
-      const leaderRow = findRacRowById(state, myLeaderId);
+    if (!isLeader) {
+      leaderRow = findRacRowById(state, myLeaderId);
       if (leaderRow >= 0) {
         leaderTx = state.rac.x[leaderRow] + mySlotDx;
         leaderTy = state.rac.y[leaderRow] + mySlotDy;
         leaderTargetFound = true;
-        if (cohKEff > 0 && f_cohesion) {
-          const tdx = leaderTx - myX;
-          const tdy = leaderTy - myY;
-          const td = Math.hypot(tdx, tdy);
-          if (td > 1e-3) {
-            cohX = (tdx / td) * cohKEff;
-            cohY = (tdy / td) * cohKEff;
-          }
-        }
       }
     }
-    // Shape error = distance from rac to its slot target. Only
-    // meaningful for followers; leaders / independents have no slot.
+    // inFormation: this rac is a non-broken follower with a live
+    // leader and no doctrine override. Use slot-direct steering and
+    // skip the entire force pipeline for movement.
+    const inFormation =
+      !isLeader && leaderTargetFound && !broken && !inIndependentContact;
+    // For racs NOT in formation (leader, broken, independent), boids
+    // computes forces normally. We keep `cohX/cohY` for the leader-pull
+    // intent only when actively pulling — but since inFormation racs
+    // bypass forces and the others are explicitly NOT pulling, cohX/Y
+    // stays at zero here. That removes the old leader-pull-when-broken
+    // behavior; broken racs are on their own.
+    const cohX = 0;
+    const cohY = 0;
+    const followsLeader = inFormation; // legacy alias for follower seek branch below
     const shapeError = leaderTargetFound
       ? Math.hypot(leaderTx - myX, leaderTy - myY)
       : 0;
-    // "In slot" = follower close enough to its (leaderPos + slot) target
-    // that the squad-leader is fully driving — separation, alignment,
-    // seek, hide, avoid all gate off and only cohesion remains. Far
-    // away (just spawned, or knocked out of formation), full boid
-    // forces fire to bring the rac back.
-    const IN_SLOT_R = 1.5;
-    const inSlot = followsLeader && leaderTargetFound && shapeError < IN_SLOT_R;
 
     // ---- Alignment: toward local same-side same-role average velocity. ----
     let alignX = 0;
@@ -375,28 +380,14 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
 
     // Doctrine seekDirOverride: when set, ignore target seek and use
     // the override direction (retreat to bin, rush to fight, flank).
+    // Only matters for racs NOT inFormation — formation racs bypass
+    // forces entirely below.
     if (!f_seek) {
       seekX = 0;
       seekY = 0;
     } else if (f_doctrineMod && dMod.seekDirOverride) {
       seekX = dMod.seekDirOverride.dx * seekKEff;
       seekY = dMod.seekDirOverride.dy * seekKEff;
-    } else if (followsLeader && leaderTargetFound) {
-      // Followers seek their LEADER-relative slot, not the world
-      // target. The leader does the world-targeting; the follower
-      // just rejoins. Out-of-slot followers feel both seek + cohesion
-      // pulling them home, which gets them back to the squad faster
-      // than cohesion alone would (cohesion alone is unit-speed-capped,
-      // same as the leader's march, so a lagging follower never closes
-      // — adding seek toward the slot makes "rejoin" actually work).
-      const tdx = leaderTx - myX;
-      const tdy = leaderTy - myY;
-      const td2 = tdx * tdx + tdy * tdy;
-      if (td2 > 1e-6) {
-        const td = Math.sqrt(td2);
-        seekX = (tdx / td) * seekKEff;
-        seekY = (tdy / td) * seekKEff;
-      }
     } else if (tgtFound && !inCombat) {
       // Leader (or independent-in-contact follower): seek world target
       // with envelopment falloff. (target + slot × envelopFactor) so
@@ -512,20 +503,6 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // Cavalry flanks visibly (K=0.4 → ±23°), infantry slightly
     // spreads (0.15), archer/tank mostly straight. Adjacent racs
     // from the same spawn pick different sides of the approach.
-    // In-slot gate: when a follower is at its leader-relative slot,
-    // the squad-leader is driving — this rac just holds. Zero out
-    // field separation / alignment / seek / hide / avoid. Cohesion
-    // (leader-pull) and close-range (anti-overlap) stay on. Field
-    // separation gates because it pushes edge racs OUT of the
-    // formation under a density gradient; that drag stops edge racs
-    // from keeping pace with the leader, and they fall out of slot.
-    if (inSlot) {
-      fieldSepX = 0; fieldSepY = 0;
-      alignX = 0; alignY = 0;
-      seekX = 0; seekY = 0;
-      hideX = 0; hideY = 0;
-      avoidX = 0; avoidY = 0;
-    }
     const sepX = fieldSepX + closeSepX;
     const sepY = fieldSepY + closeSepY;
 
@@ -630,25 +607,47 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       state.rac.doctrineIdx[i] === 1 /* phalanx */ && state.rac.contact[i]
         ? DOCTRINE_KNOBS.phalanxContactSpeed / 0.2 // ratio vs the formation's hardcoded 0.2
         : 1;
-    // Follower catch-up: a follower out of its slot needs to travel
-    // FASTER than the leader to actually close the gap. Same speed
-    // means a chase at constant distance — the follower asymptotes to
-    // a fixed lag behind the moving slot. Scale linearly with shape
-    // error up to a 1.6× cap; clears once back in slot.
-    const catchupMul = followsLeader && !inSlot && shapeError > IN_SLOT_R
-      ? Math.min(1.6, 1 + (shapeError - IN_SLOT_R) * 0.15)
-      : 1;
     const maxV =
       state.rac.effSpeed[i] *
       (surrounded ? SURROUND_SPEED_MUL : 1) *
       dMod.speedMul *
-      phalanxContactSlow *
-      catchupMul;
+      phalanxContactSlow;
     const desiredLen = Math.hypot(dvx, dvy);
     const COMMIT_THRESHOLD = 0.5; // intent must exceed this to maxV-go
     let newVx: number;
     let newVy: number;
-    if (inCombat) {
+    if (inFormation && leaderRow >= 0) {
+      // Formation discipline: a non-broken follower bypasses the
+      // entire force pipeline and aims directly at its slot, predicted
+      // one tick ahead by the leader's velocity. Direct velocity
+      // (slotPredicted - me) / dt — capped at maxV so we don't
+      // teleport across long gaps. Close-range pairwise still applies
+      // as an additive nudge so two formation racs at the same point
+      // resolve. This is "the rac doesn't care about boid forces; it
+      // just wants to be in formation, and only switches to boids
+      // when broken".
+      const lx = state.rac.x[leaderRow];
+      const ly = state.rac.y[leaderRow];
+      const lvx = state.rac.vx[leaderRow];
+      const lvy = state.rac.vy[leaderRow];
+      const slotX = lx + lvx * dt + mySlotDx;
+      const slotY = ly + lvy * dt + mySlotDy;
+      const dxToSlot = (slotX - myX) / dt;
+      const dyToSlot = (slotY - myY) / dt;
+      const reqSpeed = Math.hypot(dxToSlot, dyToSlot);
+      if (reqSpeed > maxV) {
+        newVx = (dxToSlot / reqSpeed) * maxV;
+        newVy = (dyToSlot / reqSpeed) * maxV;
+      } else {
+        newVx = dxToSlot;
+        newVy = dyToSlot;
+      }
+      // Close-range anti-overlap (kept always-on so two slot-mates
+      // that happen to overlap still resolve). closeSepX/Y is a force
+      // direction × CLOSE_K; treat it as a velocity nudge over dt.
+      newVx += closeSepX * dt;
+      newVy += closeSepY * dt;
+    } else if (inCombat) {
       // In melee/at range: hold position. Bleed velocity hard so the
       // unit settles in one or two ticks. Cavalry skips this branch
       // entirely (handled at the inCombat compute site).
