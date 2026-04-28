@@ -9,13 +9,15 @@ type OverlayKey =
   | "slotTarget"
   | "velocityArrow"
   | "flankProbes"
-  | "behaviorColor";
+  | "behaviorColor"
+  | "attackRange";
 
 const ALL_OVERLAYS: { key: OverlayKey; label: string }[] = [
   { key: "slotTarget", label: "slot target (formation)" },
   { key: "velocityArrow", label: "velocity arrow" },
   { key: "flankProbes", label: "cavalry flank probes" },
   { key: "behaviorColor", label: "color by behavior" },
+  { key: "attackRange", label: "attack-range rings" },
 ];
 
 interface SideConfig {
@@ -43,6 +45,7 @@ const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
   velocityArrow: false,
   flankProbes: false,
   behaviorColor: false,
+  attackRange: false,
 };
 
 export function LabView() {
@@ -54,7 +57,7 @@ export function LabView() {
     redEnabled: false,
     red: { unitId: "", count: 12, formation: "default", maxPlatoonSize: 20, platoonStride: 6 },
     seed: 1,
-    ticks: 240,
+    ticks: 1500, // 100 s at 15 Hz; loop also breaks on win condition
     overlays: DEFAULT_OVERLAYS,
     breakAtTick: 0,
   });
@@ -542,6 +545,22 @@ function drawFrame(
       ctx.beginPath();
       ctx.arc(ax, ay, 3, 0, Math.PI * 2);
       ctx.fill();
+    }
+  }
+
+  // Attack-range rings — faint circle at each rac's effRange so the
+  // melee/projectile boundary is visible. Drawn before the rac body
+  // so the ring sits beneath the squares.
+  if (cfg.overlays.attackRange) {
+    ctx.strokeStyle = "#fff2";
+    ctx.lineWidth = 1;
+    for (const r of frame.racs) {
+      if (!r.alive) continue;
+      if (r.effRange <= 0.5) continue; // skip melee-only racs to keep canvas readable
+      const [px, py] = worldToPx(r.x, r.y);
+      ctx.beginPath();
+      ctx.arc(px, py, r.effRange * s, 0, Math.PI * 2);
+      ctx.stroke();
     }
   }
 

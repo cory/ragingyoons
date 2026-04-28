@@ -48,7 +48,10 @@ describe("projectile", () => {
     assert.equal(state.rac.hp[tRow], 40, "target lost 10 HP");
   });
 
-  it("friendly tank in front blocks the arrow", () => {
+  it("arrow passes through friendly tank and hits the enemy beyond", () => {
+    // Friendly fire is disabled — arrows skip friendly racs in their
+    // hit-test path. A back-rank archer firing through a front-rank
+    // tank lands the shot on whatever's past the tank.
     const archer = makeUnit({
       id: "a",
       role: "archer",
@@ -80,14 +83,14 @@ describe("projectile", () => {
       const hits = eventsOf(evs, "proj_hit");
       if (hits.length > 0) {
         resolved = true;
-        assert.equal(hits[0].friendly_fire, 1, "friendly fire flagged");
-        assert.equal(hits[0].hit_id, state.rac.id[tankRow], "friendly tank ate it");
+        assert.equal(hits[0].friendly_fire, 0, "no friendly fire");
+        assert.equal(hits[0].hit_id, state.rac.id[enemyRow], "enemy ate the arrow");
         break;
       }
     }
-    assert.ok(resolved, "arrow should resolve into the friendly tank");
-    assert.equal(state.rac.hp[tankRow], 40, "tank took 10 damage from friendly arrow");
-    assert.equal(state.rac.hp[enemyRow], 50, "enemy untouched");
+    assert.ok(resolved, "arrow should resolve into the enemy past the friendly tank");
+    assert.equal(state.rac.hp[tankRow], 50, "friendly tank untouched");
+    assert.equal(state.rac.hp[enemyRow], 40, "enemy took 10 damage");
   });
 
   it("arrow expires when it travels its full range without hitting anything", () => {

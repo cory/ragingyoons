@@ -140,10 +140,15 @@ export function projectileTick(state: BattleState, content: ContentBundle, log: 
       continue;
     }
 
-    // racs
+    // racs — friendly racs are skipped: arrows pass through allies
+    // rather than killing them. Without this, a back-rank archer
+    // shooting forward could spear the front-rank archer beside them
+    // (or worse, a tank between them and the enemy).
+    const srcOwner = state.atk.sourceOwner[p];
     for (let i = 0; i < state.rac.count; i++) {
       if (!state.rac.alive[i]) continue;
       if (state.rac.id[i] === srcRacId) continue; // never self-hit
+      if (state.rac.owner[i] === srcOwner) continue; // no friendly fire
       const cx = state.rac.x[i];
       const cy = state.rac.y[i];
       // Closest approach t along segment: t = ((c-p) · seg) / |seg|², clamped [0,1].
@@ -161,9 +166,10 @@ export function projectileTick(state: BattleState, content: ContentBundle, log: 
         bestRow = i;
       }
     }
-    // bins
+    // bins — same friendly-fire rule. Arrows pass over our own bins.
     for (let k = 0; k < state.bin.count; k++) {
       if (!state.bin.alive[k]) continue;
+      if (state.bin.owner[k] === srcOwner) continue;
       const cx = state.bin.x[k];
       const cy = state.bin.y[k];
       let t = ((cx - px) * segDx + (cy - py) * segDy) / segLen2;

@@ -131,6 +131,39 @@ const FLANK_EDGE_DENSITY = 0.05;
  *  aim 200 m sideways when no edge is found nearby. */
 const FLANK_MAX_STEPS = 8;
 
+/** Find the nearest alive friendly bin (any range). Returns row
+ *  index or -1. Used as a fallback retreat target — broken / rally
+ *  racs head back toward their own line instead of fleeing into
+ *  empty space. */
+function findFriendlyBin(state: BattleState, i: number): number {
+  const myOwner = state.rac.owner[i];
+  const myX = state.rac.x[i];
+  const myY = state.rac.y[i];
+  // Prefer the rac's source bin if it's still alive — that's our
+  // home base. Otherwise fall back to nearest alive friendly bin.
+  const srcBinId = state.rac.sourceBinId[i];
+  if (srcBinId >= 0) {
+    const row = state.binRowById.get(srcBinId);
+    if (row !== undefined && state.bin.alive[row] && state.bin.owner[row] === myOwner) {
+      return row;
+    }
+  }
+  let bestRow = -1;
+  let bestD2 = Number.POSITIVE_INFINITY;
+  for (let k = 0; k < state.bin.count; k++) {
+    if (!state.bin.alive[k]) continue;
+    if (state.bin.owner[k] !== myOwner) continue;
+    const dx = state.bin.x[k] - myX;
+    const dy = state.bin.y[k] - myY;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestRow = k;
+    }
+  }
+  return bestRow;
+}
+
 /** Find the nearest alive friendly squad-leader within RALLY_RADIUS,
  *  excluding self. Returns row index or -1. Used by the broken
  *  decision branch to choose between RALLY and ROUT. */
@@ -332,24 +365,33 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const maxV = state.rac.effSpeed[i] * (pinned ? PIN_SPEED_MUL : 1);
 
     if (behavior === BEHAVIOR_RALLY) {
-      // Rally: head toward the nearest friendly squad leader.
-      // Morale recovers (in moraleTick) while rallying. Once it
-      // crosses back above the break threshold, the next cadence
-      // decision flips back to MARCH and the rac re-enters the fight.
+      // Rally: head toward nearest friendly leader; fall back to
+      // friendly bin so a broken rac with no leader nearby still has
+      // somewhere to go (defend the line). Morale recovers in
+      // moraleTick while rallying.
       const leaderRallyRow = findRallyLeader(state, i);
+      let aimX = myX, aimY = myY, hasAim = false;
       if (leaderRallyRow >= 0) {
-        const lx = state.rac.x[leaderRallyRow];
-        const ly = state.rac.y[leaderRallyRow];
-        const dx = lx - myX;
-        const dy = ly - myY;
+        aimX = state.rac.x[leaderRallyRow];
+        aimY = state.rac.y[leaderRallyRow];
+        hasAim = true;
+      } else {
+        const binRow = findFriendlyBin(state, i);
+        if (binRow >= 0) {
+          aimX = state.bin.x[binRow];
+          aimY = state.bin.y[binRow];
+          hasAim = true;
+        }
+      }
+      if (hasAim) {
+        const dx = aimX - myX;
+        const dy = aimY - myY;
         const d = Math.hypot(dx, dy);
         if (d > 1e-3) {
           desiredVx = (dx / d) * maxV;
           desiredVy = (dy / d) * maxV;
         }
       }
-      // No leader in range — fall through to zero velocity (will get
-      // re-decided as ROUT next cadence).
     } else if (behavior === BEHAVIOR_FLANK) {
       // Cavalry flank: locate the LINE (highest-density spot along
       // the seek path), measure the gradient AT the line (perpendicular
@@ -500,34 +542,49 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         }
       }
     } else if (behavior === BEHAVIOR_ROUT) {
-      // Flee from nearest enemy. We don't have a precomputed nearest-
-      // enemy field on the rac, so use the spatial grid. If no enemy
-      // visible, flee away from the current target if known, else hold.
-      let nearestRow = -1;
-      let nearestD2 = Number.POSITIVE_INFINITY;
-      if (grid) {
-        forEachNear(grid, myX, myY, 30, (j) => {
-          if (j === i) return;
-          if (!state.rac.alive[j]) return;
-          if (state.rac.owner[j] === state.rac.owner[i]) return;
-          const dx = state.rac.x[j] - myX;
-          const dy = state.rac.y[j] - myY;
-          const d2 = dx * dx + dy * dy;
-          if (d2 < nearestD2) {
-            nearestD2 = d2;
-            nearestRow = j;
-          }
-        });
-      }
-      const fleeFromX = nearestRow >= 0 ? state.rac.x[nearestRow] : tgtFound ? tgtX : myX;
-      const fleeFromY = nearestRow >= 0 ? state.rac.y[nearestRow] : tgtFound ? tgtY : myY;
-      const dx = myX - fleeFromX;
-      const dy = myY - fleeFromY;
-      const d = Math.hypot(dx, dy);
-      if (d > 1e-3) {
-        const speed = maxV * ROUT_SPEED_MUL;
-        desiredVx = (dx / d) * speed;
-        desiredVy = (dy / d) * speed;
+      // Retreat to a friendly bin if there is one — broken racs run
+      // BACK to the line, not into empty space. From there they
+      // defend the bin (archers kite the next attacker, melee racs
+      // engage) and may rally if morale recovers.
+      // Falls back to fleeing the nearest enemy when no bin exists
+      // (lab two-army mode).
+      const binRow = findFriendlyBin(state, i);
+      if (binRow >= 0) {
+        const dx = state.bin.x[binRow] - myX;
+        const dy = state.bin.y[binRow] - myY;
+        const d = Math.hypot(dx, dy);
+        if (d > 1e-3) {
+          const speed = maxV * ROUT_SPEED_MUL;
+          desiredVx = (dx / d) * speed;
+          desiredVy = (dy / d) * speed;
+        }
+      } else {
+        let nearestRow = -1;
+        let nearestD2 = Number.POSITIVE_INFINITY;
+        if (grid) {
+          forEachNear(grid, myX, myY, 30, (j) => {
+            if (j === i) return;
+            if (!state.rac.alive[j]) return;
+            if (state.rac.owner[j] === state.rac.owner[i]) return;
+            const dx = state.rac.x[j] - myX;
+            const dy = state.rac.y[j] - myY;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < nearestD2) {
+              nearestD2 = d2;
+              nearestRow = j;
+            }
+          });
+        }
+        const fleeFromX = nearestRow >= 0 ? state.rac.x[nearestRow] : tgtFound ? tgtX : myX;
+        const fleeFromY = nearestRow >= 0 ? state.rac.y[nearestRow] : tgtFound ? tgtY : myY;
+        const dx = myX - fleeFromX;
+        const dy = myY - fleeFromY;
+        const d = Math.hypot(dx, dy);
+        if (d > 1e-3) {
+          const speed = maxV * ROUT_SPEED_MUL;
+          desiredVx = (dx / d) * speed;
+          desiredVy = (dy / d) * speed;
+        }
       }
     } else if (behavior === BEHAVIOR_ENGAGE) {
       if (tgtFound) {
