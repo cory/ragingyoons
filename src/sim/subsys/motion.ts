@@ -40,6 +40,8 @@ import {
   BEHAVIOR_KITE,
   BEHAVIOR_MARCH,
   BEHAVIOR_ROUT,
+  FLANK_DEBUG_FLOATS_PER_RAC,
+  FLANK_DEBUG_OFFSET,
   MAX_ACCEL_BY_ROLE,
   MORALE_BREAK_THRESHOLD,
   MORALE_BREAK_THRESHOLD_BY_ENV,
@@ -166,6 +168,10 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
   }
   const fields = state._boidFields;
   buildBoidFields(state, fields);
+  // Lab debug: clear last tick's flank-probe data so racs that exit
+  // FLANK this tick read inFlank=0. Cheap fill — only when capture
+  // is enabled.
+  if (state._debugFlank) state._debugFlank.fill(0);
 
   for (let i = 0; i < state.rac.count; i++) {
     if (!state.rac.alive[i]) continue;
@@ -252,11 +258,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
 
     if (behavior === BEHAVIOR_FLANK) {
       // Cavalry flank: find the EDGE of the enemy formation by
-      // probing density laterally, then aim PAST it. The user's
-      // signal: cavalry was sliding along the line but didn't
-      // understand where the line ended. Now we walk perpendicular
-      // (away from the gradient) in 4 m steps until density drops to
-      // ~0, that's the edge. Aim a few meters past.
+      // probing density laterally, then aim PAST it.
       const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
       const h = FLANK_GRAD_H;
       const dxDens =
@@ -266,11 +268,15 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         sampleField(fields, fields.density[enemyCh], myX, myY + h) -
         sampleField(fields, fields.density[enemyCh], myX, myY - h);
       const gMag = Math.hypot(dxDens, dyDens);
+      // Debug record (lab): only written when state._debugFlank is set.
+      const dbg = state._debugFlank;
+      const dbgBase = dbg ? i * FLANK_DEBUG_FLOATS_PER_RAC : -1;
+      if (dbg && dbgBase >= 0) {
+        dbg[dbgBase + FLANK_DEBUG_OFFSET.inFlank] = 1;
+        dbg[dbgBase + FLANK_DEBUG_OFFSET.gradX] = gMag > 0 ? dxDens / gMag : 0;
+        dbg[dbgBase + FLANK_DEBUG_OFFSET.gradY] = gMag > 0 ? dyDens / gMag : 0;
+      }
       if (gMag > 1e-3) {
-        // Perpendicular to the gradient = along the line. Two
-        // choices; pick the one with positive forward-bias toward
-        // the target (so we sweep toward the side closer to the
-        // enemy's flank, not away from the fight).
         const perpX = -dyDens / gMag;
         const perpY = dxDens / gMag;
         let fwdBias = 0;
@@ -279,24 +285,31 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
             (perpX * (tgtX - myX) + perpY * (tgtY - myY)) / distToTarget;
         }
         const sign = fwdBias >= 0 ? 1 : -1;
-        // Edge-finding probe: walk along the perpendicular until
-        // enemy density drops to clearly-past-the-line. The first
-        // probe at 0 is for sanity (we're already in the line). We
-        // step by FLANK_PROBE_STEP up to FLANK_MAX_STEPS times.
         let edgeAt = FLANK_PROBE_STEP * FLANK_MAX_STEPS;
+        let edgeStep = -1;
         for (let k = 1; k <= FLANK_MAX_STEPS; k++) {
           const probeX = myX + perpX * sign * k * FLANK_PROBE_STEP;
           const probeY = myY + perpY * sign * k * FLANK_PROBE_STEP;
           const d = sampleField(fields, fields.density[enemyCh], probeX, probeY);
+          if (dbg && dbgBase >= 0 && k <= 8) {
+            dbg[dbgBase + FLANK_DEBUG_OFFSET.probesXY + (k - 1) * 2 + 0] = probeX;
+            dbg[dbgBase + FLANK_DEBUG_OFFSET.probesXY + (k - 1) * 2 + 1] = probeY;
+          }
           if (d < FLANK_EDGE_DENSITY) {
-            // Found the edge at step k. Aim PAST it by another step
-            // so cavalry commits to clearing the formation entirely.
             edgeAt = (k + 1) * FLANK_PROBE_STEP;
+            edgeStep = k;
             break;
           }
         }
         const aimX = myX + perpX * sign * edgeAt;
         const aimY = myY + perpY * sign * edgeAt;
+        if (dbg && dbgBase >= 0) {
+          dbg[dbgBase + FLANK_DEBUG_OFFSET.perpX] = perpX * sign;
+          dbg[dbgBase + FLANK_DEBUG_OFFSET.perpY] = perpY * sign;
+          dbg[dbgBase + FLANK_DEBUG_OFFSET.aimX] = aimX;
+          dbg[dbgBase + FLANK_DEBUG_OFFSET.aimY] = aimY;
+          dbg[dbgBase + FLANK_DEBUG_OFFSET.edgeStep] = edgeStep;
+        }
         const dx = aimX - myX;
         const dy = aimY - myY;
         const d = Math.hypot(dx, dy);
@@ -305,8 +318,11 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
           desiredVy = (dy / d) * maxV;
         }
       } else if (tgtFound && distToTarget > 1e-3) {
-        // No gradient — already past the line. Aim at target; next
-        // decision will switch us out of FLANK on the cadence tick.
+        if (dbg && dbgBase >= 0) {
+          dbg[dbgBase + FLANK_DEBUG_OFFSET.aimX] = tgtX;
+          dbg[dbgBase + FLANK_DEBUG_OFFSET.aimY] = tgtY;
+          dbg[dbgBase + FLANK_DEBUG_OFFSET.edgeStep] = -1;
+        }
         desiredVx = ((tgtX - myX) / distToTarget) * maxV;
         desiredVy = ((tgtY - myY) / distToTarget) * maxV;
       }

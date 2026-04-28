@@ -12,7 +12,8 @@ type OverlayKey =
   | "groupCentroid"
   | "slotTarget"
   | "distanceRing"
-  | "velocityArrow";
+  | "velocityArrow"
+  | "flankProbes";
 
 const ALL_FORCES: ForceFlag[] = [
   "separation",
@@ -33,6 +34,7 @@ const ALL_OVERLAYS: { key: OverlayKey; label: string }[] = [
   { key: "slotTarget", label: "slot target (cohesion)" },
   { key: "distanceRing", label: "envelop ring (R=15)" },
   { key: "velocityArrow", label: "velocity arrow" },
+  { key: "flankProbes", label: "cavalry flank probes" },
 ];
 
 const COMPONENT_COLORS: Record<keyof typeof FORCE_COMPONENT_INDEX, string> = {
@@ -85,6 +87,7 @@ const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
   slotTarget: false,
   distanceRing: false,
   velocityArrow: false,
+  flankProbes: true,
 };
 
 export function LabView() {
@@ -636,6 +639,50 @@ function drawFrame(
       const ty = lp.y + r.slotDy;
       const [px, py] = worldToPx(tx, ty);
       ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+    }
+  }
+
+  // Cavalry FLANK probes — show what the edge-finding search is
+  // actually finding. Each cavalry rac in BEHAVIOR_FLANK gets:
+  //  - 8 probe dots along the chosen perpendicular direction.
+  //  - A line from the rac to the chosen aim point (where they're
+  //    heading laterally).
+  //  - The probe that found the edge is highlighted yellow; others
+  //    are grey. If no edge was found in range, no highlight.
+  if (cfg.overlays.flankProbes) {
+    for (const r of frame.racs) {
+      if (!r.alive) continue;
+      const fl = r.flankDebug;
+      if (!fl || fl[0] !== 1) continue; // not in flank
+      const [rx, ry] = worldToPx(r.x, r.y);
+      const aimX = fl[2];
+      const aimY = fl[3];
+      const edgeStep = fl[1]; // -1 if no edge in range
+      // Aim line: rac → chosen aim point.
+      const [ax, ay] = worldToPx(aimX, aimY);
+      ctx.strokeStyle = "#fc6"; // amber for the chosen lateral
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(rx, ry);
+      ctx.lineTo(ax, ay);
+      ctx.stroke();
+      // Probe dots: 8 points along the perpendicular.
+      for (let k = 0; k < 8; k++) {
+        const px = fl[8 + k * 2];
+        const py = fl[8 + k * 2 + 1];
+        if (px === 0 && py === 0) continue; // unwritten slot
+        const [dx, dy] = worldToPx(px, py);
+        const isEdge = (k + 1) === edgeStep;
+        ctx.fillStyle = isEdge ? "#fe8" : "#666";
+        ctx.beginPath();
+        ctx.arc(dx, dy, isEdge ? 4 : 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Aim point marker.
+      ctx.fillStyle = "#fc6";
+      ctx.beginPath();
+      ctx.arc(ax, ay, 3, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 

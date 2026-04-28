@@ -328,7 +328,37 @@ export interface BattleState {
    *  saturation penalty in target scoring so a target with many
    *  attackers gets deprioritized vs a less-saturated one. */
   attackerCount?: Map<number, number>;
+  /** Steering-lab: when set, motionTick writes per-rac FLANK probe
+   *  data here so the lab can show what the edge-finding search is
+   *  actually finding. Layout: FLANK_DEBUG_FLOATS_PER_RAC floats per
+   *  rac — see FLANK_DEBUG_OFFSET. Indexed by row × FLANK_DEBUG_FLOATS_PER_RAC. */
+  _debugFlank?: Float32Array;
 }
+
+/** Per-rac layout for state._debugFlank (steering-lab visualization). */
+export const FLANK_DEBUG_FLOATS_PER_RAC = 24;
+export const FLANK_DEBUG_OFFSET = {
+  /** 1 if this rac was in BEHAVIOR_FLANK this tick, else 0. */
+  inFlank: 0,
+  /** Which probe step found the edge (1..N), or -1 if no edge in
+   *  range. Encoded as a float for typed-array convenience. */
+  edgeStep: 1,
+  /** World-space aim point chosen by the FLANK intent (where cavalry
+   *  is heading). 2 floats. */
+  aimX: 2,
+  aimY: 3,
+  /** Density gradient at the rac (normalized). 2 floats. Zero if
+   *  no gradient (we're past the line). */
+  gradX: 4,
+  gradY: 5,
+  /** Chosen perpendicular direction (after sign flip toward target).
+   *  2 floats. */
+  perpX: 6,
+  perpY: 7,
+  /** 8 probe points: (x, y) each, in world space. 16 floats. Order
+   *  matches probe step 1..8. */
+  probesXY: 8,
+} as const;
 
 /** Force-flag identifiers — match the boid force-term names. The lab
  *  uses these as both checkbox labels and field keys in forceFlags. */
