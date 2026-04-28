@@ -559,6 +559,7 @@ function spawnSideRacs(
   forward: number,
   defaultTargetId: number,
   defaultTargetKind: number,
+  sourceBinId: number,
 ): void {
   const unit = content.units.get(side.unitId);
   if (!unit) throw new Error(`unknown unit "${side.unitId}"`);
@@ -612,7 +613,7 @@ function spawnSideRacs(
         state.rac.id[racRow] = racId;
         state.racRowById.set(racId, racRow);
         state.rac.owner[racRow] = owner;
-        state.rac.sourceBinId[racRow] = -1;
+        state.rac.sourceBinId[racRow] = sourceBinId;
         state.rac.sourceSlotIdx[racRow] = -1;
         state.rac.unitIdIdx[racRow] = internUnitId(state, unit.id);
         state.rac.role[racRow] = ROLE_TO_IDX[unit.role];
@@ -704,38 +705,65 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   const halfW = cfg.bounds.w * 0.5;
   const useTwoArmy = !!cfg.redSide;
 
-  // Punching-bag mode: place a single immortal bin on side 1.
-  // Two-army mode: skip the bin entirely (red side spawns racs).
-  let binTargetId = -1;
-  if (!useTwoArmy) {
-    const enemyUnit = content.units.get(cfg.enemyBinUnitId);
-    if (!enemyUnit) throw new Error(`unknown enemy bin unit "${cfg.enemyBinUnitId}"`);
-    const binSlot = state.bin.count;
-    state.bin.id[binSlot] = state.nextBinId++;
-    state.bin.owner[binSlot] = 1;
-    state.bin.unitIdIdx[binSlot] = internUnitId(state, enemyUnit.id);
-    state.bin.envIdx[binSlot] = ENV_TO_IDX[enemyUnit.environment];
-    state.bin.curIdx[binSlot] = CURIOSITY_TO_IDX[enemyUnit.curiosity];
-    const binHp = cfg.enemyBinHp ?? 1e9;
-    state.bin.hp[binSlot] = binHp;
-    state.bin.hpMax[binSlot] = binHp;
-    state.bin.x[binSlot] = halfW * 0.6;
-    state.bin.y[binSlot] = 0;
-    state.bin.starTier[binSlot] = 1;
-    state.bin.garrisonCap[binSlot] = 0;
+  // Helper: place one bin (side 1 = enemy bag in punching mode, or
+  // both sides in two-army mode for retreat-and-defend behavior).
+  const placeBin = (
+    owner: 0 | 1,
+    binUnitId: string,
+    bx: number,
+    by: number,
+    hp: number,
+  ): number => {
+    const u = content.units.get(binUnitId);
+    if (!u) throw new Error(`unknown bin unit "${binUnitId}"`);
+    const slot = state.bin.count;
+    state.bin.id[slot] = state.nextBinId++;
+    state.bin.owner[slot] = owner;
+    state.bin.unitIdIdx[slot] = internUnitId(state, u.id);
+    state.bin.envIdx[slot] = ENV_TO_IDX[u.environment];
+    state.bin.curIdx[slot] = CURIOSITY_TO_IDX[u.curiosity];
+    state.bin.hp[slot] = hp;
+    state.bin.hpMax[slot] = hp;
+    state.bin.x[slot] = bx;
+    state.bin.y[slot] = by;
+    state.bin.starTier[slot] = 1;
+    state.bin.garrisonCap[slot] = 0;
     for (let s = 0; s < MAX_GARRISON_SLOTS; s++) {
-      state.bin.slotRespawnT[binSlot * MAX_GARRISON_SLOTS + s] = Number.POSITIVE_INFINITY;
-      state.bin.slotOccupant[binSlot * MAX_GARRISON_SLOTS + s] = -1;
+      state.bin.slotRespawnT[slot * MAX_GARRISON_SLOTS + s] = Number.POSITIVE_INFINITY;
+      state.bin.slotOccupant[slot * MAX_GARRISON_SLOTS + s] = -1;
     }
-    state.bin.alive[binSlot] = 1;
-    state.bin.count = binSlot + 1;
-    state.binRowById.set(state.bin.id[binSlot], binSlot);
-    binTargetId = state.bin.id[binSlot];
+    state.bin.alive[slot] = 1;
+    state.bin.count = slot + 1;
+    state.binRowById.set(state.bin.id[slot], slot);
+    return state.bin.id[slot];
+  };
+
+  // Bin placement:
+  //  - Punching-bag mode: one immortal bin on side 1 only. Used for
+  //    "march and observe" testing; HP defaults to 1e9 so the battle
+  //    runs to timeout.
+  //  - Two-army mode: a bin BEHIND each side's spawn so racs have
+  //    something to retreat to (and defend) and the other side has
+  //    something to push toward. Default HP 500 — durable enough that
+  //    the battle is won by killing racs first, but the bin can still
+  //    fall once a side breaks.
+  let blueBinId = -1;
+  let redBinId = -1;
+  if (!useTwoArmy) {
+    redBinId = placeBin(1, cfg.enemyBinUnitId, halfW * 0.6, 0, cfg.enemyBinHp ?? 1e9);
+  } else {
+    // Place a bin behind each side. Use each side's own unit as the
+    // bin unit (so visualization/role makes sense), with default HP
+    // for two-army battles.
+    const TWO_ARMY_BIN_HP = cfg.enemyBinHp ?? 500;
+    blueBinId = placeBin(0, cfg.unitId, -halfW * 0.85, 0, TWO_ARMY_BIN_HP);
+    redBinId = placeBin(1, cfg.redSide!.unitId, halfW * 0.85, 0, TWO_ARMY_BIN_HP);
   }
 
-  // Side 0 (blue): forward=+1 (enemy is at +x). Targets the bin in
-  // punching-bag mode; targetTick picks the nearest red rac in two-
-  // army mode.
+  // Side 0 (blue): forward=+1 (enemy is at +x). In punching-bag mode
+  // racs are pre-targeted on the lone enemy bin. In two-army mode the
+  // initial target is left as -1; targetTick picks nearest enemy
+  // (rac or bin) on its first run.
   spawnSideRacs(
     state,
     content,
@@ -750,12 +778,11 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
     -halfW * 0.6,
     0,
     1,
-    useTwoArmy ? -1 : binTargetId,
+    useTwoArmy ? -1 : redBinId,
     useTwoArmy ? TARGET_KIND_NONE : TARGET_KIND_BIN,
+    blueBinId,
   );
 
-  // Side 1 (red, two-army mode only): forward=-1 (enemy is at -x).
-  // No initial target — targetTick assigns nearest blue.
   if (cfg.redSide) {
     spawnSideRacs(
       state,
@@ -767,6 +794,7 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
       -1,
       -1,
       TARGET_KIND_NONE,
+      redBinId,
     );
   }
 

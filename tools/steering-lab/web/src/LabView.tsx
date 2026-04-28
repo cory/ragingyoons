@@ -552,12 +552,14 @@ function drawFrame(
   // melee/projectile boundary is visible. Drawn before the rac body
   // so the ring sits beneath the squares.
   if (cfg.overlays.attackRange) {
-    ctx.strokeStyle = "#fff2";
     ctx.lineWidth = 1;
     for (const r of frame.racs) {
       if (!r.alive) continue;
-      if (r.effRange <= 0.5) continue; // skip melee-only racs to keep canvas readable
+      if (r.effRange <= 0) continue;
       const [px, py] = worldToPx(r.x, r.y);
+      // Tiny melee circles are barely visible; bump alpha slightly
+      // so they still register at small radii.
+      ctx.strokeStyle = r.effRange >= 3 ? "#fff3" : "#fff5";
       ctx.beginPath();
       ctx.arc(px, py, r.effRange * s, 0, Math.PI * 2);
       ctx.stroke();
