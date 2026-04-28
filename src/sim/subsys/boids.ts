@@ -37,6 +37,9 @@ import {
   TARGET_KIND_BIN,
   TARGET_KIND_RAC,
   type BattleState,
+  type ForceFlag,
+  FORCE_COMPONENT_INDEX,
+  FORCE_FLOATS_PER_RAC,
   findBinRowById,
   findRacRowById,
 } from "../state.js";
@@ -54,6 +57,27 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
   const n = state.rac.count;
   const halfW = state.bounds.w * 0.5;
   const halfH = state.bounds.h * 0.5;
+
+  // Steering-lab: per-force gates. Missing flag = enabled. The lab
+  // sets state.forceFlags to study the isolated effect of each term.
+  const flags = state.forceFlags;
+  const flag = (k: ForceFlag): boolean => flags?.[k] !== false;
+  const f_separation = flag("separation");
+  const f_closeRange = flag("closeRange");
+  const f_cohesion = flag("cohesion");
+  const f_alignment = flag("alignment");
+  const f_seek = flag("seek");
+  const f_hide = flag("hide");
+  const f_avoid = flag("avoid");
+  const f_envelopment = flag("envelopment");
+  const f_doctrineMod = flag("doctrineMod");
+  const f_slotOffset = flag("slotOffset");
+
+  // Steering-lab: optional debug capture of per-rac force components.
+  // Sized state.rac.id.length × FORCE_FLOATS_PER_RAC; reused across
+  // ticks (caller must clear / read between runs as needed). When
+  // undefined, no capture happens — zero overhead in production.
+  const dbg = state._debugForces;
 
   // Lazy alloc: fields persist on state.
   if (!state._boidFields) {
@@ -104,8 +128,8 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const gradX = (densR - densL) / (2 * GRADIENT_STEP);
     const gradY = (densU - densD) / (2 * GRADIENT_STEP);
     const sepK = profile.separationK;
-    let sepX = -gradX * sepK;
-    let sepY = -gradY * sepK;
+    let sepX = f_separation ? -gradX * sepK : 0;
+    let sepY = f_separation ? -gradY * sepK : 0;
 
     // ---- Close-range hard separation (anti-overlap). ----
     // The field-based separation above operates at 4m cell granularity
@@ -125,7 +149,7 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const CLOSE_R2 = CLOSE_R * CLOSE_R;
     const CLOSE_K = 10.0;
     const grid = state._racGrid;
-    if (grid) {
+    if (grid && f_closeRange) {
       forEachNear(grid, myX, myY, CLOSE_R, (j) => {
         if (j === i) return;
         if (!state.rac.alive[j]) return;
@@ -200,8 +224,11 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // Bias is deterministic per rac id, so seeds remain reproducible.
     const idHash = ((state.rac.id[i] * 2654435761) >>> 0) / 4294967296;
     const bold = idHash; // [0,1)
-    const seekKEff = profile.targetSeekK * (1 + bold) * dMod.seekKMul;
-    const cohKEff = profile.cohesionK * (1 - bold * 0.8) * dMod.cohesionKMul;
+    // Doctrine multipliers fold in here unless the lab disables them.
+    const dSeekMul = f_doctrineMod ? dMod.seekKMul : 1;
+    const dCohMul = f_doctrineMod ? dMod.cohesionKMul : 1;
+    const seekKEff = profile.targetSeekK * (1 + bold) * dSeekMul;
+    const cohKEff = profile.cohesionK * (1 - bold * 0.8) * dCohMul;
     const alignKEff = profile.alignmentK * (1 - bold * 0.8);
 
     // ---- Cohesion: toward this rac's slot in the group formation. ----
@@ -236,14 +263,15 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // not lined up beside it).
     const ENVELOP_R = 15;
     const distToTarget = tgtFoundEarly ? Math.hypot(tgtXEarly - myX, tgtYEarly - myY) : Number.POSITIVE_INFINITY;
-    const fEnvelop = tgtFoundEarly ? distToTarget / (distToTarget + ENVELOP_R) : 1;
+    const fEnvelop = (f_envelopment && tgtFoundEarly) ? distToTarget / (distToTarget + ENVELOP_R) : 1;
     const effSlotS = profile.slotScale * fEnvelop;
-    const mySlotDx = state.rac.slotDx[i] * effSlotS;
-    const mySlotDy = state.rac.slotDy[i] * effSlotS;
+    const slotMul = f_slotOffset ? effSlotS : 0;
+    const mySlotDx = state.rac.slotDx[i] * slotMul;
+    const mySlotDy = state.rac.slotDy[i] * slotMul;
 
     let cohX = 0;
     let cohY = 0;
-    if (cohKEff > 0) {
+    if (cohKEff > 0 && f_cohesion) {
       const myGroupId = state.rac.groupId[i];
       const stats = groupStats.get(myGroupId);
       if (stats && stats.count >= 2) {
@@ -264,7 +292,7 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // ---- Alignment: toward local same-side same-role average velocity. ----
     let alignX = 0;
     let alignY = 0;
-    if (alignKEff > 0) {
+    if (alignKEff > 0 && f_alignment) {
       const myDens = sampleField(fields, fields.density[myCh], myX, myY);
       if (myDens > 1e-3) {
         const avgVx = sampleField(fields, fields.velNumX[myCh], myX, myY) / myDens;
@@ -311,7 +339,10 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
 
     // Doctrine seekDirOverride: when set, ignore target seek and use
     // the override direction (retreat to bin, rush to fight, flank).
-    if (dMod.seekDirOverride) {
+    if (!f_seek) {
+      seekX = 0;
+      seekY = 0;
+    } else if (f_doctrineMod && dMod.seekDirOverride) {
       seekX = dMod.seekDirOverride.dx * seekKEff;
       seekY = dMod.seekDirOverride.dy * seekKEff;
     } else if (tgtFound && !inCombat) {
@@ -354,7 +385,7 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // (tanks/cavalry/infantry by default).
     let hideX = 0;
     let hideY = 0;
-    if (profile.hideBehindK > 0 && tgtFound) {
+    if (profile.hideBehindK > 0 && tgtFound && f_hide) {
       const dx0 = tgtX - myX;
       const dy0 = tgtY - myY;
       const len = Math.hypot(dx0, dy0);
@@ -398,7 +429,7 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // dodge it, so this only fires for cavalry.
     let avoidX = 0;
     let avoidY = 0;
-    if (myRole === ROLE_CAVALRY && tgtFound) {
+    if (myRole === ROLE_CAVALRY && tgtFound && f_avoid) {
       const seekDx = tgtX - myX;
       const seekDy = tgtY - myY;
       const seekLen = Math.hypot(seekDx, seekDy);
@@ -431,6 +462,25 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // Cavalry flanks visibly (K=0.4 → ±23°), infantry slightly
     // spreads (0.15), archer/tank mostly straight. Adjacent racs
     // from the same spawn pick different sides of the approach.
+    // Steering-lab debug capture: store the raw per-component forces
+    // before the flank-bias rotation and velocity normalization. The
+    // viz draws these as colored arrows centered on the rac.
+    if (dbg) {
+      const base = i * FORCE_FLOATS_PER_RAC;
+      dbg[base + FORCE_COMPONENT_INDEX.separation * 2 + 0] = sepX;
+      dbg[base + FORCE_COMPONENT_INDEX.separation * 2 + 1] = sepY;
+      dbg[base + FORCE_COMPONENT_INDEX.cohesion * 2 + 0] = cohX;
+      dbg[base + FORCE_COMPONENT_INDEX.cohesion * 2 + 1] = cohY;
+      dbg[base + FORCE_COMPONENT_INDEX.alignment * 2 + 0] = alignX;
+      dbg[base + FORCE_COMPONENT_INDEX.alignment * 2 + 1] = alignY;
+      dbg[base + FORCE_COMPONENT_INDEX.seek * 2 + 0] = seekX;
+      dbg[base + FORCE_COMPONENT_INDEX.seek * 2 + 1] = seekY;
+      dbg[base + FORCE_COMPONENT_INDEX.hide * 2 + 0] = hideX;
+      dbg[base + FORCE_COMPONENT_INDEX.hide * 2 + 1] = hideY;
+      dbg[base + FORCE_COMPONENT_INDEX.avoid * 2 + 0] = avoidX;
+      dbg[base + FORCE_COMPONENT_INDEX.avoid * 2 + 1] = avoidY;
+    }
+
     const jitterAngle = Math.sin(state.rac.id[i] * 0.7) * profile.flankBiasK;
     const ca = Math.cos(jitterAngle);
     const sa = Math.sin(jitterAngle);

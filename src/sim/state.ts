@@ -273,7 +273,49 @@ export interface BattleState {
   /** When true, synergyModsFor / synergyBinMods return identity. Set
    *  from BattleConfig.disableSynergies; read by synergy.ts. */
   disableSynergies?: boolean;
+  /** Steering-lab: when set, boidsTick gates each force term by these
+   *  flags (true = enabled). Missing / undefined = enabled. Lets the
+   *  lab toggle individual forces to study their isolated effects. */
+  forceFlags?: Partial<Record<ForceFlag, boolean>>;
+  /** Steering-lab: when truthy, boidsTick writes per-rac force-component
+   *  vectors here at the END of the tick. Layout: 12 floats per rac
+   *  (6 components × {x,y}) — see ForceComponent for indices. The
+   *  array is sized state.rac.count × 12; subsystems consuming it
+   *  index by `racRow * 12 + (component * 2 + axis)`. Set this to a
+   *  Float32Array of the right size before running ticks; clear the
+   *  field (set undefined) to disable the capture. Captured at end of
+   *  tick so visualizing a single tick frame matches what the rac
+   *  actually used to move. */
+  _debugForces?: Float32Array;
 }
+
+/** Force-flag identifiers — match the boid force-term names. The lab
+ *  uses these as both checkbox labels and field keys in forceFlags. */
+export type ForceFlag =
+  | "separation"
+  | "closeRange"
+  | "cohesion"
+  | "alignment"
+  | "seek"
+  | "hide"
+  | "avoid"
+  | "envelopment"
+  | "doctrineMod"
+  | "slotOffset";
+
+/** Index of each force component in _debugForces. Two floats per
+ *  component (x, y). Multiply by 2 to get the float offset within a
+ *  rac's 12-float slot. */
+export const FORCE_COMPONENT_INDEX = {
+  separation: 0,
+  cohesion: 1,
+  alignment: 2,
+  seek: 3,
+  hide: 4,
+  avoid: 5,
+} as const;
+export const FORCE_COMPONENT_COUNT = 6;
+export const FORCE_FLOATS_PER_RAC = FORCE_COMPONENT_COUNT * 2;
 
 export function emptyBins(): BinTable {
   return {
