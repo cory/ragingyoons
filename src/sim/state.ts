@@ -198,11 +198,21 @@ export interface RacTable {
    *  squadLeaderId gets rewritten to point at the new leader. -1 if
    *  the squad has been wiped. */
   squadLeaderId: Int32Array;
-  /** Set by boidsTick each tick: 1 if this rac is currently in
+  /** Set by motionTick each tick: 1 if this rac is currently in
    *  formation (non-broken follower with a live leader, close enough
    *  to its slot target). Read by combat for the in-formation frontal
    *  bonus and by moraleTick / lab viz. */
   inFormation: Uint8Array;
+  /** Behavior state — what this rac is currently doing. One of
+   *  BEHAVIOR_MARCH / BEHAVIOR_ENGAGE / BEHAVIOR_ROUT (slice 1).
+   *  Re-evaluated only at `nextDecisionTick`; between decisions the
+   *  rac executes the same intent (no per-tick force-shifting). */
+  behavior: Uint8Array;
+  /** Tick at which this rac will next re-evaluate its behavior. Set
+   *  to state.tick + BEHAVIOR_CADENCE_BY_ROLE[role] each time the
+   *  rac decides. Lets cavalry react every tick while tanks commit
+   *  for ~1 second between decisions. */
+  nextDecisionTick: Int32Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -408,6 +418,8 @@ export function emptyRacs(): RacTable {
     squadId: new Uint16Array(MAX_RACS),
     squadLeaderId: new Int32Array(MAX_RACS),
     inFormation: new Uint8Array(MAX_RACS),
+    behavior: new Uint8Array(MAX_RACS),
+    nextDecisionTick: new Int32Array(MAX_RACS),
   };
 }
 
@@ -990,3 +1002,29 @@ export const MORALE_ROUTING_RADIUS = 10;
 export const FORMATION_FRONTAL_DAMAGE_MUL = 1.5;
 export const FORMATION_FRONTAL_DEFENSE_MUL = 0.6;
 export const FORMATION_FRONTAL_HALF_CONE = Math.PI / 3;
+
+/** Behavior states for the motion state machine. Slice 1: march,
+ *  engage, rout. Future slices add kite (archer back-pedal), flank
+ *  (cavalry tangent path), rally (broken-recovering rejoin squad).
+ *  Stored as Uint8 in state.rac.behavior. */
+export const BEHAVIOR_MARCH = 0;
+export const BEHAVIOR_ENGAGE = 1;
+export const BEHAVIOR_ROUT = 2;
+
+/** How often each role re-evaluates its behavior, in ticks (15 Hz).
+ *  Cavalry reacts every frame — they're scout-fast and reroute on
+ *  sight. Tanks commit for ~1 s — heavy units don't change their
+ *  minds mid-charge. Archers think slowly (~2 s) so they don't
+ *  oscillate kite/engage every time the geometry wobbles. Indexed
+ *  by ROLE_TO_IDX (tank=0, archer=1, cavalry=2, infantry=3). */
+export const BEHAVIOR_CADENCE_BY_ROLE: readonly number[] = [
+  15, // tank: ~1.0 s
+  30, // archer: ~2.0 s
+  1, // cavalry: every tick
+  8, // infantry: ~0.5 s
+];
+
+/** Multiplier on effSpeed when in BEHAVIOR_ROUT — broken racs flee
+ *  faster than their normal march. Tuned so they actually escape
+ *  pursuers that share their base speed. */
+export const ROUT_SPEED_MUL = 1.5;

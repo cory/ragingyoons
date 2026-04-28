@@ -23,7 +23,7 @@ import type { BattleState } from "./state.js";
 import { TICK_RATE_HZ, summarize } from "./state.js";
 import { buildRacGrid, DEFAULT_CELL_SIZE } from "./grid.js";
 import { makeRng, rngInt } from "./rng.js";
-import { boidsTick } from "./subsys/boids.js";
+import { motionTick } from "./subsys/motion.js";
 import { moraleTick } from "./subsys/morale.js";
 import { squadTick } from "./subsys/squad.js";
 import { combatTick } from "./subsys/combat.js";
@@ -80,7 +80,7 @@ export function tick(state: BattleState, content: ContentBundle, log: Logger): v
   buildTickIterOrder(state);
   targetTick(state, content, log);
   squadTick(state);
-  boidsTick(state, content, log);
+  motionTick(state, content, log);
   combatTick(state, content, log);
   // Projectiles tick AFTER combat so freshly-fired arrows get one tick
   // of flight before resolution. Fired-this-tick arrows still try to
