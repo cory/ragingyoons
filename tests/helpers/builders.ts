@@ -221,6 +221,9 @@ export function addRac(
   state.rac.morale[slot] = 1.0;
   state.rac.squadId[slot] = opts.squadId ?? (state.nextSquadId++);
   state.rac.squadLeaderId[slot] = opts.squadLeaderId ?? state.rac.id[slot];
+  // Default standing order = ADVANCE (the index 0 default is HOLD,
+  // which would freeze tests that don't explicitly set it).
+  state.rac.standingOrder[slot] = 2; // STANDING_ORDER_IDX_ADVANCE
   state.rac.count = slot + 1;
   state.racRowById.set(state.rac.id[slot], slot);
   return slot;

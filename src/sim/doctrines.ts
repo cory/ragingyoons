@@ -484,7 +484,36 @@ export interface DoctrineDef {
    *  squad, not as 4 squads of 12. When undefined, fall back to
    *  ROLE_TIER_SIZES[role]. */
   tierSizes?: readonly [number, number, number, number];
+  /** Standing order — what this raccoon DOES by default. Not a
+   *  player input; it's a property of the unit's temperament.
+   *
+   *  - "hold":     stay put until an enemy is in attack range,
+   *                then engage. Garrison, anchor.
+   *  - "slow":     march at 50% speed. Maintains formation under
+   *                pressure (phalanx shield wall behavior).
+   *  - "advance":  default — march toward target at full speed.
+   *  - "charge":   eager engage at 1.5× attack range; skips FLANK
+   *                detour and plows in. Fanatics, berserkers.
+   *  - "skirmish": prefer KITE when in kite range; back-pedal at
+   *                contact instead of engaging. */
+  standingOrder: StandingOrderId;
 }
+
+export type StandingOrderId = "hold" | "slow" | "advance" | "charge" | "skirmish";
+
+/** Map StandingOrderId → small int for per-rac Uint8 storage. */
+export const STANDING_ORDER_TO_IDX: Record<StandingOrderId, number> = {
+  hold: 0,
+  slow: 1,
+  advance: 2,
+  charge: 3,
+  skirmish: 4,
+};
+export const STANDING_ORDER_IDX_HOLD = 0;
+export const STANDING_ORDER_IDX_SLOW = 1;
+export const STANDING_ORDER_IDX_ADVANCE = 2;
+export const STANDING_ORDER_IDX_CHARGE = 3;
+export const STANDING_ORDER_IDX_SKIRMISH = 4;
 
 /** Role-tier sizes — how many racs make up each level of the unit
  *  hierarchy: [squad, platoon, company, battalion]. The leader of each
@@ -523,6 +552,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     maxFormationSize: 32,
     splitAxis: "lateral",
     independentInContact: false,
+    standingOrder: "advance",
   },
   // 1 — Suburban+Barbarians: tight wall, hold ground, fight to death.
   // Big block formation; splits along depth (front/back ranks).
@@ -542,6 +572,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     splitAxis: "front-rear",
     independentInContact: false, // shield wall holds at all costs
     tierSizes: [48, 144, 432, 1296],
+    standingOrder: "slow", // shield wall maintains formation under pressure
   },
   // 2 — City+Lockpickers / Coastal+Lockpickers: bounding overwatch.
   // Real fire teams are 4-12 strong; we cap at 12.
@@ -555,6 +586,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     maxFormationSize: 12,
     splitAxis: "lateral",
     independentInContact: true, // fight in pairs, individual decisions
+    standingOrder: "advance",
   },
   // 3 — Park+Tinkerers: sprint-halt, harass. Tiny groups by design.
   {
@@ -567,6 +599,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     maxFormationSize: 6,
     splitAxis: "random",
     independentInContact: true, // skirmishers ALWAYS act on their own once shooting starts
+    standingOrder: "skirmish", // kite eagerly, back-pedal at contact
   },
   // 4 — City+Farmers / Coastal+Farmers: wide line.
   {
@@ -579,6 +612,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     maxFormationSize: 40,
     splitAxis: "lateral",
     independentInContact: false,
+    standingOrder: "advance",
   },
   // 5 — Roaming patrol that swarms first contact.
   {
@@ -591,6 +625,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     maxFormationSize: 16,
     splitAxis: "front-rear",
     independentInContact: true,
+    standingOrder: "advance",
   },
   // 6 — Fanatic: never breaks, dies advancing. No formation discipline.
   {
@@ -603,6 +638,7 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     maxFormationSize: 30,
     splitAxis: "none",
     independentInContact: true, // dies advancing as a wave of individuals
+    standingOrder: "charge", // berserker — engage hard, never retreat
   },
 ];
 

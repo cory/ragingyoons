@@ -30,6 +30,12 @@
 
 import type { ContentBundle } from "../content.js";
 import { ROLE_ARCHER, ROLE_CAVALRY, ROLE_INFANTRY } from "../content.js";
+import {
+  STANDING_ORDER_IDX_CHARGE,
+  STANDING_ORDER_IDX_HOLD,
+  STANDING_ORDER_IDX_SKIRMISH,
+  STANDING_ORDER_IDX_SLOW,
+} from "../doctrines.js";
 import { allocBoidFields, buildBoidFields, sampleField } from "../fields.js";
 import { forEachNear } from "../grid.js";
 import type { Logger } from "../log.js";
@@ -257,32 +263,47 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     }
     const distToTarget = tgtFound ? Math.hypot(tgtX - myX, tgtY - myY) : Number.POSITIVE_INFINITY;
 
+    // Standing order — modulates the decision below. Stamped at
+    // spawn from the rac's doctrine; doesn't change tick-to-tick.
+    const order = state.rac.standingOrder[i];
+
     // ----- Behavior decision (cadence-gated) -----
     if (tickNow >= state.rac.nextDecisionTick[i]) {
       let next = state.rac.behavior[i];
       if (broken) {
-        // Look for a friendly leader within RALLY_RADIUS — if one
-        // exists, rally toward them and recover morale. Else rout.
         const rallyLeader = findRallyLeader(state, i);
         next = rallyLeader >= 0 ? BEHAVIOR_RALLY : BEHAVIOR_ROUT;
       } else if (
+        // CHARGE order skips FLANK detour — fanatics plow in.
+        order !== STANDING_ORDER_IDX_CHARGE &&
         role === ROLE_CAVALRY &&
         tgtFound &&
         cavalryShouldFlank(state, i, tgtX, tgtY, distToTarget)
       ) {
-        // Cavalry FLANK takes priority over engage — if we're pinned
-        // or our path is blocked, sweep out laterally first. Otherwise
-        // cavalry that walks into the brawl flips to ENGAGE-overrun
-        // and just plows further in.
         next = BEHAVIOR_FLANK;
       } else if (
-        role === ROLE_ARCHER &&
+        // SKIRMISH order makes ANY rac with a kite range prefer KITE.
+        // Default: only archers kite. Skirmishers (incl non-archer
+        // skirmisher-doctrine racs) back-pedal at engage range.
+        (role === ROLE_ARCHER || order === STANDING_ORDER_IDX_SKIRMISH) &&
         tgtFound &&
         distToTarget <= state.rac.effRange[i] * ARCHER_KITE_TRIGGER_MUL
       ) {
         next = BEHAVIOR_KITE;
-      } else if (tgtFound && distToTarget <= state.rac.effRange[i] * ENGAGE_BAND_MUL) {
+      } else if (
+        tgtFound &&
+        // CHARGE engages at 1.5× attack range — eager. Other orders
+        // engage at the standard ENGAGE_BAND_MUL.
+        distToTarget <=
+          state.rac.effRange[i] *
+            (order === STANDING_ORDER_IDX_CHARGE ? 1.5 : ENGAGE_BAND_MUL)
+      ) {
         next = BEHAVIOR_ENGAGE;
+      } else if (order === STANDING_ORDER_IDX_HOLD) {
+        // HOLD: never march toward a distant target. Stay in MARCH
+        // state but the intent below produces zero velocity since
+        // we're outside engage range.
+        next = BEHAVIOR_MARCH;
       } else {
         next = BEHAVIOR_MARCH;
       }
@@ -543,6 +564,13 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       }
     } else {
       // BEHAVIOR_MARCH
+      // HOLD order: don't march toward a distant target. Followers
+      // still slot-correct (leader-pull) so the squad doesn't drift
+      // apart, but leaders / lone units stay put.
+      // SLOW order: half march speed (phalanx shield wall pace).
+      const marchSpeedMul =
+        order === STANDING_ORDER_IDX_SLOW ? 0.5 : 1;
+      const marchMaxV = maxV * marchSpeedMul;
       // Infantry follower with a live leader: slot-direct steering.
       // Aim at the predicted (leader.pos + leader.vel × dt + slot) so
       // a moving leader doesn't leave the squad behind.
@@ -557,22 +585,23 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         const dx = sX - myX;
         const dy = sY - myY;
         const reqSpeed = Math.hypot(dx, dy) / dt;
-        if (reqSpeed > maxV) {
+        if (reqSpeed > marchMaxV) {
           const inv = 1 / Math.hypot(dx, dy);
-          desiredVx = dx * inv * maxV;
-          desiredVy = dy * inv * maxV;
+          desiredVx = dx * inv * marchMaxV;
+          desiredVy = dy * inv * marchMaxV;
         } else {
           desiredVx = dx / dt;
           desiredVy = dy / dt;
         }
-      } else if (tgtFound) {
-        // Leader / non-formation roles: aim at world target.
+      } else if (tgtFound && order !== STANDING_ORDER_IDX_HOLD) {
+        // Leader / non-formation roles: aim at world target unless
+        // standing order is HOLD (then sit until enemy comes to us).
         const dx = tgtX - myX;
         const dy = tgtY - myY;
         const d = distToTarget;
         if (d > 1e-3) {
-          desiredVx = (dx / d) * maxV;
-          desiredVy = (dy / d) * maxV;
+          desiredVx = (dx / d) * marchMaxV;
+          desiredVy = (dy / d) * marchMaxV;
         }
       }
     }

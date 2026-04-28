@@ -103,7 +103,8 @@ export function LabView() {
       const docId = doctrineFor(u.environment, u.curiosity);
       const docDef = DOCTRINES.find((d) => d.id === docId);
       const sSize = docDef ? squadSizeFor(u.role, docDef) : 0;
-      return { docId, sSize, role: u.role };
+      const stdOrder = docDef?.standingOrder ?? "advance";
+      return { docId, sSize, role: u.role, stdOrder };
     },
     [content],
   );
@@ -309,7 +310,7 @@ function SidePanel(props: {
   side: SideConfig;
   unitIds: string[];
   formationOptions: (FormationId | "default")[];
-  doctrine: { docId: string; sSize: number; role: string } | null;
+  doctrine: { docId: string; sSize: number; role: string; stdOrder: string } | null;
   onChange: (s: SideConfig) => void;
 }) {
   const { title, accent, side, unitIds, formationOptions, doctrine, onChange } = props;
@@ -324,7 +325,7 @@ function SidePanel(props: {
         <Field label="stride"><Num value={side.platoonStride} min={1} max={50} step={0.5} onChange={(n) => onChange({ ...side, platoonStride: n })} /></Field>
         {doctrine && (
           <div style={{ fontSize: 11, color: accent, paddingLeft: 76 }}>
-            doctrine <span style={{ color: "#fc6" }}>{doctrine.docId}</span> · squad <span style={{ color: "#fc6" }}>{doctrine.sSize}</span> ({doctrine.role})
+            doctrine <span style={{ color: "#fc6" }}>{doctrine.docId}</span> · squad <span style={{ color: "#fc6" }}>{doctrine.sSize}</span> · order <span style={{ color: "#fc6" }}>{doctrine.stdOrder}</span> ({doctrine.role})
           </div>
         )}
       </div>
@@ -388,8 +389,9 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 }
 const BEHAVIOR_LABEL = ["march", "engage", "rout", "kite", "flank", "rally"];
 const BEHAVIOR_COLOR = ["#9cf", "#fc6", "#f88", "#bef", "#fbd", "#cf8"];
+const STANDING_ORDER_LABEL = ["hold", "slow", "advance", "charge", "skirmish"];
 
-function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number; pinned: boolean; squadThreat: number } }) {
+function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number; pinned: boolean; squadThreat: number; standingOrder: number } }) {
   const speed = Math.hypot(rac.vx, rac.vy);
   return (
     <div style={{ position: "absolute", right: 8, top: 8, background: "#000c", padding: 8, borderRadius: 3, fontSize: 11, color: "#ddd", minWidth: 200 }}>
@@ -400,6 +402,8 @@ function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: numb
         state <span style={{ color: BEHAVIOR_COLOR[rac.behavior] ?? "#ddd" }}>
           {BEHAVIOR_LABEL[rac.behavior] ?? "?"}
         </span>
+        <span style={{ color: "#888" }}> · order </span>
+        <span style={{ color: "#cc8" }}>{STANDING_ORDER_LABEL[rac.standingOrder] ?? "?"}</span>
       </div>
       <div style={{ color: "#888" }}>squad {rac.squadId} → leader #{rac.squadLeaderId}</div>
       <div style={{ color: "#888" }}>

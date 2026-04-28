@@ -36,6 +36,8 @@ import {
 import {
   DOCTRINE_KNOBS,
   DOCTRINE_TO_IDX,
+  DOCTRINES,
+  STANDING_ORDER_TO_IDX,
   doctrineFor,
   teamSizeFor,
 } from "../doctrines.js";
@@ -239,6 +241,8 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         state.rac.slotDx[racRow] = off.dx - leaderOff.dx;
         state.rac.slotDy[racRow] = off.dy - leaderOff.dy;
         state.rac.morale[racRow] = 1.0;
+        state.rac.standingOrder[racRow] =
+          STANDING_ORDER_TO_IDX[DOCTRINES[doctrineIdx].standingOrder];
         alive += 1;
 
         log.emit("rac_spawn", {

@@ -22,7 +22,7 @@ import {
   FORMATION_TO_IDX,
   type FormationId,
 } from "./formations.js";
-import { DOCTRINE_TO_IDX, DOCTRINES, doctrineFor, squadSizeFor, teamSizeFor } from "./doctrines.js";
+import { DOCTRINE_TO_IDX, DOCTRINES, STANDING_ORDER_TO_IDX, doctrineFor, squadSizeFor, teamSizeFor } from "./doctrines.js";
 
 /** Cap on simultaneously-tracked entities. Generous for v0; tighten later. */
 export const MAX_BINS = 32;
@@ -220,6 +220,11 @@ export interface RacTable {
    *  cavalry overrun still moves but slowed, infantry can't easily
    *  disengage. 0 = not pinned. */
   pinnedUntilTick: Int32Array;
+  /** Standing order — what this rac DOES by default. Stamped at
+   *  spawn from the doctrine's standingOrder. Read by motionTick to
+   *  modulate behavior decisions (hold doesn't march, charge engages
+   *  early, etc.). One of STANDING_ORDER_IDX_*. */
+  standingOrder: Uint8Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -468,6 +473,7 @@ export function emptyRacs(): RacTable {
     behavior: new Uint8Array(MAX_RACS),
     nextDecisionTick: new Int32Array(MAX_RACS),
     pinnedUntilTick: new Int32Array(MAX_RACS),
+    standingOrder: new Uint8Array(MAX_RACS),
   };
 }
 
@@ -643,6 +649,8 @@ function spawnSideRacs(
         state.rac.morale[racRow] = 1.0;
         state.rac.squadId[racRow] = squadId;
         state.rac.squadLeaderId[racRow] = -1;
+        state.rac.standingOrder[racRow] =
+          STANDING_ORDER_TO_IDX[DOCTRINES[doctrineIdx].standingOrder];
         state.rac.count = racRow + 1;
       }
       const leaderRow = squadStartRow + leaderBurstIdx;
