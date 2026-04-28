@@ -141,14 +141,14 @@ function cavalryShouldFlank(
   const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
   const myX = state.rac.x[i];
   const myY = state.rac.y[i];
-  const localDens = sampleField(fields, fields.density[enemyCh], myX, myY);
+  const localDens = sampleField(fields, fields.sideDensity[enemyCh], myX, myY);
   if (localDens > FLANK_PINNED_DENSITY) return true;
   if (distToTarget < 1e-3) return false;
   const sx = (tgtX - myX) / distToTarget;
   const sy = (tgtY - myY) / distToTarget;
   const probeX = myX + sx * FLANK_LOOKAHEAD;
   const probeY = myY + sy * FLANK_LOOKAHEAD;
-  const aheadDens = sampleField(fields, fields.density[enemyCh], probeX, probeY);
+  const aheadDens = sampleField(fields, fields.sideDensity[enemyCh], probeX, probeY);
   return aheadDens > FLANK_BLOCKED_DENSITY;
 }
 
@@ -262,11 +262,11 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
       const h = FLANK_GRAD_H;
       const dxDens =
-        sampleField(fields, fields.density[enemyCh], myX + h, myY) -
-        sampleField(fields, fields.density[enemyCh], myX - h, myY);
+        sampleField(fields, fields.sideDensity[enemyCh], myX + h, myY) -
+        sampleField(fields, fields.sideDensity[enemyCh], myX - h, myY);
       const dyDens =
-        sampleField(fields, fields.density[enemyCh], myX, myY + h) -
-        sampleField(fields, fields.density[enemyCh], myX, myY - h);
+        sampleField(fields, fields.sideDensity[enemyCh], myX, myY + h) -
+        sampleField(fields, fields.sideDensity[enemyCh], myX, myY - h);
       const gMag = Math.hypot(dxDens, dyDens);
       // Debug record (lab): only written when state._debugFlank is set.
       const dbg = state._debugFlank;
@@ -290,7 +290,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         for (let k = 1; k <= FLANK_MAX_STEPS; k++) {
           const probeX = myX + perpX * sign * k * FLANK_PROBE_STEP;
           const probeY = myY + perpY * sign * k * FLANK_PROBE_STEP;
-          const d = sampleField(fields, fields.density[enemyCh], probeX, probeY);
+          const d = sampleField(fields, fields.sideDensity[enemyCh], probeX, probeY);
           if (dbg && dbgBase >= 0 && k <= 8) {
             dbg[dbgBase + FLANK_DEBUG_OFFSET.probesXY + (k - 1) * 2 + 0] = probeX;
             dbg[dbgBase + FLANK_DEBUG_OFFSET.probesXY + (k - 1) * 2 + 1] = probeY;
@@ -522,7 +522,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     let dmgMul = 1;
     if (supportMax > 0 && supportFullAt > 0) {
       const myCh = state.rac.owner[i] === 0 ? 0 : 1;
-      const friendlyDens = sampleField(fields, fields.density[myCh], myX, myY);
+      const friendlyDens = sampleField(fields, fields.sideDensity[myCh], myX, myY);
       const supportFrac = Math.min(1, friendlyDens / supportFullAt);
       dmgMul *= 1 - supportMax * supportFrac;
     }
