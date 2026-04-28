@@ -91,19 +91,21 @@ const ARCHER_KITE_TRIGGER_MUL = 1.5;
 /** Kite deadband — within ±10% of preferred kite distance, the archer
  *  settles instead of jittering across the boundary every tick. */
 const KITE_DEADBAND = 0.1;
-/** Cavalry flank lookahead — how far ahead along the seek direction
- *  we sample enemy density to decide whether the path is blocked. */
-const FLANK_LOOKAHEAD = 14;
-/** Enemy density threshold (per-side density field) above which the
- *  path is considered blocked. The field cell is 4 m and bilinear
- *  splat means a single rac contributes ≤ 0.25 to one cell, so 0.4
- *  triggers on ~2 stacked enemies — the front rank of a phalanx. */
-const FLANK_BLOCKED_DENSITY = 0.4;
+/** Cavalry flank lookaheads (meters). Multiple distances so a long
+ *  approach detects the wall while cavalry still has time to redirect.
+ *  Cavalry inertia (blend 0.5) + 4.5 m/s² accel cap means a full-
+ *  speed charge needs ~10 m to swap heading; sampling out to 32 m
+ *  gives ~3× that headroom. We trigger if ANY probe exceeds the
+ *  threshold, which means a thin line shows up at the far probe and
+ *  a thick block trips the near probe. */
+const FLANK_LOOKAHEADS: readonly number[] = [10, 20, 32];
+/** Enemy density threshold (per-side density field) above which any
+ *  lookahead probe triggers FLANK. Lower than before so a single
+ *  rank of infantry counts as a wall. */
+const FLANK_BLOCKED_DENSITY = 0.2;
 /** Local-pin threshold: enemy density AT THE CAVALRY POSITION above
- *  which we're already in the brawl and need to flank our way out
- *  rather than charge further in. Lower than the lookahead threshold
- *  because being inside one cell of the line is enough. */
-const FLANK_PINNED_DENSITY = 0.3;
+ *  which we're already in the brawl. */
+const FLANK_PINNED_DENSITY = 0.2;
 /** Step size for the density-gradient finite difference (meters).
  *  One cell = 4 m, so half a cell is enough resolution. */
 const FLANK_GRAD_H = 2;
@@ -146,10 +148,17 @@ function cavalryShouldFlank(
   if (distToTarget < 1e-3) return false;
   const sx = (tgtX - myX) / distToTarget;
   const sy = (tgtY - myY) / distToTarget;
-  const probeX = myX + sx * FLANK_LOOKAHEAD;
-  const probeY = myY + sy * FLANK_LOOKAHEAD;
-  const aheadDens = sampleField(fields, fields.sideDensity[enemyCh], probeX, probeY);
-  return aheadDens > FLANK_BLOCKED_DENSITY;
+  // Probe density at multiple distances so a far approach detects the
+  // line early enough to redirect against cavalry inertia. Trip on
+  // any probe exceeding threshold — first match wins.
+  for (const la of FLANK_LOOKAHEADS) {
+    if (la > distToTarget + 4) break; // don't probe past the target
+    const probeX = myX + sx * la;
+    const probeY = myY + sy * la;
+    const dens = sampleField(fields, fields.sideDensity[enemyCh], probeX, probeY);
+    if (dens > FLANK_BLOCKED_DENSITY) return true;
+  }
+  return false;
 }
 
 export function motionTick(state: BattleState, content: ContentBundle, log: Logger): void {
@@ -257,39 +266,77 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const maxV = state.rac.effSpeed[i];
 
     if (behavior === BEHAVIOR_FLANK) {
-      // Cavalry flank: find the EDGE of the enemy formation by
-      // probing density laterally, then aim PAST it.
+      // Cavalry flank: locate the LINE (highest-density spot along
+      // the seek path), measure the gradient AT the line (perpendicular
+      // to the line direction), probe laterally from the line position
+      // until density drops below the edge threshold, then aim cavalry
+      // at the edge. Probing from the line — not from cavalry — means
+      // the search returns the same answer whether cavalry is 30m
+      // away or 1m away, which is the right invariant.
       const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
-      const h = FLANK_GRAD_H;
-      const dxDens =
-        sampleField(fields, fields.sideDensity[enemyCh], myX + h, myY) -
-        sampleField(fields, fields.sideDensity[enemyCh], myX - h, myY);
-      const dyDens =
-        sampleField(fields, fields.sideDensity[enemyCh], myX, myY + h) -
-        sampleField(fields, fields.sideDensity[enemyCh], myX, myY - h);
-      const gMag = Math.hypot(dxDens, dyDens);
-      // Debug record (lab): only written when state._debugFlank is set.
       const dbg = state._debugFlank;
       const dbgBase = dbg ? i * FLANK_DEBUG_FLOATS_PER_RAC : -1;
       if (dbg && dbgBase >= 0) {
         dbg[dbgBase + FLANK_DEBUG_OFFSET.inFlank] = 1;
+      }
+      // Step 1: find peak density along seek direction.
+      let lineX = myX;
+      let lineY = myY;
+      let peakDens = 0;
+      if (tgtFound && distToTarget > 1e-3) {
+        const sx = (tgtX - myX) / distToTarget;
+        const sy = (tgtY - myY) / distToTarget;
+        for (const la of FLANK_LOOKAHEADS) {
+          if (la > distToTarget + 4) break;
+          const px = myX + sx * la;
+          const py = myY + sy * la;
+          const d = sampleField(fields, fields.sideDensity[enemyCh], px, py);
+          if (d > peakDens) {
+            peakDens = d;
+            lineX = px;
+            lineY = py;
+          }
+        }
+        // Also check our own position — if pinned, the line is here.
+        const localDens = sampleField(fields, fields.sideDensity[enemyCh], myX, myY);
+        if (localDens > peakDens) {
+          peakDens = localDens;
+          lineX = myX;
+          lineY = myY;
+        }
+      }
+      // Step 2: gradient at the line position.
+      const h = FLANK_GRAD_H;
+      const dxDens =
+        sampleField(fields, fields.sideDensity[enemyCh], lineX + h, lineY) -
+        sampleField(fields, fields.sideDensity[enemyCh], lineX - h, lineY);
+      const dyDens =
+        sampleField(fields, fields.sideDensity[enemyCh], lineX, lineY + h) -
+        sampleField(fields, fields.sideDensity[enemyCh], lineX, lineY - h);
+      const gMag = Math.hypot(dxDens, dyDens);
+      if (dbg && dbgBase >= 0) {
         dbg[dbgBase + FLANK_DEBUG_OFFSET.gradX] = gMag > 0 ? dxDens / gMag : 0;
         dbg[dbgBase + FLANK_DEBUG_OFFSET.gradY] = gMag > 0 ? dyDens / gMag : 0;
       }
       if (gMag > 1e-3) {
         const perpX = -dyDens / gMag;
         const perpY = dxDens / gMag;
+        // Forward bias toward target so we sweep to the side closer
+        // to the actual flank, not away from the fight.
         let fwdBias = 0;
         if (tgtFound && distToTarget > 1e-3) {
           fwdBias =
             (perpX * (tgtX - myX) + perpY * (tgtY - myY)) / distToTarget;
         }
         const sign = fwdBias >= 0 ? 1 : -1;
+        // Step 3: edge-probe FROM THE LINE (not from cavalry).
         let edgeAt = FLANK_PROBE_STEP * FLANK_MAX_STEPS;
         let edgeStep = -1;
+        let edgeProbeX = lineX;
+        let edgeProbeY = lineY;
         for (let k = 1; k <= FLANK_MAX_STEPS; k++) {
-          const probeX = myX + perpX * sign * k * FLANK_PROBE_STEP;
-          const probeY = myY + perpY * sign * k * FLANK_PROBE_STEP;
+          const probeX = lineX + perpX * sign * k * FLANK_PROBE_STEP;
+          const probeY = lineY + perpY * sign * k * FLANK_PROBE_STEP;
           const d = sampleField(fields, fields.sideDensity[enemyCh], probeX, probeY);
           if (dbg && dbgBase >= 0 && k <= 8) {
             dbg[dbgBase + FLANK_DEBUG_OFFSET.probesXY + (k - 1) * 2 + 0] = probeX;
@@ -298,11 +345,17 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
           if (d < FLANK_EDGE_DENSITY) {
             edgeAt = (k + 1) * FLANK_PROBE_STEP;
             edgeStep = k;
+            edgeProbeX = probeX;
+            edgeProbeY = probeY;
             break;
           }
         }
-        const aimX = myX + perpX * sign * edgeAt;
-        const aimY = myY + perpY * sign * edgeAt;
+        // Aim cavalry at a point one step past the edge — so they
+        // commit to clearing the formation, not just touching its edge.
+        const aimX = lineX + perpX * sign * edgeAt;
+        const aimY = lineY + perpY * sign * edgeAt;
+        void edgeProbeX;
+        void edgeProbeY;
         if (dbg && dbgBase >= 0) {
           dbg[dbgBase + FLANK_DEBUG_OFFSET.perpX] = perpX * sign;
           dbg[dbgBase + FLANK_DEBUG_OFFSET.perpY] = perpY * sign;
