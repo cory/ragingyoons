@@ -128,8 +128,17 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const gradX = (densR - densL) / (2 * GRADIENT_STEP);
     const gradY = (densU - densD) / (2 * GRADIENT_STEP);
     const sepK = profile.separationK;
-    let sepX = f_separation ? -gradX * sepK : 0;
-    let sepY = f_separation ? -gradY * sepK : 0;
+    // Split field-based separation from close-range pairwise. Field
+    // separation pushes a rac DOWN the local density gradient — fine
+    // for steering crowds, but it fights the slot-pull on edge racs in
+    // a tight formation (the edge always sees a "go outward" gradient,
+    // and that drag stops them keeping up with the leader). So field-
+    // sep gets gated by inSlot below; close-range stays always-on so
+    // physical overlap (two racs at the same point) is still resolved.
+    let fieldSepX = f_separation ? -gradX * sepK : 0;
+    let fieldSepY = f_separation ? -gradY * sepK : 0;
+    let closeSepX = 0;
+    let closeSepY = 0;
 
     // ---- Close-range hard separation (anti-overlap). ----
     // The field-based separation above operates at 4m cell granularity
@@ -164,14 +173,14 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
           // and doesn't lock both at (0,0) forever.
           const h = ((state.rac.id[i] * 31 + state.rac.id[j]) >>> 0) / 4294967296;
           const ang = h * Math.PI * 2;
-          sepX += Math.cos(ang) * CLOSE_K;
-          sepY += Math.sin(ang) * CLOSE_K;
+          closeSepX += Math.cos(ang) * CLOSE_K;
+          closeSepY += Math.sin(ang) * CLOSE_K;
           return;
         }
         const d = Math.sqrt(d2);
         const w = ((CLOSE_R - d) / CLOSE_R) * CLOSE_K;
-        sepX += (dx / d) * w;
-        sepY += (dy / d) * w;
+        closeSepX += (dx / d) * w;
+        closeSepY += (dy / d) * w;
       });
     }
 
@@ -505,15 +514,20 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     // from the same spawn pick different sides of the approach.
     // In-slot gate: when a follower is at its leader-relative slot,
     // the squad-leader is driving — this rac just holds. Zero out
-    // alignment / seek / hide / avoid; keep separation (so the rac
-    // doesn't overlap a neighbor under any micro-jitter) and keep
-    // cohesion (the leader-pull that reels the rac in if it drifts).
+    // field separation / alignment / seek / hide / avoid. Cohesion
+    // (leader-pull) and close-range (anti-overlap) stay on. Field
+    // separation gates because it pushes edge racs OUT of the
+    // formation under a density gradient; that drag stops edge racs
+    // from keeping pace with the leader, and they fall out of slot.
     if (inSlot) {
+      fieldSepX = 0; fieldSepY = 0;
       alignX = 0; alignY = 0;
       seekX = 0; seekY = 0;
       hideX = 0; hideY = 0;
       avoidX = 0; avoidY = 0;
     }
+    const sepX = fieldSepX + closeSepX;
+    const sepY = fieldSepY + closeSepY;
 
     // Steering-lab debug capture: store the raw per-component forces
     // before the flank-bias rotation and velocity normalization. The
@@ -616,11 +630,20 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
       state.rac.doctrineIdx[i] === 1 /* phalanx */ && state.rac.contact[i]
         ? DOCTRINE_KNOBS.phalanxContactSpeed / 0.2 // ratio vs the formation's hardcoded 0.2
         : 1;
+    // Follower catch-up: a follower out of its slot needs to travel
+    // FASTER than the leader to actually close the gap. Same speed
+    // means a chase at constant distance — the follower asymptotes to
+    // a fixed lag behind the moving slot. Scale linearly with shape
+    // error up to a 1.6× cap; clears once back in slot.
+    const catchupMul = followsLeader && !inSlot && shapeError > IN_SLOT_R
+      ? Math.min(1.6, 1 + (shapeError - IN_SLOT_R) * 0.15)
+      : 1;
     const maxV =
       state.rac.effSpeed[i] *
       (surrounded ? SURROUND_SPEED_MUL : 1) *
       dMod.speedMul *
-      phalanxContactSlow;
+      phalanxContactSlow *
+      catchupMul;
     const desiredLen = Math.hypot(dvx, dvy);
     const COMMIT_THRESHOLD = 0.5; // intent must exceed this to maxV-go
     let newVx: number;
