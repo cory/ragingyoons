@@ -15,6 +15,7 @@ import { CUR_LOCKPICKERS, type ContentBundle } from "../content.js";
 import { forEachNear } from "../grid.js";
 import type { Logger } from "../log.js";
 import {
+  MAX_RACS,
   TARGET_KIND_BIN,
   TARGET_KIND_NONE,
   TARGET_KIND_RAC,
@@ -95,23 +96,33 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
   const m = state.bin.count;
 
   // Pre-compute attacker counts so the inner scoring loop can apply
-  // a saturation penalty (TARGET_SATURATION_K). One pass; reused for
-  // every retargeting rac in this tick.
-  const attackerCount = new Map<number, number>();
+  // a saturation penalty (TARGET_SATURATION_K). Indexed by ROW (not
+  // id) so the inner scoring loop reads with `arr[j]` instead of a
+  // Map.get hash. One pass; reused for every retargeting rac in
+  // this tick.
+  if (!state._attackerCountByRow) {
+    state._attackerCountByRow = new Int32Array(MAX_RACS);
+  }
+  const attackerCountByRow = state._attackerCountByRow;
+  attackerCountByRow.fill(0);
   for (let j = 0; j < n; j++) {
     if (!state.rac.alive[j]) continue;
     if (state.rac.targetKind[j] !== TARGET_KIND_RAC) continue;
     const tid = state.rac.targetId[j];
     if (tid < 0) continue;
-    attackerCount.set(tid, (attackerCount.get(tid) ?? 0) + 1);
+    const tRow = state.racRowById.get(tid);
+    if (tRow !== undefined) attackerCountByRow[tRow]++;
   }
-  state.attackerCount = attackerCount;
 
-  // Pre-compute the set of enemy rac ROWS that are within
-  // BIN_DEFENSE_RADIUS of any friendly bin. Per side. Lifts the
-  // O(rac × target × bin) check out of the inner scoring loop —
-  // we now look up each candidate target's row in a Set, O(1).
-  const defenseSetBySide: [Set<number>, Set<number>] = [new Set(), new Set()];
+  // Pre-compute, per side, a 0/1 flag per rac row indicating whether
+  // that rac is within BIN_DEFENSE_RADIUS of any bin owned by `side`.
+  // Inner scoring then reads `defenseFlag[side*MAX_RACS + j]` — O(1)
+  // memory access, no Set hashing per (rac × target) pair.
+  if (!state._defenseFlag) {
+    state._defenseFlag = new Uint8Array(2 * MAX_RACS);
+  }
+  const defenseFlag = state._defenseFlag;
+  defenseFlag.fill(0);
   const defR2 = BIN_DEFENSE_RADIUS * BIN_DEFENSE_RADIUS;
   for (let k = 0; k < m; k++) {
     if (!state.bin.alive[k]) continue;
@@ -119,14 +130,14 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     const enemyOf = (1 - owner) as 0 | 1;
     const bx = state.bin.x[k];
     const by = state.bin.y[k];
-    const set = defenseSetBySide[owner];
+    const base = owner * MAX_RACS;
     if (state._racGrid) {
       forEachNear(state._racGrid, bx, by, BIN_DEFENSE_RADIUS, (r) => {
         if (!state.rac.alive[r]) return;
         if (state.rac.owner[r] !== enemyOf) return;
         const dx = state.rac.x[r] - bx;
         const dy = state.rac.y[r] - by;
-        if (dx * dx + dy * dy < defR2) set.add(r);
+        if (dx * dx + dy * dy < defR2) defenseFlag[base + r] = 1;
       });
     } else {
       for (let r = 0; r < n; r++) {
@@ -134,7 +145,7 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
         if (state.rac.owner[r] !== enemyOf) continue;
         const dx = state.rac.x[r] - bx;
         const dy = state.rac.y[r] - by;
-        if (dx * dx + dy * dy < defR2) set.add(r);
+        if (dx * dx + dy * dy < defR2) defenseFlag[base + r] = 1;
       }
     }
   }
@@ -203,8 +214,11 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     let bestRacId = -1;
     let bestRacScore = -Infinity;
     let bestRacD2 = Infinity;
-    const myCurTargetId = curKind === TARGET_KIND_RAC ? curId : -1;
-    const myDefenseSet = defenseSetBySide[myOwner];
+    const myCurTargetRow =
+      curKind === TARGET_KIND_RAC && curId >= 0
+        ? (state.racRowById.get(curId) ?? -1)
+        : -1;
+    const defenseBase = myOwner * MAX_RACS;
     const scoreOne = (j: number) => {
       if (j === i) return;
       if (!state.rac.alive[j]) return;
@@ -223,11 +237,11 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
       const inRange = d2 <= myEffRange2;
       let saturationPenalty = 1;
       if (!inRange) {
-        let attackers = attackerCount.get(id) ?? 0;
-        if (id === myCurTargetId && attackers > 0) attackers -= 1;
+        let attackers = attackerCountByRow[j];
+        if (j === myCurTargetRow && attackers > 0) attackers -= 1;
         saturationPenalty = 1 / (1 + TARGET_SATURATION_K * attackers);
       }
-      const defenseMul = myDefenseSet.has(j) ? BIN_DEFENSE_MUL : 1;
+      const defenseMul = defenseFlag[defenseBase + j] ? BIN_DEFENSE_MUL : 1;
       const score =
         (affinity * lowHpBoost * dpsBoost * saturationPenalty * defenseMul) / d2;
       if (score > bestRacScore || (score === bestRacScore && id < bestRacId)) {

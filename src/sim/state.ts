@@ -225,6 +225,14 @@ export interface RacTable {
    *  modulate behavior decisions (hold doesn't march, charge engages
    *  early, etc.). One of STANDING_ORDER_IDX_*. */
   standingOrder: Uint8Array;
+  /** Cached aim point for cadence-gated behaviors (RALLY / ROUT).
+   *  Refreshed on the rac's decision tick when its intent depends on
+   *  expensive lookups (nearest leader, nearest bin); reused on
+   *  intervening ticks so we don't pay the lookup every frame. World
+   *  coords. aimValid=0 means "no cached aim, recompute or fall back". */
+  aimX: Float32Array;
+  aimY: Float32Array;
+  aimValid: Uint8Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -335,11 +343,17 @@ export interface BattleState {
    *  tick so visualizing a single tick frame matches what the rac
    *  actually used to move. */
   _debugForces?: Float32Array;
-  /** Built each retargeting tick by targetTick: rac id → count of
+  /** Built each retargeting tick by targetTick: rac ROW → count of
    *  same-tick racs currently aiming at that rac. Read by the
    *  saturation penalty in target scoring so a target with many
-   *  attackers gets deprioritized vs a less-saturated one. */
-  attackerCount?: Map<number, number>;
+   *  attackers gets deprioritized vs a less-saturated one. Reused
+   *  buffer; sim resets to 0 at the top of each retargeting pass. */
+  _attackerCountByRow?: Int32Array;
+  /** Built each retargeting tick by targetTick: 0/1 flag per (side,
+   *  row) — 1 if rac at row is within BIN_DEFENSE_RADIUS of any
+   *  bin owned by `side`. Read by inner scoring to apply the
+   *  bin-defense multiplier. Indexed as side*MAX_RACS + row. */
+  _defenseFlag?: Uint8Array;
   /** Built each tick by moraleTick: squadId → flank/rear threat level
    *  (0=none, 1=flank, 2=rear). Used by the lab to surface "this
    *  squad is being outflanked" in the tooltip; the morale penalty
@@ -474,6 +488,9 @@ export function emptyRacs(): RacTable {
     nextDecisionTick: new Int32Array(MAX_RACS),
     pinnedUntilTick: new Int32Array(MAX_RACS),
     standingOrder: new Uint8Array(MAX_RACS),
+    aimX: new Float32Array(MAX_RACS),
+    aimY: new Float32Array(MAX_RACS),
+    aimValid: new Uint8Array(MAX_RACS),
   };
 }
 

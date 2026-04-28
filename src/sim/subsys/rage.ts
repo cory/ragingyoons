@@ -42,11 +42,10 @@ export function rageTick(state: BattleState, content: ContentBundle, log: Logger
   const dt = SECONDS_PER_TICK;
   const n = state.rac.count;
 
-  // Infantry adjacency rage. Per-side profile sets the rate + radius.
-  // Plain inner loop with early-out is faster than grid here: adj
-  // range is tiny (1.5m), neighbors are clumped, the first hit usually
-  // wins after a few iterations. Closure overhead of forEachNear lost
-  // the race in profiling.
+  // Infantry adjacency rage. Grid scan over a tiny radius (1.5m) so
+  // most cells are empty; early-exit on first friendly hit. Beats the
+  // O(n²) double loop at >~64 racs.
+  const grid = state._racGrid;
   for (let i = 0; i < n; i++) {
     if (!state.rac.alive[i]) continue;
     if (state.rac.role[i] !== ROLE_INFANTRY) continue;
@@ -58,15 +57,27 @@ export function rageTick(state: BattleState, content: ContentBundle, log: Logger
     const myY = state.rac.y[i];
     const myOwner = state.rac.owner[i];
     let adjacent = false;
-    for (let j = 0; j < n; j++) {
-      if (i === j) continue;
-      if (!state.rac.alive[j]) continue;
-      if (state.rac.owner[j] !== myOwner) continue;
-      const dx = state.rac.x[j] - myX;
-      const dy = state.rac.y[j] - myY;
-      if (dx * dx + dy * dy <= adj2) {
-        adjacent = true;
-        break;
+    if (grid) {
+      forEachNear(grid, myX, myY, adj, (j) => {
+        if (adjacent) return;
+        if (j === i) return;
+        if (!state.rac.alive[j]) return;
+        if (state.rac.owner[j] !== myOwner) return;
+        const dx = state.rac.x[j] - myX;
+        const dy = state.rac.y[j] - myY;
+        if (dx * dx + dy * dy <= adj2) adjacent = true;
+      });
+    } else {
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        if (!state.rac.alive[j]) continue;
+        if (state.rac.owner[j] !== myOwner) continue;
+        const dx = state.rac.x[j] - myX;
+        const dy = state.rac.y[j] - myY;
+        if (dx * dx + dy * dy <= adj2) {
+          adjacent = true;
+          break;
+        }
       }
     }
     if (adjacent) gainRage(state, i, profile.infantryRagePerSec * dt);

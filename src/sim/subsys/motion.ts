@@ -82,8 +82,14 @@ const CROSS_UNIT_K = 3.0;
 /** Contact-mode flag radius — any enemy within this m sets contact[i]=1.
  *  Used by combat (phalanx anti-cav recoil, shield-vs-projectile) and
  *  formation-tightening overrides. */
-const CONTACT_R = 8.0;
-const CONTACT_R2 = CONTACT_R * CONTACT_R;
+/** Threshold on the enemy-side bilinear density sample for "in
+ *  contact" classification. Each rac splats weight 1.0 across its
+ *  surrounding 2×2 grid cells (FIELD_CELL_SIZE = 4 m), so a single
+ *  enemy at the rac's exact position would sample to ~0.0625
+ *  (1.0 / 4 m × 4 m cell area). This threshold (~0.04) fires when
+ *  any enemy is within ~one grid cell — comparable to the previous
+ *  8 m forEachNear scan but O(1) instead of O(neighbors). */
+const CONTACT_DENSITY_THRESHOLD = 0.04;
 /** Engage band: a rac in engage state holds position when within
  *  effRange. This wider band (effRange × this) is the stop-to-attack
  *  trigger — once you're inside it you're fighting. */
@@ -217,6 +223,40 @@ function findFriendlyBin(state: BattleState, i: number): number {
   return bestRow;
 }
 
+/** Find the nearest alive friendly squad-leader anywhere on the map.
+ *  Used by ROUT decision when no friendly bin remains — the rac
+ *  retreats to whatever leader is left. Returns row or -1. Spatial
+ *  grid scan with map-diagonal radius (so we still find leaders far
+ *  away, but skip empty cells in between). */
+function findRoutLeader(state: BattleState, i: number): number {
+  const grid = state._racGrid;
+  const myOwn = state.rac.owner[i];
+  const myX = state.rac.x[i];
+  const myY = state.rac.y[i];
+  let bestRow = -1;
+  let bestD2 = Number.POSITIVE_INFINITY;
+  const consider = (j: number) => {
+    if (j === i) return;
+    if (!state.rac.alive[j]) return;
+    if (state.rac.owner[j] !== myOwn) return;
+    if (state.rac.squadLeaderId[j] !== state.rac.id[j]) return;
+    const dx = state.rac.x[j] - myX;
+    const dy = state.rac.y[j] - myY;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestRow = j;
+    }
+  };
+  if (grid) {
+    const r = Math.hypot(state.bounds.w, state.bounds.h);
+    forEachNear(grid, myX, myY, r, consider);
+  } else {
+    for (let j = 0; j < state.rac.count; j++) consider(j);
+  }
+  return bestRow;
+}
+
 /** Find the nearest alive friendly squad-leader within RALLY_RADIUS,
  *  excluding self. Returns row index or -1. Used by the broken
  *  decision branch to choose between RALLY and ROUT. */
@@ -306,9 +346,10 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
   const fields = state._boidFields;
   buildBoidFields(state, fields);
   // Lab debug: clear last tick's flank-probe data so racs that exit
-  // FLANK this tick read inFlank=0. Cheap fill — only when capture
-  // is enabled.
-  if (state._debugFlank) state._debugFlank.fill(0);
+  // FLANK this tick read inFlank=0. Only allocated by the lab; in
+  // headless sim runs (bench / mass tuning) this is null and we skip.
+  const dbg = state._debugFlank ?? null;
+  if (dbg) dbg.fill(0);
 
   for (let i = 0; i < state.rac.count; i++) {
     if (!state.rac.alive[i]) continue;
@@ -356,9 +397,10 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // ----- Behavior decision (cadence-gated) -----
     if (tickNow >= state.rac.nextDecisionTick[i]) {
       let next = state.rac.behavior[i];
+      let cachedRallyLeaderRow = -1;
       if (broken) {
-        const rallyLeader = findRallyLeader(state, i);
-        next = rallyLeader >= 0 ? BEHAVIOR_RALLY : BEHAVIOR_ROUT;
+        cachedRallyLeaderRow = findRallyLeader(state, i);
+        next = cachedRallyLeaderRow >= 0 ? BEHAVIOR_RALLY : BEHAVIOR_ROUT;
       } else if (
         // CHARGE order skips FLANK detour — fanatics plow in.
         order !== STANDING_ORDER_IDX_CHARGE &&
@@ -394,6 +436,52 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         next = BEHAVIOR_MARCH;
       }
       state.rac.behavior[i] = next;
+      // Cadence-gated aim refresh for the lookup-heavy behaviors.
+      // RALLY: cached leader row (or fallback bin) found during
+      // decision. ROUT: bin if alive, else any friendly leader, else
+      // flee-from nearest enemy (ROUT intent picks fleeFrom; here we
+      // just stash bin if available so the intent can skip the search).
+      // FLANK / KITE / MARCH / ENGAGE recompute aim per-tick from
+      // current target — cheap, always fresh.
+      let aimValid = 0;
+      let aimX = 0;
+      let aimY = 0;
+      if (next === BEHAVIOR_RALLY) {
+        if (cachedRallyLeaderRow >= 0) {
+          aimX = state.rac.x[cachedRallyLeaderRow];
+          aimY = state.rac.y[cachedRallyLeaderRow];
+          aimValid = 1;
+        } else {
+          const binRow = findFriendlyBin(state, i);
+          if (binRow >= 0) {
+            aimX = state.bin.x[binRow];
+            aimY = state.bin.y[binRow];
+            aimValid = 1;
+          }
+        }
+      } else if (next === BEHAVIOR_ROUT) {
+        const binRow = findFriendlyBin(state, i);
+        if (binRow >= 0) {
+          aimX = state.bin.x[binRow];
+          aimY = state.bin.y[binRow];
+          aimValid = 1;
+        } else {
+          // No friendly bin — try to rally on any friendly squad
+          // leader anywhere on the map. Searches via the spatial grid
+          // with a map-diagonal radius so we still cross the map but
+          // skip empty cells. If neither bin nor leader exists, intent
+          // falls through to flee-from-enemy.
+          const leaderRow = findRoutLeader(state, i);
+          if (leaderRow >= 0) {
+            aimX = state.rac.x[leaderRow];
+            aimY = state.rac.y[leaderRow];
+            aimValid = 1;
+          }
+        }
+      }
+      state.rac.aimX[i] = aimX;
+      state.rac.aimY[i] = aimY;
+      state.rac.aimValid[i] = aimValid;
       const cadence = BEHAVIOR_CADENCE_BY_ROLE[role] ?? 8;
       state.rac.nextDecisionTick[i] = tickNow + Math.max(1, cadence);
     }
@@ -418,27 +506,13 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const maxV = state.rac.effSpeed[i] * (pinned ? PIN_SPEED_MUL : 1);
 
     if (behavior === BEHAVIOR_RALLY) {
-      // Rally: head toward nearest friendly leader; fall back to
-      // friendly bin so a broken rac with no leader nearby still has
-      // somewhere to go (defend the line). Morale recovers in
-      // moraleTick while rallying.
-      const leaderRallyRow = findRallyLeader(state, i);
-      let aimX = myX, aimY = myY, hasAim = false;
-      if (leaderRallyRow >= 0) {
-        aimX = state.rac.x[leaderRallyRow];
-        aimY = state.rac.y[leaderRallyRow];
-        hasAim = true;
-      } else {
-        const binRow = findFriendlyBin(state, i);
-        if (binRow >= 0) {
-          aimX = state.bin.x[binRow];
-          aimY = state.bin.y[binRow];
-          hasAim = true;
-        }
-      }
-      if (hasAim) {
-        const dx = aimX - myX;
-        const dy = aimY - myY;
+      // Rally: aim point cached on decision tick (nearest leader, or
+      // friendly bin fallback). Intent just steers toward cached aim
+      // each tick — fresh leader position is picked up at the next
+      // cadence tick. Morale recovers in moraleTick while rallying.
+      if (state.rac.aimValid[i]) {
+        const dx = state.rac.aimX[i] - myX;
+        const dy = state.rac.aimY[i] - myY;
         const d = Math.hypot(dx, dy);
         if (d > 1e-3) {
           desiredVx = (dx / d) * maxV;
@@ -454,9 +528,8 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       // the search returns the same answer whether cavalry is 30m
       // away or 1m away, which is the right invariant.
       const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
-      const dbg = state._debugFlank;
       const dbgBase = dbg ? i * FLANK_DEBUG_FLOATS_PER_RAC : -1;
-      if (dbg && dbgBase >= 0) {
+      if (dbg) {
         dbg[dbgBase + FLANK_DEBUG_OFFSET.inFlank] = 1;
       }
       // Step 1: find peak density along seek direction.
@@ -494,7 +567,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         sampleField(fields, fields.sideDensity[enemyCh], lineX, lineY + h) -
         sampleField(fields, fields.sideDensity[enemyCh], lineX, lineY - h);
       const gMag = Math.hypot(dxDens, dyDens);
-      if (dbg && dbgBase >= 0) {
+      if (dbg) {
         dbg[dbgBase + FLANK_DEBUG_OFFSET.gradX] = gMag > 0 ? dxDens / gMag : 0;
         dbg[dbgBase + FLANK_DEBUG_OFFSET.gradY] = gMag > 0 ? dyDens / gMag : 0;
       }
@@ -518,7 +591,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
           const probeX = lineX + perpX * sign * k * FLANK_PROBE_STEP;
           const probeY = lineY + perpY * sign * k * FLANK_PROBE_STEP;
           const d = sampleField(fields, fields.sideDensity[enemyCh], probeX, probeY);
-          if (dbg && dbgBase >= 0 && k <= 8) {
+          if (dbg && k <= 8) {
             dbg[dbgBase + FLANK_DEBUG_OFFSET.probesXY + (k - 1) * 2 + 0] = probeX;
             dbg[dbgBase + FLANK_DEBUG_OFFSET.probesXY + (k - 1) * 2 + 1] = probeY;
           }
@@ -545,7 +618,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         void edgeProbeY;
         void lineX;
         void lineY;
-        if (dbg && dbgBase >= 0) {
+        if (dbg) {
           dbg[dbgBase + FLANK_DEBUG_OFFSET.perpX] = perpX * sign;
           dbg[dbgBase + FLANK_DEBUG_OFFSET.perpY] = perpY * sign;
           dbg[dbgBase + FLANK_DEBUG_OFFSET.aimX] = aimX;
@@ -560,7 +633,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
           desiredVy = (dy / d) * maxV;
         }
       } else if (tgtFound && distToTarget > 1e-3) {
-        if (dbg && dbgBase >= 0) {
+        if (dbg) {
           dbg[dbgBase + FLANK_DEBUG_OFFSET.aimX] = tgtX;
           dbg[dbgBase + FLANK_DEBUG_OFFSET.aimY] = tgtY;
           dbg[dbgBase + FLANK_DEBUG_OFFSET.edgeStep] = -1;
@@ -595,56 +668,15 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         }
       }
     } else if (behavior === BEHAVIOR_ROUT) {
-      // Retreat priority cascade:
-      //   1. Friendly bin → run TO the bin and defend it.
-      //   2. Friendly squad leader anywhere → rally on the leader.
-      //   3. Flee nearest enemy with corner-avoidance bias.
-      // Without (2) a routed rac with no living bin would flee into
-      // a corner and get cornered. The leader fallback gives the
-      // squad a rally point even after the bin's gone.
-      const binRow = findFriendlyBin(state, i);
-      let aimX = 0, aimY = 0, hasAim = false;
-      if (binRow >= 0) {
-        aimX = state.bin.x[binRow];
-        aimY = state.bin.y[binRow];
-        hasAim = true;
-      } else {
-        // Find any friendly squad leader. Radius set to span the full
-        // map diagonal so we still cross the map to rally if needed —
-        // grid scan just prunes empty cells along the way.
-        let bestRow = -1;
-        let bestD2 = Number.POSITIVE_INFINITY;
-        const myOwn = state.rac.owner[i];
-        const rallySearchR = Math.hypot(state.bounds.w, state.bounds.h);
-        const considerLeader = (j: number) => {
-          if (j === i) return;
-          if (!state.rac.alive[j]) return;
-          if (state.rac.owner[j] !== myOwn) return;
-          if (state.rac.squadLeaderId[j] !== state.rac.id[j]) return;
-          const dx = state.rac.x[j] - myX;
-          const dy = state.rac.y[j] - myY;
-          const d2 = dx * dx + dy * dy;
-          if (d2 < bestD2) {
-            bestD2 = d2;
-            bestRow = j;
-          }
-        };
-        if (grid) {
-          forEachNear(grid, myX, myY, rallySearchR, considerLeader);
-        } else {
-          for (let j = 0; j < state.rac.count; j++) considerLeader(j);
-        }
-        if (bestRow >= 0) {
-          aimX = state.rac.x[bestRow];
-          aimY = state.rac.y[bestRow];
-          hasAim = true;
-        }
-      }
-
+      // Retreat priority cascade (target chosen on cadence-tick decision
+      // and stashed in aim*: bin if alive, else any friendly leader, else
+      // aimValid=0 → flee-from below). Off-cadence ticks just steer
+      // toward cached aim; the heavy bin/leader search runs at most once
+      // per behavior-cadence (default 8 ticks for infantry).
       let fx = 0, fy = 0;
-      if (hasAim) {
-        fx = aimX - myX;
-        fy = aimY - myY;
+      if (state.rac.aimValid[i]) {
+        fx = state.rac.aimX[i] - myX;
+        fy = state.rac.aimY[i] - myY;
       } else {
         // No bin, no leader — flee nearest enemy.
         let nearestRow = -1;
@@ -822,26 +854,32 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // close-range nudge dominates because CLOSE_K (10 m/s/m of
     // overlap) saturates the cap; far apart, behavior dominates and
     // the nudge is a small correction.
+    //
+    // Pair-wise scan radius is just max(CLOSE_R, CROSS_UNIT_R) = 1.5m
+    // (~one grid cell) — the previous 8m CONTACT_R extension forced a
+    // 5×5 cell walk and was the dominant per-rac cost. CONTACT mode
+    // now reads a bilinear sample of the enemy density field — same
+    // information, O(1) instead of O(neighbors).
     let nudgeVx = 0;
     let nudgeVy = 0;
-    let contact = 0;
-    let supportFriends = 0;
+    const myOwner = state.rac.owner[i];
+    const enemyCh = (1 - myOwner) as 0 | 1;
+    const enemyDensHere = sampleField(
+      fields,
+      fields.sideDensity[enemyCh],
+      myX,
+      myY,
+    );
+    const contact = enemyDensHere > CONTACT_DENSITY_THRESHOLD ? 1 : 0;
     if (grid) {
-      const myOwner = state.rac.owner[i];
       const mySquadId = state.rac.squadId[i];
-      const SCAN_R = Math.max(CLOSE_R, CROSS_UNIT_R, CONTACT_R);
+      const SCAN_R = Math.max(CLOSE_R, CROSS_UNIT_R);
       forEachNear(grid, myX, myY, SCAN_R, (j) => {
         if (j === i) return;
         if (!state.rac.alive[j]) return;
         const dx = myX - state.rac.x[j];
         const dy = myY - state.rac.y[j];
         const d2 = dx * dx + dy * dy;
-        if (d2 < CONTACT_R2 && state.rac.owner[j] !== myOwner) {
-          contact = 1;
-        }
-        if (d2 < CONTACT_R2 && state.rac.owner[j] === myOwner) {
-          supportFriends += 1;
-        }
         if (d2 < CLOSE_R2) {
           if (d2 < 1e-6) {
             const h = ((state.rac.id[i] * 31 + state.rac.id[j]) >>> 0) / 4294967296;
@@ -890,7 +928,6 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       const supportFrac = Math.min(1, friendlyDens / supportFullAt);
       dmgMul *= 1 - supportMax * supportFrac;
     }
-    void supportFriends; // currently unused (we use the density field) but kept for future
     state.rac.surroundedDamageMul[i] = dmgMul;
 
     // ----- Apply velocity -----

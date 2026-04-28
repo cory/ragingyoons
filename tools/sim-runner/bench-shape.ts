@@ -19,9 +19,10 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
 
 async function main() {
   const content = await loadContentFromFs({ repoRoot: REPO_ROOT });
-  const unitId = process.argv[2] ?? findFirst(content, "infantry", "phalanx");
+  const arg2 = process.argv[2];
+  const unitId = arg2 && arg2.length > 0 ? arg2 : findFirst(content, "infantry", "phalanx");
   const count = Number(process.argv[3] ?? "48");
-  const ticks = Number(process.argv[4] ?? "1500");
+  const ticks = Number(process.argv[4] ?? "1000");
   const battles = Number(process.argv[5] ?? "5");
 
   let totalNs = 0n;
