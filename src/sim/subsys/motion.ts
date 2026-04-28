@@ -46,6 +46,7 @@ import {
   MAX_ACCEL_BY_ROLE,
   MORALE_BREAK_THRESHOLD,
   MORALE_BREAK_THRESHOLD_BY_ENV,
+  PIN_SPEED_MUL,
   RALLY_RADIUS,
   ROUT_SPEED_MUL,
   SECONDS_PER_TICK,
@@ -301,7 +302,13 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       : state.formationProfile[state.rac.owner[i]][state.rac.formationIdx[i]];
     let desiredVx = 0;
     let desiredVy = 0;
-    const maxV = state.rac.effSpeed[i];
+    // Tank pin: a rac that was hit by a tank in melee in the last
+    // ~2 s gets its max speed cut to PIN_SPEED_MUL × normal. The
+    // pinned timer is stamped each time a tank lands a basic hit;
+    // sustained melee keeps the slowdown active. Cavalry overrun
+    // still moves but slower; archers can't kite away from a tank.
+    const pinned = state.rac.pinnedUntilTick[i] > tickNow;
+    const maxV = state.rac.effSpeed[i] * (pinned ? PIN_SPEED_MUL : 1);
 
     if (behavior === BEHAVIOR_RALLY) {
       // Rally: head toward the nearest friendly squad leader.

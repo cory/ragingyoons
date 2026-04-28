@@ -389,12 +389,12 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 const BEHAVIOR_LABEL = ["march", "engage", "rout", "kite", "flank", "rally"];
 const BEHAVIOR_COLOR = ["#9cf", "#fc6", "#f88", "#bef", "#fbd", "#cf8"];
 
-function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number } }) {
+function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number; pinned: boolean } }) {
   const speed = Math.hypot(rac.vx, rac.vy);
   return (
     <div style={{ position: "absolute", right: 8, top: 8, background: "#000c", padding: 8, borderRadius: 3, fontSize: 11, color: "#ddd", minWidth: 200 }}>
       <div>
-        rac #{rac.id} {rac.isLeader ? <span style={{ color: "#fc6" }}>[leader]</span> : null} {rac.contact ? "[contact]" : ""} {rac.broken ? <span style={{ color: "#f88" }}>[broken]</span> : null}
+        rac #{rac.id} {rac.isLeader ? <span style={{ color: "#fc6" }}>[leader]</span> : null} {rac.contact ? "[contact]" : ""} {rac.broken ? <span style={{ color: "#f88" }}>[broken]</span> : null} {rac.pinned ? <span style={{ color: "#fa6" }}>[pinned]</span> : null}
       </div>
       <div>
         state <span style={{ color: BEHAVIOR_COLOR[rac.behavior] ?? "#ddd" }}>

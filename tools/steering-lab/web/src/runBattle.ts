@@ -63,8 +63,10 @@ export interface RacFrame {
   isLeader: boolean;
   morale: number;
   broken: boolean;
-  /** Behavior state — 0=march, 1=engage, 2=rout, 3=kite, 4=flank. */
+  /** Behavior state — 0=march, 1=engage, 2=rout, 3=kite, 4=flank, 5=rally. */
   behavior: number;
+  /** True if this rac is currently pinned by a tank (slowed). */
+  pinned: boolean;
   /** Per-rac flank debug data (FLANK_DEBUG_FLOATS_PER_RAC floats).
    *  Slot 0 (inFlank) is 1 only when this rac was in BEHAVIOR_FLANK
    *  this tick. The lab reads probe XY pairs + aim point + grad +
@@ -174,6 +176,7 @@ function snapshotFrame(
         state.rac.morale[i] <
         (MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD),
       behavior: state.rac.behavior[i],
+      pinned: state.rac.pinnedUntilTick[i] > state.tick,
       flankDebug: fl,
     });
   }

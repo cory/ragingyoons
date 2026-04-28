@@ -21,6 +21,7 @@ import {
   MAX_GARRISON_SLOTS,
   MORALE_DAMAGE_MUL,
   SECONDS_PER_TICK,
+  TANK_PIN_DURATION_TICKS,
   TARGET_KIND_BIN,
   TARGET_KIND_NONE,
   TARGET_KIND_RAC,
@@ -348,6 +349,18 @@ export function applyRacDamage(
   const hpBefore = state.rac.hp[tgtRow];
   const hpAfter = hpBefore - dmg;
   state.rac.hp[tgtRow] = hpAfter;
+  // Tank pin: a basic melee hit from a tank refreshes the target's
+  // pinned timer. While pinned, motion multiplies maxV by
+  // PIN_SPEED_MUL — that's the tank role identity. Skips ranged /
+  // recoil / DoT sources because those aren't a melee anchor.
+  if (
+    source === "basic" &&
+    srcRow >= 0 &&
+    state.rac.alive[srcRow] &&
+    state.rac.role[srcRow] === ROLE_TANK
+  ) {
+    state.rac.pinnedUntilTick[tgtRow] = state.tick + TANK_PIN_DURATION_TICKS;
+  }
   // Morale: take a hit proportional to damage / hpMax. A single big
   // blow can break a rac in one strike (hp/hpMax × MORALE_DAMAGE_MUL
   // crosses the break threshold past ~50% damage); ticks of small

@@ -213,6 +213,13 @@ export interface RacTable {
    *  rac decides. Lets cavalry react every tick while tanks commit
    *  for ~1 second between decisions. */
   nextDecisionTick: Int32Array;
+  /** Tick through which this rac is "pinned" by a tank's melee
+   *  attack. Set in combat each time a tank lands a basic hit;
+   *  motion multiplies maxV by PIN_SPEED_MUL while state.tick is
+   *  ≤ this value. Lets tanks anchor whatever they engage —
+   *  cavalry overrun still moves but slowed, infantry can't easily
+   *  disengage. 0 = not pinned. */
+  pinnedUntilTick: Int32Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -455,6 +462,7 @@ export function emptyRacs(): RacTable {
     inFormation: new Uint8Array(MAX_RACS),
     behavior: new Uint8Array(MAX_RACS),
     nextDecisionTick: new Int32Array(MAX_RACS),
+    pinnedUntilTick: new Int32Array(MAX_RACS),
   };
 }
 
@@ -1078,6 +1086,21 @@ export const RALLY_RADIUS = 25;
  *  settling permanently broken near the leader. With break thresh
  *  0.1–0.5, recovery from 0 takes 2–10 s. */
 export const RALLY_RECOVERY_RATE = 0.06;
+
+/** Tank pin: when a tank lands a basic melee hit, the target gets a
+ *  pinned timer of TANK_PIN_DURATION_TICKS ticks during which their
+ *  motion speed is multiplied by PIN_SPEED_MUL. The pin refreshes on
+ *  each subsequent hit, so a tank in sustained melee keeps the
+ *  target anchored for as long as the engagement lasts. Once the
+ *  tank disengages (moves away or dies), the timer expires after
+ *  ~2 s and the target is free.
+ *
+ *  Design: tanks become the role that *holds territory*. Cavalry can
+ *  overrun (still moving, just slowed) but pays for it; infantry
+ *  can't easily walk through a tank line; archers caught in melee
+ *  with a tank can't kite away. */
+export const TANK_PIN_DURATION_TICKS = 30; // ~2.0 s at 15 Hz
+export const PIN_SPEED_MUL = 0.4;
 
 /** Cavalry charge bonus: damage dealt by a cavalry attacker scales
  *  with the attacker's CURRENT speed vs its base. At rest the bonus
