@@ -12,6 +12,8 @@ import type { ContentBundle, UnitDef } from "../content.js";
 import { ROLE_ARCHER, ROLE_CAVALRY, ROLE_TANK } from "../content.js";
 import type { Logger } from "../log.js";
 import {
+  CASUALTY_SHOCK,
+  CASUALTY_SHOCK_RADIUS,
   MAX_GARRISON_SLOTS,
   MORALE_DAMAGE_MUL,
   SECONDS_PER_TICK,
@@ -369,6 +371,22 @@ export function markRacDead(
   if (!state.rac.alive[tgtRow]) return;
   state.rac.alive[tgtRow] = 0;
   state.rac.hp[tgtRow] = 0;
+  // Casualty shock: same-side allies within CASUALTY_SHOCK_RADIUS lose
+  // a small chunk of morale. One death is unsettling but absorbable;
+  // the third or fourth nearby death pushes a held rac to break and
+  // kicks off the cascade. Uses the spatial grid so it's cheap.
+  const grid = state._racGrid;
+  if (grid && CASUALTY_SHOCK > 0) {
+    const dx0 = state.rac.x[tgtRow];
+    const dy0 = state.rac.y[tgtRow];
+    const owner = state.rac.owner[tgtRow];
+    forEachNear(grid, dx0, dy0, CASUALTY_SHOCK_RADIUS, (j) => {
+      if (j === tgtRow) return;
+      if (!state.rac.alive[j]) return;
+      if (state.rac.owner[j] !== owner) return;
+      state.rac.morale[j] = Math.max(0, state.rac.morale[j] - CASUALTY_SHOCK);
+    });
+  }
   freeRacSlot(state, tgtRow);
   const tgtUnit = content.units.get(state.unitIdTable[state.rac.unitIdIdx[tgtRow]]);
   log.emit("rac_death", {

@@ -926,3 +926,17 @@ export const MORALE_BREAK_THRESHOLD_BY_ENV: readonly number[] = [
  *  half max HP drops morale by 0.3 — past the default break threshold
  *  in one big blow, but small ticks of damage barely move the needle. */
 export const MORALE_DAMAGE_MUL = 0.6;
+/** Separation force multiplier for broken racs. In formation, racs
+ *  use slot-direct steering and don't feel field separation at all.
+ *  Once broken, they switch to full boid forces — and we want them
+ *  to actively spread out (panicking troops give each other space)
+ *  rather than just clustering with ambient separation. 2.5 is enough
+ *  to visibly scatter the unit over a few seconds. */
+export const BROKEN_SEP_MUL = 2.5;
+/** Per-rac morale shock when a same-side ally dies within
+ *  CASUALTY_SHOCK_RADIUS meters. Small enough that one death doesn't
+ *  break a held rac but large enough that the third or fourth nearby
+ *  death does. Drives the cascade behavior — one broken cell becomes
+ *  a section, becomes a flank. */
+export const CASUALTY_SHOCK = 0.06;
+export const CASUALTY_SHOCK_RADIUS = 5;

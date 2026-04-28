@@ -33,6 +33,7 @@ import { ROLE_ARCHER, ROLE_CAVALRY } from "../content.js";
 import { forEachNear } from "../grid.js";
 import type { Logger } from "../log.js";
 import {
+  BROKEN_SEP_MUL,
   MORALE_BREAK_THRESHOLD,
   MORALE_BREAK_THRESHOLD_BY_ENV,
   SECONDS_PER_TICK,
@@ -101,6 +102,12 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const unitId = state.unitIdTable[state.rac.unitIdIdx[i]];
     const unit = content.units.get(unitId);
     if (!unit) continue;
+    // Compute "broken" early — it gates separation strength below
+    // (broken racs spread out actively) and steering mode (broken
+    // racs run full boid forces; held racs use slot-direct).
+    const breakThresholdEarly =
+      MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD;
+    const isBroken = state.rac.morale[i] < breakThresholdEarly;
     // Read the rac's effective profile via its formation, switching
     // between MARCH (loose, mobile) and CONTACT (tight, locked-shields)
     // mode based on the contact flag set below from enemy proximity.
@@ -129,14 +136,12 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const densU = sampleField(fields, fields.totalDensity, myX, myY + GRADIENT_STEP);
     const gradX = (densR - densL) / (2 * GRADIENT_STEP);
     const gradY = (densU - densD) / (2 * GRADIENT_STEP);
-    const sepK = profile.separationK;
-    // Split field-based separation from close-range pairwise. Field
-    // separation pushes a rac DOWN the local density gradient — fine
-    // for steering crowds, but it fights the slot-pull on edge racs in
-    // a tight formation (the edge always sees a "go outward" gradient,
-    // and that drag stops them keeping up with the leader). So field-
-    // sep gets gated by inSlot below; close-range stays always-on so
-    // physical overlap (two racs at the same point) is still resolved.
+    // Field-based separation, scaled up for broken racs so panicking
+    // troops actively spread apart instead of just having ambient
+    // density-gradient repulsion. Held racs don't even reach the
+    // force-pipeline (slot-direct steering bypasses it), so this only
+    // affects broken / leader / independent racs.
+    const sepK = profile.separationK * (isBroken ? BROKEN_SEP_MUL : 1);
     let fieldSepX = f_separation ? -gradX * sepK : 0;
     let fieldSepY = f_separation ? -gradY * sepK : 0;
     let closeSepX = 0;
@@ -295,12 +300,8 @@ export function boidsTick(state: BattleState, content: ContentBundle, log: Logge
     const doc = DOCTRINES[state.rac.doctrineIdx[i]];
     const inIndependentContact =
       !!doc && doc.independentInContact && state.rac.contact[i] === 1;
-    // Per-environment break threshold (city=0.1 holds tight, coastal=
-    // 0.5 breaks fast). Falls back to the global default if the env
-    // table is somehow short.
-    const breakThreshold =
-      MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD;
-    const broken = state.rac.morale[i] < breakThreshold;
+    // Reuse the early-computed break flag.
+    const broken = isBroken;
     let leaderRow = -1;
     let leaderTx = 0, leaderTy = 0;
     let leaderTargetFound = false;
