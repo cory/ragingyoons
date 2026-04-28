@@ -131,6 +131,39 @@ const FLANK_EDGE_DENSITY = 0.05;
  *  aim 200 m sideways when no edge is found nearby. */
 const FLANK_MAX_STEPS = 8;
 
+/** Compute a predicted target position for a chasing rac so multiple
+ *  pack-mates aiming at the same target spread to intercept different
+ *  future positions ("herd" them). Hash of (attackerRacId, targetId)
+ *  picks one of HERD_BUCKETS lookahead times — lowest-id attacker
+ *  gets ≈ current position (most direct), others get progressively
+ *  further-ahead intercepts based on the target's current velocity.
+ *  When the target is a bin or stationary, this collapses to the
+ *  target's current position (no velocity to project). */
+function herdAimPoint(
+  state: BattleState,
+  attackerId: number,
+  targetKind: number,
+  targetRow: number,
+): { x: number; y: number } {
+  if (targetKind === TARGET_KIND_BIN) {
+    return { x: state.bin.x[targetRow], y: state.bin.y[targetRow] };
+  }
+  const tx = state.rac.x[targetRow];
+  const ty = state.rac.y[targetRow];
+  const tvx = state.rac.vx[targetRow];
+  const tvy = state.rac.vy[targetRow];
+  const tid = state.rac.id[targetRow];
+  // Mix the two ids; modulo HERD_BUCKETS gives a stable per-pair
+  // bucket index in [0, HERD_BUCKETS-1]. Each bucket = HERD_STEP s
+  // of lookahead. With 4 buckets at 0.5 s, attackers spread across
+  // 0–1.5 s of intercept time.
+  const HERD_BUCKETS = 4;
+  const HERD_STEP = 0.5;
+  const hash = ((attackerId * 2654435761) ^ (tid * 0x9e3779b9)) >>> 0;
+  const t = (hash % HERD_BUCKETS) * HERD_STEP;
+  return { x: tx + tvx * t, y: ty + tvy * t };
+}
+
 /** Find the nearest alive friendly bin (any range). Returns row
  *  index or -1. Used as a fallback retreat target — broken / rally
  *  racs head back toward their own line instead of fleeing into
@@ -542,23 +575,51 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         }
       }
     } else if (behavior === BEHAVIOR_ROUT) {
-      // Retreat to a friendly bin if there is one — broken racs run
-      // BACK to the line, not into empty space. From there they
-      // defend the bin (archers kite the next attacker, melee racs
-      // engage) and may rally if morale recovers.
-      // Falls back to fleeing the nearest enemy when no bin exists
-      // (lab two-army mode).
+      // Retreat priority cascade:
+      //   1. Friendly bin → run TO the bin and defend it.
+      //   2. Friendly squad leader anywhere → rally on the leader.
+      //   3. Flee nearest enemy with corner-avoidance bias.
+      // Without (2) a routed rac with no living bin would flee into
+      // a corner and get cornered. The leader fallback gives the
+      // squad a rally point even after the bin's gone.
       const binRow = findFriendlyBin(state, i);
+      let aimX = 0, aimY = 0, hasAim = false;
       if (binRow >= 0) {
-        const dx = state.bin.x[binRow] - myX;
-        const dy = state.bin.y[binRow] - myY;
-        const d = Math.hypot(dx, dy);
-        if (d > 1e-3) {
-          const speed = maxV * ROUT_SPEED_MUL;
-          desiredVx = (dx / d) * speed;
-          desiredVy = (dy / d) * speed;
-        }
+        aimX = state.bin.x[binRow];
+        aimY = state.bin.y[binRow];
+        hasAim = true;
       } else {
+        // Find any friendly squad leader (no range cap — when bins
+        // are gone we'll cross the map to rally).
+        let bestRow = -1;
+        let bestD2 = Number.POSITIVE_INFINITY;
+        const myOwn = state.rac.owner[i];
+        for (let j = 0; j < state.rac.count; j++) {
+          if (j === i) continue;
+          if (!state.rac.alive[j]) continue;
+          if (state.rac.owner[j] !== myOwn) continue;
+          if (state.rac.squadLeaderId[j] !== state.rac.id[j]) continue;
+          const dx = state.rac.x[j] - myX;
+          const dy = state.rac.y[j] - myY;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            bestRow = j;
+          }
+        }
+        if (bestRow >= 0) {
+          aimX = state.rac.x[bestRow];
+          aimY = state.rac.y[bestRow];
+          hasAim = true;
+        }
+      }
+
+      let fx = 0, fy = 0;
+      if (hasAim) {
+        fx = aimX - myX;
+        fy = aimY - myY;
+      } else {
+        // No bin, no leader — flee nearest enemy.
         let nearestRow = -1;
         let nearestD2 = Number.POSITIVE_INFINITY;
         if (grid) {
@@ -577,30 +638,76 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         }
         const fleeFromX = nearestRow >= 0 ? state.rac.x[nearestRow] : tgtFound ? tgtX : myX;
         const fleeFromY = nearestRow >= 0 ? state.rac.y[nearestRow] : tgtFound ? tgtY : myY;
-        const dx = myX - fleeFromX;
-        const dy = myY - fleeFromY;
-        const d = Math.hypot(dx, dy);
-        if (d > 1e-3) {
-          const speed = maxV * ROUT_SPEED_MUL;
-          desiredVx = (dx / d) * speed;
-          desiredVy = (dy / d) * speed;
+        fx = myX - fleeFromX;
+        fy = myY - fleeFromY;
+      }
+
+      // Corner-avoidance: as we approach a wall, blend the flee
+      // direction toward field-center so racs don't pin themselves
+      // in a corner. Bias scales 0..1 with proximity to bounds —
+      // 0 inside the central 60% of the field, 1 right at the edge.
+      const wallSlackX = 0.6;
+      const wallSlackY = 0.6;
+      const overX = Math.max(0, Math.abs(myX) / halfW - wallSlackX) / (1 - wallSlackX);
+      const overY = Math.max(0, Math.abs(myY) / halfH - wallSlackY) / (1 - wallSlackY);
+      const wallBias = Math.min(0.8, Math.max(overX, overY));
+      if (wallBias > 0) {
+        // Direction toward center.
+        const cx = -myX;
+        const cy = -myY;
+        const cl = Math.hypot(cx, cy);
+        if (cl > 1e-3) {
+          const fl = Math.hypot(fx, fy);
+          if (fl > 1e-3) {
+            const fux = fx / fl;
+            const fuy = fy / fl;
+            const cux = cx / cl;
+            const cuy = cy / cl;
+            fx = fux * (1 - wallBias) + cux * wallBias;
+            fy = fuy * (1 - wallBias) + cuy * wallBias;
+          } else {
+            fx = cx / cl;
+            fy = cy / cl;
+          }
         }
+      }
+
+      const fl = Math.hypot(fx, fy);
+      if (fl > 1e-3) {
+        const speed = maxV * ROUT_SPEED_MUL;
+        desiredVx = (fx / fl) * speed;
+        desiredVy = (fy / fl) * speed;
       }
     } else if (behavior === BEHAVIOR_ENGAGE) {
       if (tgtFound) {
         if (role === ROLE_CAVALRY) {
-          // Cavalry OVERRUN: don't stop in melee — aim PAST the target
-          // so they charge through. Combat fires as they pass through
-          // attack range. This is what makes cavalry cavalry: they
-          // hit hard at speed and don't grind to a halt the moment
-          // they touch enemies. Without this, "engage" was a brake
-          // that erased the entire role identity.
-          const d = distToTarget;
+          // Cavalry OVERRUN — aim PAST the target so they charge
+          // through. Pack of cavalry chasing the same enemy gets
+          // herd-intercept: each rac picks a different lookahead
+          // time on the target's velocity, spreading the pack
+          // across intercept points instead of all crashing the
+          // same spot. Senior (lowest-id) attackers tend toward the
+          // current position; juniors aim further ahead.
+          const tid = state.rac.targetId[i];
+          const tkindLocal = state.rac.targetKind[i];
+          const tRow =
+            tkindLocal === TARGET_KIND_RAC
+              ? findRacRowById(state, tid)
+              : tkindLocal === TARGET_KIND_BIN
+                ? findBinRowById(state, tid)
+                : -1;
+          let pX = tgtX, pY = tgtY;
+          if (tRow >= 0) {
+            const aim = herdAimPoint(state, myRacId, tkindLocal, tRow);
+            pX = aim.x;
+            pY = aim.y;
+          }
+          const d = Math.hypot(pX - myX, pY - myY);
           if (d > 1e-3) {
-            const ux = (tgtX - myX) / d;
-            const uy = (tgtY - myY) / d;
-            const aheadX = tgtX + ux * CAVALRY_OVERSHOOT;
-            const aheadY = tgtY + uy * CAVALRY_OVERSHOOT;
+            const ux = (pX - myX) / d;
+            const uy = (pY - myY) / d;
+            const aheadX = pX + ux * CAVALRY_OVERSHOOT;
+            const aheadY = pY + uy * CAVALRY_OVERSHOOT;
             const ax = aheadX - myX;
             const ay = aheadY - myY;
             const ad = Math.hypot(ax, ay);
