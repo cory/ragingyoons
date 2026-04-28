@@ -52,10 +52,10 @@ export function LabView() {
   const [content, setContent] = useState<ContentBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cfg, setCfg] = useState<CellConfig>({
-    blue: { unitId: "", count: 12, formation: "default", maxPlatoonSize: 20, platoonStride: 6 },
+    blue: { unitId: "", count: 48, formation: "default", maxPlatoonSize: 48, platoonStride: 8 },
     enemyBin: "",
     redEnabled: false,
-    red: { unitId: "", count: 12, formation: "default", maxPlatoonSize: 20, platoonStride: 6 },
+    red: { unitId: "", count: 48, formation: "default", maxPlatoonSize: 48, platoonStride: 8 },
     seed: 1,
     ticks: 1500, // 100 s at 15 Hz; loop also breaks on win condition
     overlays: DEFAULT_OVERLAYS,

@@ -747,8 +747,23 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         const ly = state.rac.y[leaderRow];
         const lvx = state.rac.vx[leaderRow];
         const lvy = state.rac.vy[leaderRow];
-        const sX = lx + lvx * dt + state.rac.slotDx[i];
-        const sY = ly + lvy * dt + state.rac.slotDy[i];
+        // Wheel: slot offsets are stored in formation-local frame
+        // (forward = leader's spawn facing). Rotate by the delta
+        // between the leader's CURRENT facing and the squad's spawn
+        // facing so the formation pivots with the leader. Side 0
+        // spawned facing 0 (+x), side 1 facing π (-x); we recover
+        // the spawn facing from the leader's owner.
+        const spawnFacing =
+          state.rac.owner[leaderRow] === 0 ? 0 : Math.PI;
+        const dFace = state.rac.facing[leaderRow] - spawnFacing;
+        const cF = Math.cos(dFace);
+        const sF = Math.sin(dFace);
+        const sdx0 = state.rac.slotDx[i];
+        const sdy0 = state.rac.slotDy[i];
+        const rdx = sdx0 * cF - sdy0 * sF;
+        const rdy = sdx0 * sF + sdy0 * cF;
+        const sX = lx + lvx * dt + rdx;
+        const sY = ly + lvy * dt + rdy;
         const dx = sX - myX;
         const dy = sY - myY;
         const reqSpeed = Math.hypot(dx, dy) / dt;
@@ -931,8 +946,18 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     ) {
       const lx = state.rac.x[leaderRow];
       const ly = state.rac.y[leaderRow];
-      const sX = lx + state.rac.slotDx[i];
-      const sY = ly + state.rac.slotDy[i];
+      // Same wheel rotation as in MARCH slot-direct above.
+      const spawnFacing =
+        state.rac.owner[leaderRow] === 0 ? 0 : Math.PI;
+      const dFace = state.rac.facing[leaderRow] - spawnFacing;
+      const cF = Math.cos(dFace);
+      const sF = Math.sin(dFace);
+      const sdx0 = state.rac.slotDx[i];
+      const sdy0 = state.rac.slotDy[i];
+      const rdx = sdx0 * cF - sdy0 * sF;
+      const rdy = sdx0 * sF + sdy0 * cF;
+      const sX = lx + rdx;
+      const sY = ly + rdy;
       if (Math.hypot(sX - state.rac.x[i], sY - state.rac.y[i]) < IN_FORMATION_R) {
         inFormation = 1;
       }
