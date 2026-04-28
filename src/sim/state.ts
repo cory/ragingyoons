@@ -1004,12 +1004,15 @@ export const FORMATION_FRONTAL_DEFENSE_MUL = 0.6;
 export const FORMATION_FRONTAL_HALF_CONE = Math.PI / 3;
 
 /** Behavior states for the motion state machine. Slice 1: march,
- *  engage, rout. Future slices add kite (archer back-pedal), flank
- *  (cavalry tangent path), rally (broken-recovering rejoin squad).
- *  Stored as Uint8 in state.rac.behavior. */
+ *  engage, rout. Slice 2 adds kite (archer back-pedal). Slice 3 adds
+ *  flank (cavalry tangent path around blocked lines). Future slices
+ *  add rally (broken-recovering rejoin squad). Stored as Uint8 in
+ *  state.rac.behavior. */
 export const BEHAVIOR_MARCH = 0;
 export const BEHAVIOR_ENGAGE = 1;
 export const BEHAVIOR_ROUT = 2;
+export const BEHAVIOR_KITE = 3;
+export const BEHAVIOR_FLANK = 4;
 
 /** How often each role re-evaluates its behavior, in ticks (15 Hz).
  *  Cavalry reacts every frame — they're scout-fast and reroute on
@@ -1028,3 +1031,10 @@ export const BEHAVIOR_CADENCE_BY_ROLE: readonly number[] = [
  *  faster than their normal march. Tuned so they actually escape
  *  pursuers that share their base speed. */
 export const ROUT_SPEED_MUL = 1.5;
+
+/** Cavalry charge bonus: damage dealt by a cavalry attacker scales
+ *  with the attacker's CURRENT speed vs its base. At rest the bonus
+ *  is 0 (×1 damage); at full base speed it's CAVALRY_CHARGE_BONUS_MAX
+ *  (×2 damage by default). Makes "hit them while moving" the cavalry
+ *  identity — a cavalry rac that has stopped is just a slow infantry. */
+export const CAVALRY_CHARGE_BONUS_MAX = 1.0;

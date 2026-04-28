@@ -29,13 +29,15 @@
  */
 
 import type { ContentBundle } from "../content.js";
-import { ROLE_INFANTRY } from "../content.js";
+import { ROLE_ARCHER, ROLE_CAVALRY, ROLE_INFANTRY } from "../content.js";
 import { allocBoidFields, buildBoidFields, sampleField } from "../fields.js";
 import { forEachNear } from "../grid.js";
 import type { Logger } from "../log.js";
 import {
   BEHAVIOR_CADENCE_BY_ROLE,
   BEHAVIOR_ENGAGE,
+  BEHAVIOR_FLANK,
+  BEHAVIOR_KITE,
   BEHAVIOR_MARCH,
   BEHAVIOR_ROUT,
   MORALE_BREAK_THRESHOLD,
@@ -74,6 +76,56 @@ const CONTACT_R2 = CONTACT_R * CONTACT_R;
  *  effRange. This wider band (effRange × this) is the stop-to-attack
  *  trigger — once you're inside it you're fighting. */
 const ENGAGE_BAND_MUL = 1.0;
+/** Cavalry overrun distance: in engage, cavalry aims this far PAST
+ *  the target so they ride through melee at speed. Combat fires as
+ *  they pass; they keep going to the next target instead of stopping. */
+const CAVALRY_OVERSHOOT = 8;
+/** Archer kite trigger: enter KITE when target distance ≤
+ *  effRange × this. Wider than effRange so archers start back-pedaling
+ *  while a tank is still closing, not after the tank is already
+ *  point-blank. */
+const ARCHER_KITE_TRIGGER_MUL = 1.5;
+/** Kite deadband — within ±10% of preferred kite distance, the archer
+ *  settles instead of jittering across the boundary every tick. */
+const KITE_DEADBAND = 0.1;
+/** Cavalry flank lookahead — how far ahead along the seek direction
+ *  we sample enemy density to decide whether the path is blocked. */
+const FLANK_LOOKAHEAD = 14;
+/** Enemy density threshold (per-side density field) above which we
+ *  consider the path blocked and switch cavalry to FLANK. */
+const FLANK_BLOCKED_DENSITY = 0.6;
+/** How far past the target we aim the flank route — pulls cavalry
+ *  laterally PAST the enemy line so they end up on the open wing. */
+const FLANK_OFFSET = 24;
+
+/** Does the cavalry rac's path to target run through a wall of
+ *  enemies? Sample enemy density at FLANK_LOOKAHEAD m ahead along
+ *  the seek direction; if it's above the threshold, the path is
+ *  blocked and we should FLANK instead of MARCH. Used by the
+ *  decision rule. */
+function cavalryPathBlocked(
+  state: BattleState,
+  i: number,
+  tgtX: number,
+  tgtY: number,
+  distToTarget: number,
+): boolean {
+  const fields = state._boidFields;
+  if (!fields) return false;
+  if (distToTarget < 1e-3) return false;
+  // Don't bother flanking when we're already past the line / close
+  // to target — engage takes over there.
+  if (distToTarget < FLANK_LOOKAHEAD * 0.7) return false;
+  const myX = state.rac.x[i];
+  const myY = state.rac.y[i];
+  const sx = (tgtX - myX) / distToTarget;
+  const sy = (tgtY - myY) / distToTarget;
+  const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
+  const probeX = myX + sx * FLANK_LOOKAHEAD;
+  const probeY = myY + sy * FLANK_LOOKAHEAD;
+  const dens = sampleField(fields, fields.density[enemyCh], probeX, probeY);
+  return dens > FLANK_BLOCKED_DENSITY;
+}
 
 export function motionTick(state: BattleState, content: ContentBundle, log: Logger): void {
   void content;
@@ -136,8 +188,25 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       let next = state.rac.behavior[i];
       if (broken) {
         next = BEHAVIOR_ROUT;
+      } else if (
+        role === ROLE_ARCHER &&
+        tgtFound &&
+        distToTarget <= state.rac.effRange[i] * ARCHER_KITE_TRIGGER_MUL
+      ) {
+        // Archers KITE — back-pedal to maintain preferred range.
+        next = BEHAVIOR_KITE;
       } else if (tgtFound && distToTarget <= state.rac.effRange[i] * ENGAGE_BAND_MUL) {
         next = BEHAVIOR_ENGAGE;
+      } else if (
+        role === ROLE_CAVALRY &&
+        tgtFound &&
+        cavalryPathBlocked(state, i, tgtX, tgtY, distToTarget)
+      ) {
+        // Cavalry's path to target runs through a wall of enemies.
+        // Switch to FLANK — sweep around to the open wing instead of
+        // plowing in. Once clear, the next decision will return us to
+        // MARCH or ENGAGE as appropriate.
+        next = BEHAVIOR_FLANK;
       } else {
         next = BEHAVIOR_MARCH;
       }
@@ -148,11 +217,82 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const behavior = state.rac.behavior[i];
 
     // ----- Compute motion intent -----
+    // Profile lookup uses the previous tick's contact flag — stale by
+    // one tick, but contact only changes when an enemy crosses the 8m
+    // boundary, so a frame of lag is fine and avoids the chicken-and-
+    // egg with the guard scan that updates contact this tick.
+    const profile = state.rac.contact[i]
+      ? state.formationContactProfile[state.rac.owner[i]][state.rac.formationIdx[i]]
+      : state.formationProfile[state.rac.owner[i]][state.rac.formationIdx[i]];
     let desiredVx = 0;
     let desiredVy = 0;
     const maxV = state.rac.effSpeed[i];
 
-    if (behavior === BEHAVIOR_ROUT) {
+    if (behavior === BEHAVIOR_FLANK) {
+      // Cavalry flank: aim for a point laterally OFFSET from the
+      // target so the path goes around the enemy line, not through it.
+      // Pick the side with lower enemy density at 1× and 2× lookahead
+      // (samples past the line edge for long lines). Once cavalry is
+      // around the line, the next decision will revert to MARCH or
+      // ENGAGE as the path becomes clear.
+      if (tgtFound) {
+        const seekLen = distToTarget;
+        if (seekLen > 1e-3) {
+          const sx = (tgtX - myX) / seekLen;
+          const sy = (tgtY - myY) / seekLen;
+          const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
+          const perpX = -sy;
+          const perpY = sx;
+          const la = FLANK_LOOKAHEAD;
+          const probeX = myX + sx * la;
+          const probeY = myY + sy * la;
+          const dL =
+            sampleField(fields, fields.density[enemyCh], probeX + perpX * la, probeY + perpY * la) +
+            sampleField(fields, fields.density[enemyCh], probeX + perpX * la * 2, probeY + perpY * la * 2) * 0.5;
+          const dR =
+            sampleField(fields, fields.density[enemyCh], probeX - perpX * la, probeY - perpY * la) +
+            sampleField(fields, fields.density[enemyCh], probeX - perpX * la * 2, probeY - perpY * la * 2) * 0.5;
+          const sign = dL <= dR ? 1 : -1;
+          // Aim PAST the target on the open-wing side. Cavalry threads
+          // the gap and ends up flanking.
+          const aimX = tgtX + perpX * sign * FLANK_OFFSET;
+          const aimY = tgtY + perpY * sign * FLANK_OFFSET;
+          const dx = aimX - myX;
+          const dy = aimY - myY;
+          const d = Math.hypot(dx, dy);
+          if (d > 1e-3) {
+            desiredVx = (dx / d) * maxV;
+            desiredVy = (dy / d) * maxV;
+          }
+        }
+      }
+    } else if (behavior === BEHAVIOR_KITE) {
+      // Archer kite: maintain preferred distance from target. Outside
+      // band → walk toward (close to attack range). Inside band →
+      // back-pedal (open distance). In band → settle (vel = 0). The
+      // deadband stops the archer from oscillating across the boundary
+      // every tick.
+      if (tgtFound) {
+        const kiteFrac = profile.archerKiteFraction || 0.7;
+        const preferred = state.rac.effRange[i] * kiteFrac;
+        const d = distToTarget;
+        if (d > 1e-3) {
+          const ux = (tgtX - myX) / d;
+          const uy = (tgtY - myY) / d;
+          if (d > preferred * (1 + KITE_DEADBAND)) {
+            // too far → close
+            desiredVx = ux * maxV;
+            desiredVy = uy * maxV;
+          } else if (d < preferred * (1 - KITE_DEADBAND)) {
+            // too close → back-pedal slightly faster than march
+            desiredVx = -ux * maxV;
+            desiredVy = -uy * maxV;
+          }
+          // else: in band, hold (desired = 0). Combat fires when the
+          // attack cooldown allows.
+        }
+      }
+    } else if (behavior === BEHAVIOR_ROUT) {
       // Flee from nearest enemy. We don't have a precomputed nearest-
       // enemy field on the rac, so use the spatial grid. If no enemy
       // visible, flee away from the current target if known, else hold.
@@ -183,19 +323,38 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         desiredVy = (dy / d) * speed;
       }
     } else if (behavior === BEHAVIOR_ENGAGE) {
-      // Hold at attack range. If target is found and we're within
-      // effRange, vel = 0. If outside, walk toward target.
-      if (tgtFound && distToTarget > state.rac.effRange[i]) {
-        const dx = tgtX - myX;
-        const dy = tgtY - myY;
-        const d = distToTarget;
-        if (d > 1e-3) {
-          desiredVx = (dx / d) * maxV;
-          desiredVy = (dy / d) * maxV;
+      if (tgtFound) {
+        if (role === ROLE_CAVALRY) {
+          // Cavalry OVERRUN: don't stop in melee — aim PAST the target
+          // so they charge through. Combat fires as they pass through
+          // attack range. This is what makes cavalry cavalry: they
+          // hit hard at speed and don't grind to a halt the moment
+          // they touch enemies. Without this, "engage" was a brake
+          // that erased the entire role identity.
+          const d = distToTarget;
+          if (d > 1e-3) {
+            const ux = (tgtX - myX) / d;
+            const uy = (tgtY - myY) / d;
+            const aheadX = tgtX + ux * CAVALRY_OVERSHOOT;
+            const aheadY = tgtY + uy * CAVALRY_OVERSHOOT;
+            const ax = aheadX - myX;
+            const ay = aheadY - myY;
+            const ad = Math.hypot(ax, ay);
+            if (ad > 1e-3) {
+              desiredVx = (ax / ad) * maxV;
+              desiredVy = (ay / ad) * maxV;
+            }
+          }
+        } else if (distToTarget > state.rac.effRange[i]) {
+          // Tank / infantry / archer: walk to attack range, then hold.
+          const d = distToTarget;
+          if (d > 1e-3) {
+            desiredVx = ((tgtX - myX) / d) * maxV;
+            desiredVy = ((tgtY - myY) / d) * maxV;
+          }
         }
+        // else: hold position. Combat applies damage on its schedule.
       }
-      // else: hold (desired = 0). Combat applies damage on its own
-      // schedule.
     } else {
       // BEHAVIOR_MARCH
       // Infantry follower with a live leader: slot-direct steering.
@@ -291,11 +450,15 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // damage. Read here from the field rather than the neighbor count
     // so phalanx rear-rank protection still benefits from rolling
     // density (a tight 6×8 block has ~5+ friends in the kernel).
-    const profile = state.rac.contact[i]
+    // Note: state.rac.contact[i] was just updated by the guard scan
+    // above, so this picks up THIS tick's contact mode for the support
+    // calculation — different from the motion-intent profile higher
+    // up which uses last tick's flag.
+    const supportProfile = state.rac.contact[i]
       ? state.formationContactProfile[state.rac.owner[i]][state.rac.formationIdx[i]]
       : state.formationProfile[state.rac.owner[i]][state.rac.formationIdx[i]];
-    const supportMax = profile.supportBonusMax;
-    const supportFullAt = profile.supportBonusFullAt;
+    const supportMax = supportProfile.supportBonusMax;
+    const supportFullAt = supportProfile.supportBonusFullAt;
     let dmgMul = 1;
     if (supportMax > 0 && supportFullAt > 0) {
       const myCh = state.rac.owner[i] === 0 ? 0 : 1;

@@ -67,7 +67,10 @@ export interface RacFrame {
   isLeader: boolean;
   morale: number;
   broken: boolean;
-  /** Per-component forces captured by boidsTick (12 floats). */
+  /** Behavior state — 0=march, 1=engage, 2=rout, 3=kite, 4=flank. */
+  behavior: number;
+  /** Per-component forces captured by boidsTick (12 floats). Will be
+   *  zero-filled in the new motion pipeline (forces aren't computed). */
   forces: Float32Array;
 }
 
@@ -170,6 +173,7 @@ function snapshotFrame(state: ReturnType<typeof setupShapeBattle>, dbg: Float32A
       broken:
         state.rac.morale[i] <
         (MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD),
+      behavior: state.rac.behavior[i],
       forces: f,
     });
   }

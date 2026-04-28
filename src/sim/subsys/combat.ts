@@ -14,6 +14,7 @@ import type { Logger } from "../log.js";
 import {
   CASUALTY_SHOCK,
   CASUALTY_SHOCK_RADIUS,
+  CAVALRY_CHARGE_BONUS_MAX,
   FORMATION_FRONTAL_DAMAGE_MUL,
   FORMATION_FRONTAL_DEFENSE_MUL,
   FORMATION_FRONTAL_HALF_CONE,
@@ -293,12 +294,29 @@ export function applyRacDamage(
     const sv = DOCTRINE_KNOBS.phalanxShieldVsProjectile;
     if (sv > 0 && Number.isFinite(sv)) taken *= 1 - Math.min(0.95, sv);
   }
+  // Cavalry charge bonus: damage scales with attacker's CURRENT speed
+  // vs its base — a cavalry rac that's stopped is just slow infantry,
+  // a cavalry rac at full charge hits 2× harder. Applies to basic
+  // melee only (projectiles have their own dynamics). The role check
+  // makes this purely a cavalry identity — other roles get nothing
+  // from running into combat.
+  let attackMul = 1;
+  if (
+    source === "basic" &&
+    srcRow >= 0 &&
+    state.rac.alive[srcRow] &&
+    state.rac.role[srcRow] === ROLE_CAVALRY
+  ) {
+    const speed = Math.hypot(state.rac.vx[srcRow], state.rac.vy[srcRow]);
+    const base = state.rac.effSpeed[srcRow];
+    const ratio = base > 0 ? Math.min(1, speed / base) : 0;
+    attackMul *= 1 + CAVALRY_CHARGE_BONUS_MAX * ratio;
+  }
   // In-formation frontal bonus: a rac in slot attacking the front of
   // its target hits harder; a rac in slot attacked from its front
   // takes less damage. Flank/rear bypasses the defense bonus (no
   // shield over there). Skips for ranged sources — projectile damage
   // already has its own modifiers.
-  let attackMul = 1;
   if (
     source === "basic" &&
     srcRow >= 0 &&

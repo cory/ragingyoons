@@ -457,13 +457,21 @@ function Legend() {
     </div>
   );
 }
-function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; forces: Float32Array } }) {
+const BEHAVIOR_LABEL = ["march", "engage", "rout", "kite", "flank"];
+const BEHAVIOR_COLOR = ["#9cf", "#fc6", "#f88", "#bef", "#fbd"];
+
+function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number; forces: Float32Array } }) {
   const { forces } = rac;
   const speed = Math.hypot(rac.vx, rac.vy);
   return (
     <div style={{ position: "absolute", right: 8, top: 8, background: "#000c", padding: 8, borderRadius: 3, fontSize: 11, color: "#ddd", minWidth: 200 }}>
       <div>
         rac #{rac.id} {rac.isLeader ? <span style={{ color: "#fc6" }}>[leader]</span> : null} {rac.contact ? "[contact]" : ""} {rac.broken ? <span style={{ color: "#f88" }}>[broken]</span> : null}
+      </div>
+      <div>
+        state <span style={{ color: BEHAVIOR_COLOR[rac.behavior] ?? "#ddd" }}>
+          {BEHAVIOR_LABEL[rac.behavior] ?? "?"}
+        </span>
       </div>
       <div style={{ color: "#888" }}>squad {rac.squadId} → leader #{rac.squadLeaderId}</div>
       <div style={{ color: "#888" }}>

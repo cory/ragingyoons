@@ -181,7 +181,13 @@ export const DEFAULT_CAVALRY: TacticProfile = {
   targetSeekK: 4.5,
   speedMul: 1.4, // mounted / fast
   archerKiteFraction: 0,
-  inertiaBlend: 0,
+  // Cavalry has heft — they don't snap-redirect. The 0.5 inertia blend
+  // gives a wider turning radius so a charge commits to its line for
+  // about half a second before pivoting. Without it, the new motion
+  // pipeline lets cavalry pirouette every tick and "speed attacks" as
+  // an advantage stops mattering. Tanks already use 0.5 for the same
+  // reason.
+  inertiaBlend: 0.5,
   targetRethinkTicks: 4,
   adjacentRange: 1.5,
   infantryRagePerSec: 0,
