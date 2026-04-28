@@ -350,12 +350,21 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
             break;
           }
         }
-        // Aim cavalry at a point one step past the edge — so they
-        // commit to clearing the formation, not just touching its edge.
-        const aimX = lineX + perpX * sign * edgeAt;
-        const aimY = lineY + perpY * sign * edgeAt;
+        // Aim cavalry at a PURELY LATERAL point relative to its
+        // CURRENT position — same lateral offset that the line-anchored
+        // probe found (edgeAt). Without this the aim point sits AT the
+        // line position laterally offset; the vector from a distant
+        // cavalry rac to that aim was mostly forward (into the line)
+        // with a tiny lateral kick. Anchoring the aim on cavalry's
+        // current position turns the steering into a pure perpendicular
+        // sweep — cavalry goes sideways until clear of the line, then
+        // FLANK exits and MARCH re-engages from the flank.
+        const aimX = myX + perpX * sign * edgeAt;
+        const aimY = myY + perpY * sign * edgeAt;
         void edgeProbeX;
         void edgeProbeY;
+        void lineX;
+        void lineY;
         if (dbg && dbgBase >= 0) {
           dbg[dbgBase + FLANK_DEBUG_OFFSET.perpX] = perpX * sign;
           dbg[dbgBase + FLANK_DEBUG_OFFSET.perpY] = perpY * sign;
