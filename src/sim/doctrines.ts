@@ -533,7 +533,10 @@ export const ROLE_TIER_SIZES: Record<import("./content.js").RoleId, readonly [nu
   // a recognizable line that anchors a position.
   tank: [4, 12, 36, 108],
   archer: [8, 24, 72, 288],
-  cavalry: [8, 24, 72, 288],
+  // Cavalry squad = 16 — a substantial mounted unit (a "troop" /
+  // "ile" historically). Big enough to feel like a charge, small
+  // enough to be agile.
+  cavalry: [16, 48, 144, 432],
   infantry: [12, 36, 108, 648],
 };
 
