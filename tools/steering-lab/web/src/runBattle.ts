@@ -61,6 +61,8 @@ export interface RacFrame {
   squadId: number;
   squadLeaderId: number;
   isLeader: boolean;
+  hp: number;
+  hpMax: number;
   morale: number;
   broken: boolean;
   /** Behavior state — 0=march, 1=engage, 2=rout, 3=kite, 4=flank, 5=rally. */
@@ -175,6 +177,8 @@ function snapshotFrame(
       squadId: state.rac.squadId[i],
       squadLeaderId: leaderId,
       isLeader: leaderId === racId || leaderId < 0,
+      hp: state.rac.hp[i],
+      hpMax: state.rac.hpMax[i],
       morale: state.rac.morale[i],
       broken:
         state.rac.morale[i] <

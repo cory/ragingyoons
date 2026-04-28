@@ -41,7 +41,7 @@ interface CellConfig {
 const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
   slotTarget: false,
   velocityArrow: false,
-  flankProbes: true,
+  flankProbes: false,
   behaviorColor: false,
 };
 
@@ -391,7 +391,7 @@ const BEHAVIOR_LABEL = ["march", "engage", "rout", "kite", "flank", "rally"];
 const BEHAVIOR_COLOR = ["#9cf", "#fc6", "#f88", "#bef", "#fbd", "#cf8"];
 const STANDING_ORDER_LABEL = ["hold", "slow", "advance", "charge", "skirmish"];
 
-function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number; pinned: boolean; squadThreat: number; standingOrder: number } }) {
+function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; hp: number; hpMax: number; morale: number; broken: boolean; behavior: number; pinned: boolean; squadThreat: number; standingOrder: number } }) {
   const speed = Math.hypot(rac.vx, rac.vy);
   return (
     <div style={{ position: "absolute", right: 8, top: 8, background: "#000c", padding: 8, borderRadius: 3, fontSize: 11, color: "#ddd", minWidth: 200 }}>
@@ -406,6 +406,9 @@ function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: numb
         <span style={{ color: "#cc8" }}>{STANDING_ORDER_LABEL[rac.standingOrder] ?? "?"}</span>
       </div>
       <div style={{ color: "#888" }}>squad {rac.squadId} → leader #{rac.squadLeaderId}</div>
+      <div style={{ color: "#888" }}>
+        hp <span style={{ color: "#dfd" }}>{Math.max(0, Math.round(rac.hp))}</span>/<span>{Math.round(rac.hpMax)}</span>
+      </div>
       <div style={{ color: "#888" }}>
         morale <span style={{ color: rac.broken ? "#f88" : "#cc8" }}>{rac.morale.toFixed(2)}</span>
       </div>
@@ -568,6 +571,19 @@ function drawFrame(
       ctx.strokeStyle = "#f88";
       ctx.lineWidth = 1;
       ctx.strokeRect(px - 4.5, py - 4.5, 9, 9);
+    }
+    // HP bar: drawn above the rac when hp < hpMax. Wider racs (those
+    // with the leader/broken outline) get the bar pushed slightly
+    // higher so it doesn't overlap the ring.
+    if (r.hpMax > 0 && r.hp < r.hpMax) {
+      const frac = Math.max(0, Math.min(1, r.hp / r.hpMax));
+      const barW = 8;
+      const barH = 1.5;
+      const barY = py - 7;
+      ctx.fillStyle = "#000a";
+      ctx.fillRect(px - barW / 2 - 0.5, barY - 0.5, barW + 1, barH + 1);
+      ctx.fillStyle = frac > 0.5 ? "#7dd97d" : frac > 0.25 ? "#d9c87d" : "#d97d7d";
+      ctx.fillRect(px - barW / 2, barY, barW * frac, barH);
     }
   }
 }
