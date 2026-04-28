@@ -73,12 +73,25 @@ export function LabView() {
     loadContentFromApi()
       .then((c) => {
         setContent(c);
-        const firstUnit = [...c.units.keys()].sort()[0] ?? "";
+        // Prefer a phalanx-doctrine infantry unit as the default so
+        // the lab opens on a recognizable 48-rac block rather than
+        // whatever happens to be alphabetically first. Falls back to
+        // first unit if no phalanx unit exists in content.
+        const sorted = [...c.units.keys()].sort();
+        let pick = sorted[0] ?? "";
+        for (const id of sorted) {
+          const u = c.units.get(id);
+          if (!u) continue;
+          if (u.role === "infantry" && doctrineFor(u.environment, u.curiosity) === "phalanx") {
+            pick = id;
+            break;
+          }
+        }
         setCfg((p) => ({
           ...p,
-          blue: { ...p.blue, unitId: firstUnit },
-          red: { ...p.red, unitId: firstUnit },
-          enemyBin: firstUnit,
+          blue: { ...p.blue, unitId: pick },
+          red: { ...p.red, unitId: pick },
+          enemyBin: pick,
         }));
       })
       .catch((e) => setError(String(e)));
@@ -212,7 +225,7 @@ export function LabView() {
               unitIds={unitIds}
               formationOptions={formationOptionsFor(cfg.blue.unitId)}
               doctrine={doctrineInfoFor(cfg.blue.unitId)}
-              onChange={(s) => setCfg({ ...cfg, blue: s })}
+              onChange={(s) => setCfg({ ...cfg, blue: autoFitCount(content, cfg.blue, s) })}
             />
             <Group title="opponent">
               <Toggle
@@ -238,7 +251,7 @@ export function LabView() {
                 unitIds={unitIds}
                 formationOptions={formationOptionsFor(cfg.red.unitId)}
                 doctrine={doctrineInfoFor(cfg.red.unitId)}
-                onChange={(s) => setCfg({ ...cfg, red: s })}
+                onChange={(s) => setCfg({ ...cfg, red: autoFitCount(content, cfg.red, s) })}
               />
             )}
             <Group title="run">
@@ -306,6 +319,25 @@ export function LabView() {
 }
 
 // ---- Tiny UI primitives (lab-local; no shared design system) ----
+
+/** When the unit picker changes, auto-set count to that unit's squad
+ *  size so the cell spawns one full squad on first run. Only fires
+ *  on a unit change — leaves the user's later count edits alone. */
+function autoFitCount(
+  content: ContentBundle | null,
+  prev: SideConfig,
+  next: SideConfig,
+): SideConfig {
+  if (!content) return next;
+  if (next.unitId === prev.unitId) return next;
+  const u = content.units.get(next.unitId);
+  if (!u) return next;
+  const docId = doctrineFor(u.environment, u.curiosity);
+  const docDef = DOCTRINES.find((d) => d.id === docId);
+  if (!docDef) return next;
+  const sSize = squadSizeFor(u.role, docDef);
+  return { ...next, count: sSize, maxPlatoonSize: sSize };
+}
 
 function SidePanel(props: {
   title: string;
