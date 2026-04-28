@@ -1074,13 +1074,15 @@ export const ROUT_SPEED_MUL = 1.5;
  *  identity — a cavalry rac that has stopped is just a slow infantry. */
 export const CAVALRY_CHARGE_BONUS_MAX = 1.0;
 /** Per-role max acceleration (m/s²). Caps how fast velocity can
- *  change tick-to-tick. Cavalry has a low cap so a full-speed charger
- *  needs ~0.7 s to stop or pivot — momentum has weight. Other roles
- *  use Infinity (snap-stop OK) since their motion is already slow.
+ *  change tick-to-tick. Cavalry has a finite cap so a full-speed
+ *  charger has real momentum (can't stop on a dime), but at 8 m/s²
+ *  a 90° turn from full speed completes in ~0.4 s — visibly committing
+ *  to a line without locking heading for too long. Other roles use
+ *  Infinity (snap-stop OK) since their motion is already slow.
  *  Indexed by ROLE_TO_IDX (tank=0, archer=1, cavalry=2, infantry=3). */
 export const MAX_ACCEL_BY_ROLE: readonly number[] = [
   Infinity, // tank — already slow + 0.5 inertia blend
   Infinity, // archer
-  4.5, // cavalry: ~0.7s to reach full speed or stop
+  8, // cavalry: ~0.4 s for a 90° pivot at full speed
   Infinity, // infantry
 ];

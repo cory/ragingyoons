@@ -150,9 +150,11 @@ function cavalryShouldFlank(
   const sy = (tgtY - myY) / distToTarget;
   // Probe density at multiple distances so a far approach detects the
   // line early enough to redirect against cavalry inertia. Trip on
-  // any probe exceeding threshold — first match wins.
+  // any probe exceeding threshold — first match wins. We keep
+  // probing past the target distance because the front-rank target
+  // is just one rac; the LINE is the rest of the formation behind it,
+  // and we want to flank the line.
   for (const la of FLANK_LOOKAHEADS) {
-    if (la > distToTarget + 4) break; // don't probe past the target
     const probeX = myX + sx * la;
     const probeY = myY + sy * la;
     const dens = sampleField(fields, fields.sideDensity[enemyCh], probeX, probeY);
