@@ -132,13 +132,18 @@ const FLANK_EDGE_DENSITY = 0.05;
 const FLANK_MAX_STEPS = 8;
 
 /** Compute a predicted target position for a chasing rac so multiple
- *  pack-mates aiming at the same target spread to intercept different
- *  future positions ("herd" them). Hash of (attackerRacId, targetId)
- *  picks one of HERD_BUCKETS lookahead times — lowest-id attacker
- *  gets ≈ current position (most direct), others get progressively
- *  further-ahead intercepts based on the target's current velocity.
- *  When the target is a bin or stationary, this collapses to the
- *  target's current position (no velocity to project). */
+ *  pack-mates aiming at the same target spread across both intercept
+ *  TIMES (along the target's velocity) and intercept ANGLES (lateral
+ *  offset perpendicular to that velocity). Two independent buckets
+ *  drawn from one hash:
+ *   - time:   one of HERD_TIME_BUCKETS lookaheads at HERD_TIME_STEP s
+ *             apart. Spans 0 → HERD_TIME_BUCKETS × HERD_TIME_STEP s.
+ *   - perp:   one of HERD_PERP_BUCKETS lateral offsets, centered on 0.
+ *             Spans ±HERD_PERP_RANGE m off the target's velocity axis.
+ *  With 8 × 5 = 40 unique combinations, even a 16-rac cavalry squad
+ *  hashes to mostly distinct intercept points. Stationary targets
+ *  collapse the time component but keep a small lateral spread so
+ *  pack-mates surround a still target instead of stacking on it. */
 function herdAimPoint(
   state: BattleState,
   attackerId: number,
@@ -153,15 +158,30 @@ function herdAimPoint(
   const tvx = state.rac.vx[targetRow];
   const tvy = state.rac.vy[targetRow];
   const tid = state.rac.id[targetRow];
-  // Mix the two ids; modulo HERD_BUCKETS gives a stable per-pair
-  // bucket index in [0, HERD_BUCKETS-1]. Each bucket = HERD_STEP s
-  // of lookahead. With 4 buckets at 0.5 s, attackers spread across
-  // 0–1.5 s of intercept time.
-  const HERD_BUCKETS = 4;
-  const HERD_STEP = 0.5;
+  const HERD_TIME_BUCKETS = 8;
+  const HERD_TIME_STEP = 0.4;
+  const HERD_PERP_BUCKETS = 5;
+  const HERD_PERP_RANGE = 4;
   const hash = ((attackerId * 2654435761) ^ (tid * 0x9e3779b9)) >>> 0;
-  const t = (hash % HERD_BUCKETS) * HERD_STEP;
-  return { x: tx + tvx * t, y: ty + tvy * t };
+  const tBucket = hash % HERD_TIME_BUCKETS;
+  const pBucket = (hash >>> 3) % HERD_PERP_BUCKETS;
+  const t = tBucket * HERD_TIME_STEP;
+  // Center the perp bucket so 0 is no offset, ±extremes spread out.
+  const perp = ((pBucket - (HERD_PERP_BUCKETS - 1) * 0.5) /
+    ((HERD_PERP_BUCKETS - 1) * 0.5)) * HERD_PERP_RANGE;
+  // Perpendicular axis: rotated 90° from target velocity. For a
+  // stationary target, fall back to a world-fixed axis so attackers
+  // still spread laterally instead of all aiming at the same point.
+  const tvSpeed = Math.hypot(tvx, tvy);
+  let perpX = 0, perpY = 1;
+  if (tvSpeed > 0.1) {
+    perpX = -tvy / tvSpeed;
+    perpY = tvx / tvSpeed;
+  }
+  return {
+    x: tx + tvx * t + perpX * perp,
+    y: ty + tvy * t + perpY * perp,
+  };
 }
 
 /** Find the nearest alive friendly bin (any range). Returns row
