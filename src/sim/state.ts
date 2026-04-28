@@ -323,6 +323,11 @@ export interface BattleState {
    *  tick so visualizing a single tick frame matches what the rac
    *  actually used to move. */
   _debugForces?: Float32Array;
+  /** Built each retargeting tick by targetTick: rac id → count of
+   *  same-tick racs currently aiming at that rac. Read by the
+   *  saturation penalty in target scoring so a target with many
+   *  attackers gets deprioritized vs a less-saturated one. */
+  attackerCount?: Map<number, number>;
 }
 
 /** Force-flag identifiers — match the boid force-term names. The lab
@@ -1038,3 +1043,14 @@ export const ROUT_SPEED_MUL = 1.5;
  *  (×2 damage by default). Makes "hit them while moving" the cavalry
  *  identity — a cavalry rac that has stopped is just a slow infantry. */
 export const CAVALRY_CHARGE_BONUS_MAX = 1.0;
+/** Per-role max acceleration (m/s²). Caps how fast velocity can
+ *  change tick-to-tick. Cavalry has a low cap so a full-speed charger
+ *  needs ~0.7 s to stop or pivot — momentum has weight. Other roles
+ *  use Infinity (snap-stop OK) since their motion is already slow.
+ *  Indexed by ROLE_TO_IDX (tank=0, archer=1, cavalry=2, infantry=3). */
+export const MAX_ACCEL_BY_ROLE: readonly number[] = [
+  Infinity, // tank — already slow + 0.5 inertia blend
+  Infinity, // archer
+  4.5, // cavalry: ~0.7s to reach full speed or stop
+  Infinity, // infantry
+];

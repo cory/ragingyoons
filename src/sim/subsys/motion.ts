@@ -40,6 +40,7 @@ import {
   BEHAVIOR_KITE,
   BEHAVIOR_MARCH,
   BEHAVIOR_ROUT,
+  MAX_ACCEL_BY_ROLE,
   MORALE_BREAK_THRESHOLD,
   MORALE_BREAK_THRESHOLD_BY_ENV,
   ROUT_SPEED_MUL,
@@ -91,19 +92,30 @@ const KITE_DEADBAND = 0.1;
 /** Cavalry flank lookahead — how far ahead along the seek direction
  *  we sample enemy density to decide whether the path is blocked. */
 const FLANK_LOOKAHEAD = 14;
-/** Enemy density threshold (per-side density field) above which we
- *  consider the path blocked and switch cavalry to FLANK. */
-const FLANK_BLOCKED_DENSITY = 0.6;
-/** How far past the target we aim the flank route — pulls cavalry
- *  laterally PAST the enemy line so they end up on the open wing. */
-const FLANK_OFFSET = 24;
+/** Enemy density threshold (per-side density field) above which the
+ *  path is considered blocked. The field cell is 4 m and bilinear
+ *  splat means a single rac contributes ≤ 0.25 to one cell, so 0.4
+ *  triggers on ~2 stacked enemies — the front rank of a phalanx. */
+const FLANK_BLOCKED_DENSITY = 0.4;
+/** Local-pin threshold: enemy density AT THE CAVALRY POSITION above
+ *  which we're already in the brawl and need to flank our way out
+ *  rather than charge further in. Lower than the lookahead threshold
+ *  because being inside one cell of the line is enough. */
+const FLANK_PINNED_DENSITY = 0.3;
+/** Step size for the density-gradient finite difference (meters).
+ *  One cell = 4 m, so half a cell is enough resolution. */
+const FLANK_GRAD_H = 2;
 
-/** Does the cavalry rac's path to target run through a wall of
- *  enemies? Sample enemy density at FLANK_LOOKAHEAD m ahead along
- *  the seek direction; if it's above the threshold, the path is
- *  blocked and we should FLANK instead of MARCH. Used by the
- *  decision rule. */
-function cavalryPathBlocked(
+/** Should this cavalry rac flank? Two cases:
+ *   1. PINNED: enemy density at cavalry's own position is high — it's
+ *      already in the brawl, surrounded by line infantry, and needs
+ *      to sweep out laterally rather than push deeper. This is the
+ *      case the user reported ("smashes into the line and sticks").
+ *   2. PATH BLOCKED: enemy density at lookahead is high while we're
+ *      still some distance off — preemptively divert so we don't
+ *      stick. Same threshold, just a different probe location.
+ *  Either case → FLANK. */
+function cavalryShouldFlank(
   state: BattleState,
   i: number,
   tgtX: number,
@@ -112,19 +124,18 @@ function cavalryPathBlocked(
 ): boolean {
   const fields = state._boidFields;
   if (!fields) return false;
-  if (distToTarget < 1e-3) return false;
-  // Don't bother flanking when we're already past the line / close
-  // to target — engage takes over there.
-  if (distToTarget < FLANK_LOOKAHEAD * 0.7) return false;
+  const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
   const myX = state.rac.x[i];
   const myY = state.rac.y[i];
+  const localDens = sampleField(fields, fields.density[enemyCh], myX, myY);
+  if (localDens > FLANK_PINNED_DENSITY) return true;
+  if (distToTarget < 1e-3) return false;
   const sx = (tgtX - myX) / distToTarget;
   const sy = (tgtY - myY) / distToTarget;
-  const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
   const probeX = myX + sx * FLANK_LOOKAHEAD;
   const probeY = myY + sy * FLANK_LOOKAHEAD;
-  const dens = sampleField(fields, fields.density[enemyCh], probeX, probeY);
-  return dens > FLANK_BLOCKED_DENSITY;
+  const aheadDens = sampleField(fields, fields.density[enemyCh], probeX, probeY);
+  return aheadDens > FLANK_BLOCKED_DENSITY;
 }
 
 export function motionTick(state: BattleState, content: ContentBundle, log: Logger): void {
@@ -189,24 +200,23 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       if (broken) {
         next = BEHAVIOR_ROUT;
       } else if (
+        role === ROLE_CAVALRY &&
+        tgtFound &&
+        cavalryShouldFlank(state, i, tgtX, tgtY, distToTarget)
+      ) {
+        // Cavalry FLANK takes priority over engage — if we're pinned
+        // or our path is blocked, sweep out laterally first. Otherwise
+        // cavalry that walks into the brawl flips to ENGAGE-overrun
+        // and just plows further in.
+        next = BEHAVIOR_FLANK;
+      } else if (
         role === ROLE_ARCHER &&
         tgtFound &&
         distToTarget <= state.rac.effRange[i] * ARCHER_KITE_TRIGGER_MUL
       ) {
-        // Archers KITE — back-pedal to maintain preferred range.
         next = BEHAVIOR_KITE;
       } else if (tgtFound && distToTarget <= state.rac.effRange[i] * ENGAGE_BAND_MUL) {
         next = BEHAVIOR_ENGAGE;
-      } else if (
-        role === ROLE_CAVALRY &&
-        tgtFound &&
-        cavalryPathBlocked(state, i, tgtX, tgtY, distToTarget)
-      ) {
-        // Cavalry's path to target runs through a wall of enemies.
-        // Switch to FLANK — sweep around to the open wing instead of
-        // plowing in. Once clear, the next decision will return us to
-        // MARCH or ENGAGE as appropriate.
-        next = BEHAVIOR_FLANK;
       } else {
         next = BEHAVIOR_MARCH;
       }
@@ -229,42 +239,44 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const maxV = state.rac.effSpeed[i];
 
     if (behavior === BEHAVIOR_FLANK) {
-      // Cavalry flank: aim for a point laterally OFFSET from the
-      // target so the path goes around the enemy line, not through it.
-      // Pick the side with lower enemy density at 1× and 2× lookahead
-      // (samples past the line edge for long lines). Once cavalry is
-      // around the line, the next decision will revert to MARCH or
-      // ENGAGE as the path becomes clear.
-      if (tgtFound) {
-        const seekLen = distToTarget;
-        if (seekLen > 1e-3) {
-          const sx = (tgtX - myX) / seekLen;
-          const sy = (tgtY - myY) / seekLen;
-          const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
-          const perpX = -sy;
-          const perpY = sx;
-          const la = FLANK_LOOKAHEAD;
-          const probeX = myX + sx * la;
-          const probeY = myY + sy * la;
-          const dL =
-            sampleField(fields, fields.density[enemyCh], probeX + perpX * la, probeY + perpY * la) +
-            sampleField(fields, fields.density[enemyCh], probeX + perpX * la * 2, probeY + perpY * la * 2) * 0.5;
-          const dR =
-            sampleField(fields, fields.density[enemyCh], probeX - perpX * la, probeY - perpY * la) +
-            sampleField(fields, fields.density[enemyCh], probeX - perpX * la * 2, probeY - perpY * la * 2) * 0.5;
-          const sign = dL <= dR ? 1 : -1;
-          // Aim PAST the target on the open-wing side. Cavalry threads
-          // the gap and ends up flanking.
-          const aimX = tgtX + perpX * sign * FLANK_OFFSET;
-          const aimY = tgtY + perpY * sign * FLANK_OFFSET;
-          const dx = aimX - myX;
-          const dy = aimY - myY;
-          const d = Math.hypot(dx, dy);
-          if (d > 1e-3) {
-            desiredVx = (dx / d) * maxV;
-            desiredVy = (dy / d) * maxV;
-          }
+      // Cavalry flank — sweep ALONG the local enemy line edge. The
+      // enemy-density gradient at cavalry's position points INTO the
+      // line; perpendicular to the gradient is along the line. Pick
+      // the perpendicular direction that has the most forward bias
+      // toward the target (so we drift toward the open wing rather
+      // than away from the fight). Result: a cavalry rac stuck in
+      // melee against a phalanx slides sideways out of the line,
+      // arrives at the flank, then exits FLANK as density drops and
+      // re-enters MARCH/ENGAGE from a new angle.
+      const enemyCh = state.rac.owner[i] === 0 ? 1 : 0;
+      const h = FLANK_GRAD_H;
+      const dxDens =
+        sampleField(fields, fields.density[enemyCh], myX + h, myY) -
+        sampleField(fields, fields.density[enemyCh], myX - h, myY);
+      const dyDens =
+        sampleField(fields, fields.density[enemyCh], myX, myY + h) -
+        sampleField(fields, fields.density[enemyCh], myX, myY - h);
+      const gMag = Math.hypot(dxDens, dyDens);
+      if (gMag > 1e-3) {
+        const perpX = -dyDens / gMag;
+        const perpY = dxDens / gMag;
+        let fwdBias = 0;
+        if (tgtFound && distToTarget > 1e-3) {
+          fwdBias =
+            (perpX * (tgtX - myX) + perpY * (tgtY - myY)) / distToTarget;
         }
+        const sign = fwdBias >= 0 ? 1 : -1;
+        // Pure lateral move — no forward component, otherwise cavalry
+        // would drift back into the line. Once we're around the edge
+        // and density drops, the next decision flips back to MARCH.
+        desiredVx = perpX * sign * maxV;
+        desiredVy = perpY * sign * maxV;
+      } else if (tgtFound && distToTarget > 1e-3) {
+        // No gradient (no enemies near us) — we're already past the
+        // line. Aim at target; the next decision will switch us out
+        // of FLANK on the cadence tick.
+        desiredVx = ((tgtX - myX) / distToTarget) * maxV;
+        desiredVy = ((tgtY - myY) / distToTarget) * maxV;
       }
     } else if (behavior === BEHAVIOR_KITE) {
       // Archer kite: maintain preferred distance from target. Outside
@@ -487,6 +499,21 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       if (m > maxV) {
         newVx = (newVx / m) * maxV;
         newVy = (newVy / m) * maxV;
+      }
+    }
+    // Per-role acceleration cap: clamp how much velocity can CHANGE
+    // tick-to-tick. Cavalry is the only role with a finite cap so a
+    // full-speed charger has real momentum (can't stop on a dime,
+    // can't pivot 180°). Other roles use Infinity (no cap).
+    const maxAccel = MAX_ACCEL_BY_ROLE[role] ?? Infinity;
+    if (Number.isFinite(maxAccel)) {
+      const dvx = newVx - myVx;
+      const dvy = newVy - myVy;
+      const dvMag = Math.hypot(dvx, dvy);
+      const maxDeltaV = maxAccel * dt;
+      if (dvMag > maxDeltaV) {
+        newVx = myVx + (dvx / dvMag) * maxDeltaV;
+        newVy = myVy + (dvy / dvMag) * maxDeltaV;
       }
     }
     state.rac.vx[i] = newVx;

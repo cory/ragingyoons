@@ -53,6 +53,13 @@ export const ROLE_AFFINITY: number[][] = [
 /** Bonus weight on (1/d²) for low-HP targets — encourages finishing
  *  wounded enemies. score *= (1 + LOW_HP_BONUS × (1 − hpFrac)). */
 const LOW_HP_BONUS = 0.5;
+/** Target-spread saturation. score /= (1 + this × current_attackers).
+ *  Encourages racs to spread across enemies instead of all six piling
+ *  on the same target while the next one stands untouched. With 0.3:
+ *  1 attacker → score × 0.77; 4 attackers → × 0.45. Modest enough
+ *  that a much-closer-saturated target still wins over a much-farther
+ *  uncontested one — distance still dominates. */
+const TARGET_SATURATION_K = 0.3;
 
 export function targetTick(state: BattleState, content: ContentBundle, log: Logger): void {
   void content;
@@ -65,6 +72,19 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
 
   const n = state.rac.count;
   const m = state.bin.count;
+
+  // Pre-compute attacker counts so the inner scoring loop can apply
+  // a saturation penalty (TARGET_SATURATION_K). One pass; reused for
+  // every retargeting rac in this tick.
+  const attackerCount = new Map<number, number>();
+  for (let j = 0; j < n; j++) {
+    if (!state.rac.alive[j]) continue;
+    if (state.rac.targetKind[j] !== TARGET_KIND_RAC) continue;
+    const tid = state.rac.targetId[j];
+    if (tid < 0) continue;
+    attackerCount.set(tid, (attackerCount.get(tid) ?? 0) + 1);
+  }
+  state.attackerCount = attackerCount;
   // Iterate via the per-tick shuffled permutation so retarget order
   // doesn't systematically favor lower-row (= side-0) racs.
   const order = state._tickIterOrder;
@@ -114,14 +134,16 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     }
 
     // Find best enemy raccoon by SCORE (not just nearest). Score
-    // combines proximity (1/d²), role affinity (counter-picks), and
-    // a low-HP finishing bonus. Cavalry seeks squishy archers,
-    // archers counter-snipe other archers, etc.
+    // combines proximity (1/d²), role affinity (counter-picks), a
+    // low-HP finishing bonus, and a saturation penalty so racs spread
+    // out across targets instead of all piling on the same enemy
+    // while the next one stands untouched.
     const myRole = state.rac.role[i];
     const affRow = ROLE_AFFINITY[myRole];
     let bestRacId = -1;
     let bestRacScore = -Infinity;
-    let bestRacD2 = Infinity; // tracked for the rac_target distance log field
+    let bestRacD2 = Infinity;
+    const myCurTargetId = curKind === TARGET_KIND_RAC ? curId : -1;
     for (let j = 0; j < n; j++) {
       if (j === i) continue;
       if (!state.rac.alive[j]) continue;
@@ -129,13 +151,20 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
       const dx = state.rac.x[j] - myX;
       const dy = state.rac.y[j] - myY;
       const d2 = dx * dx + dy * dy;
-      if (d2 < 1) continue; // basically self / ~touching, skip the singular
+      if (d2 < 1) continue;
       const tgtRole = state.rac.role[j];
       const affinity = affRow[tgtRole];
       const hpFrac = state.rac.hpMax[j] > 0 ? state.rac.hp[j] / state.rac.hpMax[j] : 1;
       const lowHpBoost = 1 + LOW_HP_BONUS * (1 - Math.max(0, Math.min(1, hpFrac)));
-      const score = (affinity * lowHpBoost) / d2;
       const id = state.rac.id[j];
+      // Saturation penalty: count how many other racs are currently
+      // attacking this enemy. A target with N attackers gets its
+      // score divided by (1 + K × N). Self-targeting doesn't count
+      // (we're about to retarget anyway).
+      let attackers = state.attackerCount?.get(id) ?? 0;
+      if (id === myCurTargetId && attackers > 0) attackers -= 1;
+      const saturationPenalty = 1 / (1 + TARGET_SATURATION_K * attackers);
+      const score = (affinity * lowHpBoost * saturationPenalty) / d2;
       if (score > bestRacScore || (score === bestRacScore && id < bestRacId)) {
         bestRacScore = score;
         bestRacId = id;
