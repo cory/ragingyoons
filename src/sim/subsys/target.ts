@@ -54,12 +54,27 @@ export const ROLE_AFFINITY: number[][] = [
  *  wounded enemies. score *= (1 + LOW_HP_BONUS × (1 − hpFrac)). */
 const LOW_HP_BONUS = 0.5;
 /** Target-spread saturation. score /= (1 + this × current_attackers).
- *  Encourages racs to spread across enemies instead of all six piling
- *  on the same target while the next one stands untouched. With 0.3:
- *  1 attacker → score × 0.77; 4 attackers → × 0.45. Modest enough
- *  that a much-closer-saturated target still wins over a much-farther
- *  uncontested one — distance still dominates. */
+ *  Encourages racs to spread across enemies for OUT-OF-RANGE targets
+ *  (so the squad doesn't redundantly march on the same enemy while
+ *  the next one stands untouched). For IN-RANGE targets the penalty
+ *  is skipped — once a unit is within attack range we WANT every
+ *  free shooter to dump on it before it can hurt anyone (see
+ *  `concentrateInRange` block). */
 const TARGET_SATURATION_K = 0.3;
+/** DPS scoring weight. Multiplies score by (1 + this × normalizedDPS)
+ *  where DPS = effDamage × effAttackRate. Scales the score — a
+ *  high-damage enemy is "more important to kill first" than a low-
+ *  damage one of the same range. Without normalization the units
+ *  vary wildly across the cards (5 dps to 50 dps), so we rough-
+ *  normalize to a 0–1 range using DPS_NORM_MAX. */
+const DPS_BONUS = 1.0;
+const DPS_NORM_MAX = 50;
+/** Bin-defense bonus: an enemy within this radius of any FRIENDLY
+ *  bin scores as if it were 4× closer (score × DEFENSE_MUL). Lets
+ *  cavalry / infantry turn back to defend rather than chase a
+ *  distant target while the bin is dying. */
+const BIN_DEFENSE_RADIUS = 20;
+const BIN_DEFENSE_MUL = 4;
 
 export function targetTick(state: BattleState, content: ContentBundle, log: Logger): void {
   void content;
@@ -133,12 +148,19 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
       }
     }
 
-    // Find best enemy raccoon by SCORE (not just nearest). Score
-    // combines proximity (1/d²), role affinity (counter-picks), a
-    // low-HP finishing bonus, and a saturation penalty so racs spread
-    // out across targets instead of all piling on the same enemy
-    // while the next one stands untouched.
+    // Find best enemy raccoon by SCORE. Score factors:
+    //  - 1/d² (closer = better)
+    //  - role affinity (counter-picks)
+    //  - low-HP finishing bonus
+    //  - DPS bonus (high-damage enemies prioritized)
+    //  - in-range concentrate (no saturation penalty when the target
+    //    is already in our attack range — pile on)
+    //  - out-of-range spread (saturation penalty so the squad doesn't
+    //    redundantly march on the same enemy)
+    //  - bin defense (enemy near any of OUR bins scores ×4)
     const myRole = state.rac.role[i];
+    const myEffRange = state.rac.effRange[i];
+    const myEffRange2 = myEffRange * myEffRange;
     const affRow = ROLE_AFFINITY[myRole];
     let bestRacId = -1;
     let bestRacScore = -Infinity;
@@ -157,14 +179,35 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
       const hpFrac = state.rac.hpMax[j] > 0 ? state.rac.hp[j] / state.rac.hpMax[j] : 1;
       const lowHpBoost = 1 + LOW_HP_BONUS * (1 - Math.max(0, Math.min(1, hpFrac)));
       const id = state.rac.id[j];
-      // Saturation penalty: count how many other racs are currently
-      // attacking this enemy. A target with N attackers gets its
-      // score divided by (1 + K × N). Self-targeting doesn't count
-      // (we're about to retarget anyway).
-      let attackers = state.attackerCount?.get(id) ?? 0;
-      if (id === myCurTargetId && attackers > 0) attackers -= 1;
-      const saturationPenalty = 1 / (1 + TARGET_SATURATION_K * attackers);
-      const score = (affinity * lowHpBoost * saturationPenalty) / d2;
+      // DPS bonus: prioritize high-damage targets. Score × (1 + K × dpsNorm).
+      const tgtDps = state.rac.effDamage[j] * state.rac.effAttackRate[j];
+      const dpsBoost = 1 + DPS_BONUS * Math.min(1, tgtDps / DPS_NORM_MAX);
+      // Saturation: only penalize OUT-OF-RANGE targets. In range we
+      // want everyone shooting the same enemy until it dies.
+      const inRange = d2 <= myEffRange2;
+      let saturationPenalty = 1;
+      if (!inRange) {
+        let attackers = state.attackerCount?.get(id) ?? 0;
+        if (id === myCurTargetId && attackers > 0) attackers -= 1;
+        saturationPenalty = 1 / (1 + TARGET_SATURATION_K * attackers);
+      }
+      // Bin defense: if this enemy is within BIN_DEFENSE_RADIUS of
+      // any of our bins, treat them as a high-priority threat — they
+      // need to die before they reach the bin.
+      let defenseMul = 1;
+      const defR2 = BIN_DEFENSE_RADIUS * BIN_DEFENSE_RADIUS;
+      for (let k = 0; k < m; k++) {
+        if (!state.bin.alive[k]) continue;
+        if (state.bin.owner[k] !== myOwner) continue;
+        const bdx = state.rac.x[j] - state.bin.x[k];
+        const bdy = state.rac.y[j] - state.bin.y[k];
+        if (bdx * bdx + bdy * bdy < defR2) {
+          defenseMul = BIN_DEFENSE_MUL;
+          break;
+        }
+      }
+      const score =
+        (affinity * lowHpBoost * dpsBoost * saturationPenalty * defenseMul) / d2;
       if (score > bestRacScore || (score === bestRacScore && id < bestRacId)) {
         bestRacScore = score;
         bestRacId = id;

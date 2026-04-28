@@ -29,7 +29,7 @@
  */
 
 import type { ContentBundle } from "../content.js";
-import { ROLE_ARCHER, ROLE_CAVALRY, ROLE_INFANTRY } from "../content.js";
+import { ROLE_ARCHER, ROLE_CAVALRY, ROLE_INFANTRY, ROLE_TANK } from "../content.js";
 import {
   STANDING_ORDER_IDX_CHARGE,
   STANDING_ORDER_IDX_HOLD,
@@ -628,10 +628,13 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       const marchSpeedMul =
         order === STANDING_ORDER_IDX_SLOW ? 0.5 : 1;
       const marchMaxV = maxV * marchSpeedMul;
-      // Infantry follower with a live leader: slot-direct steering.
-      // Aim at the predicted (leader.pos + leader.vel × dt + slot) so
-      // a moving leader doesn't leave the squad behind.
-      const usesFormation = role === ROLE_INFANTRY;
+      // Infantry / tank follower with a live leader: slot-direct
+      // steering. Aim at the predicted (leader.pos + leader.vel × dt
+      // + slot) so a moving leader doesn't leave the squad behind.
+      // Tanks form lateral lines this way; archers + cavalry stay
+      // exempt so kite + flank can fire without slot-pull fighting
+      // them.
+      const usesFormation = role === ROLE_INFANTRY || role === ROLE_TANK;
       if (usesFormation && !isLeader && leaderAlive) {
         const lx = state.rac.x[leaderRow];
         const ly = state.rac.y[leaderRow];
@@ -808,13 +811,13 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       state.rac.facing[i] = Math.atan2(newVy, newVx);
     }
 
-    // inFormation flag: infantry follower at slot, not broken. Read
-    // by combat for the frontal damage/defense bonus. Independent of
-    // behavior — if you're at your slot, you're in formation, even
+    // inFormation flag: infantry / tank follower at slot, not broken.
+    // Read by combat for the frontal damage/defense bonus. Independent
+    // of behavior — if you're at your slot, you're in formation, even
     // if you're currently in engage state.
     let inFormation = 0;
     if (
-      role === ROLE_INFANTRY &&
+      (role === ROLE_INFANTRY || role === ROLE_TANK) &&
       !isLeader &&
       leaderAlive &&
       !broken

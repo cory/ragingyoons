@@ -527,7 +527,11 @@ export const STANDING_ORDER_IDX_SKIRMISH = 4;
  *  v0 only consumes the squad size (tier 0). Platoon and beyond are
  *  reserved for the next slice. */
 export const ROLE_TIER_SIZES: Record<import("./content.js").RoleId, readonly [number, number, number, number]> = {
-  tank: [1, 4, 12, 36],
+  // Tank tier 0 = 4 so tanks form a small line abreast (one squad =
+  // one rank of 4 tanks with a leader-driven slot-direct formation).
+  // Solo tanks looked like wandering individuals; 4-tank squads form
+  // a recognizable line that anchors a position.
+  tank: [4, 12, 36, 108],
   archer: [8, 24, 72, 288],
   cavalry: [8, 24, 72, 288],
   infantry: [12, 36, 108, 648],
