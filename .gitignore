@@ -8,3 +8,7 @@ dist/
 # Sim observability output (NDJSON event logs)
 logs/
 lab/
+
+# vfx-lab Sketchfab GLBs (large external assets, drop your own)
+tools/vfx-lab/web/public/models/*.glb
+tools/vfx-lab/web/public/models/*.gltf

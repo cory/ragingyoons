@@ -6,9 +6,13 @@ import { spawnFx } from "./fx/runtime";
 import { getPreset, listPresets } from "./fx/registry";
 import { SidePanel, actionForPreset } from "./ui/SidePanel";
 import { FpsOverlay } from "./ui/FpsOverlay";
+import { MODELS, NONE_ENV_ID } from "./scene/environment";
 import type { FxHandle } from "./fx/types";
 
-const PAWN_CENTER = new Vector3(0, 0, 0.5);
+function getPawnWorldPos(handles: SceneHandles): Vector3 {
+  handles.arena.pawn.computeWorldMatrix(true);
+  return handles.arena.pawn.absolutePosition.clone();
+}
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -19,7 +23,7 @@ export function App() {
     listPresets()[0]?.id ?? ""
   );
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
-  const [hour, setHour] = useState(12);
+  const [envId, setEnvId] = useState<string>(NONE_ENV_ID);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -34,8 +38,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    handlesRef.current?.lighting.setTimeOfDay(hour);
-  }, [hour]);
+    const handles = handlesRef.current;
+    if (!handles) return;
+    handles.setEnvironment(envId === NONE_ENV_ID ? null : envId);
+  }, [envId]);
 
   const fireAtPoint = (presetId: string, point: Vector3) => {
     const handles = handlesRef.current;
@@ -44,7 +50,7 @@ export function App() {
     if (!preset) return;
     if (preset.kind === "projectile") {
       spawnFx(handles.scene, preset, {
-        origin: PAWN_CENTER.clone(),
+        origin: getPawnWorldPos(handles),
         target: point,
       });
     } else {
@@ -67,13 +73,13 @@ export function App() {
     }
 
     const action = actionForPreset(preset);
-    const pawn = handles.scene.getMeshByName("pawn") as AbstractMesh | null;
+    const pawn = handles.arena.pawn as AbstractMesh;
     const handle = spawnFx(handles.scene, preset, {
       origin:
-        action === "toggle-pawn" && pawn
-          ? pawn.position.clone()
+        action === "toggle-pawn"
+          ? getPawnWorldPos(handles)
           : Vector3.Zero(),
-      attachTo: action === "toggle-pawn" && pawn ? pawn : undefined,
+      attachTo: action === "toggle-pawn" ? pawn : undefined,
     });
     activeRef.current.set(presetId, handle);
     setActiveIds(new Set(activeRef.current.keys()));
@@ -99,11 +105,22 @@ export function App() {
       <SidePanel
         selectedId={selectedId}
         onSelect={setSelectedId}
-        onFire={(id) => fireAtPoint(id, PAWN_CENTER.clone())}
+        onFire={(id) =>
+          fireAtPoint(
+            id,
+            handlesRef.current
+              ? getPawnWorldPos(handlesRef.current)
+              : Vector3.Zero()
+          )
+        }
         onToggle={toggle}
         activeIds={activeIds}
-        hour={hour}
-        onHourChange={setHour}
+        envId={envId}
+        envOptions={[
+          { id: NONE_ENV_ID, name: "None" },
+          ...MODELS.map((m) => ({ id: m.id, name: m.name })),
+        ]}
+        onEnvChange={setEnvId}
       />
     </div>
   );

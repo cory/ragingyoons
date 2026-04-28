@@ -1,12 +1,13 @@
 import {
-  Color3,
   Effect,
-  Mesh,
+  type Mesh,
   MeshBuilder,
   Scene,
   ShaderMaterial,
-  Vector3,
 } from "@babylonjs/core";
+
+// Deep-space backdrop on a sphere skydome. Procedural — no texture downloads.
+// Three star size layers with twinkle, soft FBM nebula tints, Milky Way band.
 
 const VERTEX = /* glsl */ `
   precision highp float;
@@ -22,13 +23,6 @@ const VERTEX = /* glsl */ `
 const FRAGMENT = /* glsl */ `
   precision highp float;
   varying vec3 vDir;
-  uniform vec3 sunDir;
-  uniform vec3 horizonColor;
-  uniform vec3 zenithColor;
-  uniform vec3 groundColor;
-  uniform vec3 sunColor;
-  uniform float cloudiness;
-  uniform float starBrightness;
   uniform float time;
 
   float hash(vec3 p) {
@@ -60,91 +54,69 @@ const FRAGMENT = /* glsl */ `
     return v;
   }
 
+  float starLayer(vec3 dir, float density, float threshold, float seed) {
+    vec3 sp = floor(dir * density);
+    vec3 fp = fract(dir * density) - 0.5;
+    float h = fract(sin(dot(sp, vec3(12.9898, 78.233, 45.164)) + seed) * 43758.5453);
+    float r = length(fp);
+    return smoothstep(0.05, 0.0, r) * smoothstep(threshold, 1.0, h);
+  }
+
   void main(void) {
     vec3 dir = normalize(vDir);
-    float elev = dir.z;
 
-    vec3 sky;
-    if (elev >= 0.0) {
-      float t = pow(elev, 0.65);
-      sky = mix(horizonColor, zenithColor, t);
-    } else {
-      sky = mix(horizonColor, groundColor, pow(-elev, 0.5));
-    }
+    vec3 col = vec3(0.012, 0.015, 0.05);
 
-    float sunDot = max(0.0, dot(dir, sunDir));
-    float disc = smoothstep(0.9988, 0.9996, sunDot) * 2.0;
-    float halo = pow(sunDot, 80.0) * 0.55;
-    float bloom = pow(sunDot, 8.0) * 0.18;
-    sky += sunColor * (disc + halo + bloom);
+    float n1 = fbm(dir * 2.0);
+    float n2 = fbm(dir * 0.7 + vec3(11.0, 5.0, 3.0));
+    vec3 nebulaCool = vec3(0.07, 0.13, 0.32);
+    vec3 nebulaWarm = vec3(0.32, 0.08, 0.22);
+    col = mix(col, nebulaCool, smoothstep(0.45, 0.85, n1) * 0.45);
+    col = mix(col, nebulaWarm, smoothstep(0.55, 0.9, n2) * 0.32);
 
-    if (elev > 0.02 && cloudiness > 0.0) {
-      vec2 cp = vec2(dir.x, dir.y) / max(0.12, dir.z);
-      cp *= 1.5;
-      cp += vec2(time * 0.018, time * 0.009);
-      float c = fbm(vec3(cp, time * 0.04));
-      float thresh = mix(0.62, 0.42, cloudiness);
-      c = smoothstep(thresh, thresh + 0.18, c);
-      float horizonFade = smoothstep(0.05, 0.35, elev);
-      vec3 cloudCol = mix(horizonColor * 1.05, vec3(1.0, 0.98, 0.95), 0.7);
-      cloudCol = mix(cloudCol, sunColor, halo * 0.5);
-      sky = mix(sky, cloudCol, c * cloudiness * horizonFade);
-    }
+    vec3 mwAxis = normalize(vec3(0.4, 0.85, 0.35));
+    float mwBand = 1.0 - abs(dot(dir, mwAxis));
+    mwBand = smoothstep(0.85, 1.0, mwBand);
+    col += mwBand * vec3(0.1, 0.07, 0.18) * 0.6;
 
-    if (starBrightness > 0.0 && elev > 0.0) {
-      vec3 sp = floor(dir * 280.0);
-      float h = fract(sin(dot(sp, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
-      float star = smoothstep(0.9965, 1.0, h);
-      float twinkle = 0.7 + 0.3 * sin(time * 3.0 + h * 50.0);
-      sky += vec3(star * twinkle * starBrightness);
-    }
+    float s1 = starLayer(dir, 380.0, 0.997, 1.0);
+    float s2 = starLayer(dir, 200.0, 0.9985, 2.5);
+    float s3 = starLayer(dir, 90.0, 0.998, 5.0);
 
-    gl_FragColor = vec4(sky, 1.0);
+    float twink1 = 0.7 + 0.3 * sin(time * 2.0 + s1 * 50.0);
+    float twink2 = 0.6 + 0.4 * sin(time * 2.7 + s2 * 30.0);
+
+    col += vec3(0.85, 0.9, 1.0) * s1 * twink1 * 0.75;
+    col += vec3(1.0, 0.95, 0.78) * s2 * twink2;
+    col += vec3(1.0, 0.82, 0.6) * s3 * 1.5;
+
+    col += vec3(1.0) * mwBand * (s1 + s2) * 0.5;
+
+    gl_FragColor = vec4(col, 1.0);
   }
 `;
-
-export interface SkyParams {
-  sunDir: Vector3;
-  horizon: Color3;
-  zenith: Color3;
-  ground: Color3;
-  sun: Color3;
-  cloudiness: number;
-  starBrightness: number;
-}
 
 export interface SkyHandle {
   mesh: Mesh;
   material: ShaderMaterial;
-  setParams: (p: SkyParams) => void;
 }
 
 export function buildSky(scene: Scene): SkyHandle {
-  Effect.ShadersStore["customSkyVertexShader"] = VERTEX;
-  Effect.ShadersStore["customSkyFragmentShader"] = FRAGMENT;
+  Effect.ShadersStore["spaceSkyVertexShader"] = VERTEX;
+  Effect.ShadersStore["spaceSkyFragmentShader"] = FRAGMENT;
 
   const mesh = MeshBuilder.CreateSphere(
     "skyDome",
-    { diameter: 1000, segments: 32 },
+    { diameter: 1000, segments: 24 },
     scene
   );
-  mesh.isPickable = false;
   mesh.infiniteDistance = true;
+  mesh.isPickable = false;
   mesh.applyFog = false;
 
-  const material = new ShaderMaterial("skyMat", scene, "customSky", {
+  const material = new ShaderMaterial("spaceSkyMat", scene, "spaceSky", {
     attributes: ["position"],
-    uniforms: [
-      "worldViewProjection",
-      "sunDir",
-      "horizonColor",
-      "zenithColor",
-      "groundColor",
-      "sunColor",
-      "cloudiness",
-      "starBrightness",
-      "time",
-    ],
+    uniforms: ["worldViewProjection", "time"],
   });
   material.backFaceCulling = false;
   material.disableDepthWrite = true;
@@ -156,15 +128,5 @@ export function buildSky(scene: Scene): SkyHandle {
     material.setFloat("time", (performance.now() - t0) / 1000);
   });
 
-  const setParams = (p: SkyParams) => {
-    material.setVector3("sunDir", p.sunDir);
-    material.setColor3("horizonColor", p.horizon);
-    material.setColor3("zenithColor", p.zenith);
-    material.setColor3("groundColor", p.ground);
-    material.setColor3("sunColor", p.sun);
-    material.setFloat("cloudiness", p.cloudiness);
-    material.setFloat("starBrightness", p.starBrightness);
-  };
-
-  return { mesh, material, setParams };
+  return { mesh, material };
 }
