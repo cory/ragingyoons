@@ -1,50 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadContentFromApi } from "./sim-bridge.js";
 import type { ContentBundle } from "@sim/content.js";
-import type { ForceFlag } from "@sim/state.js";
-import { FORCE_COMPONENT_INDEX } from "@sim/state.js";
 import { FORMATIONS, type FormationId } from "@sim/formations.js";
 import { DOCTRINES, doctrineFor, squadSizeFor } from "@sim/doctrines.js";
-import { runLabBattle, type LabFrame, type LabRunResult, type ForceFlagMap } from "./runBattle.js";
+import { runLabBattle, type LabFrame, type LabRunResult } from "./runBattle.js";
 
 type OverlayKey =
-  | "forceArrows"
-  | "groupCentroid"
   | "slotTarget"
-  | "distanceRing"
   | "velocityArrow"
   | "flankProbes";
 
-const ALL_FORCES: ForceFlag[] = [
-  "separation",
-  "closeRange",
-  "cohesion",
-  "alignment",
-  "seek",
-  "hide",
-  "avoid",
-  "envelopment",
-  "doctrineMod",
-  "slotOffset",
-];
-
 const ALL_OVERLAYS: { key: OverlayKey; label: string }[] = [
-  { key: "forceArrows", label: "force arrows" },
-  { key: "groupCentroid", label: "group centroid" },
-  { key: "slotTarget", label: "slot target (cohesion)" },
-  { key: "distanceRing", label: "envelop ring (R=15)" },
+  { key: "slotTarget", label: "slot target (formation)" },
   { key: "velocityArrow", label: "velocity arrow" },
   { key: "flankProbes", label: "cavalry flank probes" },
 ];
-
-const COMPONENT_COLORS: Record<keyof typeof FORCE_COMPONENT_INDEX, string> = {
-  separation: "#e07a7a", // red
-  cohesion: "#7adde0", // cyan
-  alignment: "#cce07a", // yellow-green
-  seek: "#7ae07a", // green
-  hide: "#b07ae0", // purple
-  avoid: "#e0b07a", // orange
-};
 
 interface SideConfig {
   unitId: string;
@@ -62,30 +32,12 @@ interface CellConfig {
   red: SideConfig;
   seed: number;
   ticks: number;
-  flags: ForceFlagMap;
   overlays: Record<OverlayKey, boolean>;
-  arrowScale: number;
   breakAtTick: number;
 }
 
-const DEFAULT_FLAGS: ForceFlagMap = {
-  separation: true,
-  closeRange: true,
-  cohesion: true,
-  alignment: true,
-  seek: true,
-  hide: true,
-  avoid: true,
-  envelopment: true,
-  doctrineMod: true,
-  slotOffset: true,
-};
-
 const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
-  forceArrows: true,
-  groupCentroid: true,
   slotTarget: false,
-  distanceRing: false,
   velocityArrow: false,
   flankProbes: true,
 };
@@ -100,9 +52,7 @@ export function LabView() {
     red: { unitId: "", count: 12, formation: "default", maxPlatoonSize: 20, platoonStride: 6 },
     seed: 1,
     ticks: 240,
-    flags: DEFAULT_FLAGS,
     overlays: DEFAULT_OVERLAYS,
-    arrowScale: 1.5,
     breakAtTick: 0,
   });
   const [result, setResult] = useState<LabRunResult | null>(null);
@@ -169,7 +119,6 @@ export function LabView() {
         formationId: cfg.blue.formation === "default" ? undefined : cfg.blue.formation,
         enemyBinUnitId: cfg.enemyBin,
         ticks: cfg.ticks,
-        flags: cfg.flags,
         bounds: { w: 120, h: 80 },
         maxPlatoonSize: cfg.blue.maxPlatoonSize,
         platoonStride: cfg.blue.platoonStride,
@@ -300,18 +249,6 @@ export function LabView() {
                 break now (tick {Math.max(1, tickIdx)})
               </button>
             </Group>
-            <Group title="forces">
-              {ALL_FORCES.map((f) => (
-                <Toggle
-                  key={f}
-                  label={f}
-                  checked={cfg.flags[f] !== false}
-                  onChange={(v) => setCfg({ ...cfg, flags: { ...cfg.flags, [f]: v } })}
-                />
-              ))}
-              <button style={{ marginTop: 4 }} onClick={() => setCfg({ ...cfg, flags: { ...DEFAULT_FLAGS } })}>reset all</button>
-              <button onClick={() => setCfg({ ...cfg, flags: Object.fromEntries(ALL_FORCES.map((k) => [k, false])) as ForceFlagMap })}>all off</button>
-            </Group>
             <Group title="overlays">
               {ALL_OVERLAYS.map(({ key, label }) => (
                 <Toggle
@@ -321,7 +258,6 @@ export function LabView() {
                   onChange={(v) => setCfg({ ...cfg, overlays: { ...cfg.overlays, [key]: v } })}
                 />
               ))}
-              <Field label="arrow scale"><Num value={cfg.arrowScale} step={0.1} onChange={(n) => setCfg({ ...cfg, arrowScale: n })} /></Field>
             </Group>
             <button onClick={run} disabled={running} style={{ background: "#264", color: "#dfd", padding: "6px 12px" }}>
               {running ? "running…" : "run"}
@@ -355,7 +291,6 @@ export function LabView() {
             onMouseLeave={() => setHoverRacId(null)}
             style={{ width: "100%", height: "100%", display: "block" }}
           />
-          <Legend />
           {hoverRac && frame && <HoverPanel rac={hoverRac} />}
         </div>
       </div>
@@ -448,23 +383,10 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
     </label>
   );
 }
-function Legend() {
-  return (
-    <div style={{ position: "absolute", left: 8, bottom: 8, background: "#000a", padding: 6, borderRadius: 3, fontSize: 11 }}>
-      {(Object.keys(COMPONENT_COLORS) as Array<keyof typeof FORCE_COMPONENT_INDEX>).map((k) => (
-        <div key={k} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: COMPONENT_COLORS[k], display: "inline-block", borderRadius: 2 }} />
-          <span style={{ color: "#aaa" }}>{k}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 const BEHAVIOR_LABEL = ["march", "engage", "rout", "kite", "flank"];
 const BEHAVIOR_COLOR = ["#9cf", "#fc6", "#f88", "#bef", "#fbd"];
 
-function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number; forces: Float32Array } }) {
-  const { forces } = rac;
+function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: number; vy: number; groupId: number; doctrineIdx: number; contact: 0 | 1; slotDx: number; slotDy: number; squadId: number; squadLeaderId: number; isLeader: boolean; morale: number; broken: boolean; behavior: number } }) {
   const speed = Math.hypot(rac.vx, rac.vy);
   return (
     <div style={{ position: "absolute", right: 8, top: 8, background: "#000c", padding: 8, borderRadius: 3, fontSize: 11, color: "#ddd", minWidth: 200 }}>
@@ -482,20 +404,6 @@ function HoverPanel({ rac }: { rac: { id: number; x: number; y: number; vx: numb
       </div>
       <div style={{ color: "#888" }}>pos ({rac.x.toFixed(1)}, {rac.y.toFixed(1)})  v {speed.toFixed(2)}m/s</div>
       <div style={{ color: "#888" }}>slot ({rac.slotDx.toFixed(2)}, {rac.slotDy.toFixed(2)})</div>
-      <div style={{ marginTop: 4, borderTop: "1px solid #333", paddingTop: 4 }}>
-        {(Object.keys(FORCE_COMPONENT_INDEX) as Array<keyof typeof FORCE_COMPONENT_INDEX>).map((k) => {
-          const idx = FORCE_COMPONENT_INDEX[k];
-          const fx = forces[idx * 2 + 0];
-          const fy = forces[idx * 2 + 1];
-          const m = Math.hypot(fx, fy);
-          return (
-            <div key={k} style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 4 }}>
-              <span style={{ color: COMPONENT_COLORS[k] }}>{k}</span>
-              <span>{m.toFixed(2)}  ({fx.toFixed(2)}, {fy.toFixed(2)})</span>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
@@ -543,65 +451,6 @@ function drawFrame(
     const [px, py] = worldToPx(b.x, b.y);
     ctx.fillStyle = "#c33";
     ctx.fillRect(px - 6, py - 6, 12, 12);
-  }
-
-  // Group centroids
-  if (cfg.overlays.groupCentroid) {
-    const groups = new Map<number, { sx: number; sy: number; n: number }>();
-    for (const r of frame.racs) {
-      if (!r.alive) continue;
-      const g = groups.get(r.groupId) ?? { sx: 0, sy: 0, n: 0 };
-      g.sx += r.x; g.sy += r.y; g.n++;
-      groups.set(r.groupId, g);
-    }
-    ctx.strokeStyle = "#cc8";
-    ctx.lineWidth = 1.5;
-    for (const g of groups.values()) {
-      if (g.n < 2) continue;
-      const [px, py] = worldToPx(g.sx / g.n, g.sy / g.n);
-      ctx.beginPath();
-      ctx.moveTo(px - 6, py); ctx.lineTo(px + 6, py);
-      ctx.moveTo(px, py - 6); ctx.lineTo(px, py + 6);
-      ctx.stroke();
-    }
-  }
-
-  // Distance ring around target (envelopment R=15m)
-  if (cfg.overlays.distanceRing) {
-    const target = frame.bins.find((b) => b.alive);
-    if (target) {
-      const [px, py] = worldToPx(target.x, target.y);
-      ctx.strokeStyle = "#445";
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.arc(px, py, 15 * s, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }
-
-  // Force arrows
-  if (cfg.overlays.forceArrows) {
-    for (const r of frame.racs) {
-      if (!r.alive) continue;
-      const [px, py] = worldToPx(r.x, r.y);
-      for (const k of Object.keys(FORCE_COMPONENT_INDEX) as Array<keyof typeof FORCE_COMPONENT_INDEX>) {
-        const idx = FORCE_COMPONENT_INDEX[k];
-        const fx = r.forces[idx * 2 + 0];
-        const fy = r.forces[idx * 2 + 1];
-        const m = Math.hypot(fx, fy);
-        if (m < 0.05) continue;
-        const len = m * cfg.arrowScale * s;
-        const dx = (fx / m) * len;
-        const dy = -(fy / m) * len; // y is flipped in screen
-        ctx.strokeStyle = COMPONENT_COLORS[k];
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.moveTo(px, py);
-        ctx.lineTo(px + dx, py + dy);
-        ctx.stroke();
-      }
-    }
   }
 
   // Velocity arrow

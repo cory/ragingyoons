@@ -18,11 +18,8 @@ import {
   type ShapeBattleConfig,
 } from "@sim/index.js";
 import type { ContentBundle } from "@sim/content.js";
-import type { ForceFlag } from "@sim/state.js";
-import { FLANK_DEBUG_FLOATS_PER_RAC, FORCE_FLOATS_PER_RAC, MAX_RACS, MORALE_BREAK_THRESHOLD, MORALE_BREAK_THRESHOLD_BY_ENV } from "@sim/state.js";
+import { FLANK_DEBUG_FLOATS_PER_RAC, MAX_RACS, MORALE_BREAK_THRESHOLD, MORALE_BREAK_THRESHOLD_BY_ENV } from "@sim/state.js";
 import type { FormationId } from "@sim/formations.js";
-
-export type ForceFlagMap = Partial<Record<ForceFlag, boolean>>;
 
 export interface LabSideConfig {
   unitId: string;
@@ -41,7 +38,6 @@ export interface LabRunConfig {
   /** Punching-bag mode bin (only used when redSide is undefined). */
   enemyBinUnitId: string;
   ticks: number;
-  flags: ForceFlagMap;
   bounds: { w: number; h: number };
   maxPlatoonSize?: number;
   platoonStride?: number;
@@ -69,9 +65,6 @@ export interface RacFrame {
   broken: boolean;
   /** Behavior state — 0=march, 1=engage, 2=rout, 3=kite, 4=flank. */
   behavior: number;
-  /** Per-component forces captured by boidsTick (12 floats). Will be
-   *  zero-filled in the new motion pipeline (forces aren't computed). */
-  forces: Float32Array;
   /** Per-rac flank debug data (FLANK_DEBUG_FLOATS_PER_RAC floats).
    *  Slot 0 (inFlank) is 1 only when this rac was in BEHAVIOR_FLANK
    *  this tick. The lab reads probe XY pairs + aim point + grad +
@@ -115,10 +108,6 @@ export function runLabBattle(content: ContentBundle, cfg: LabRunConfig): LabRunR
     redSide: cfg.redSide,
   };
   const state = setupShapeBattle(content, battleCfg);
-  state.forceFlags = cfg.flags;
-  // Allocate the debug capture buffer once; boidsTick fills it each tick.
-  const dbg = new Float32Array(MAX_RACS * FORCE_FLOATS_PER_RAC);
-  state._debugForces = dbg;
   // Flank-search debug capture (per-rac probe points + aim + grad).
   const flankDbg = new Float32Array(MAX_RACS * FLANK_DEBUG_FLOATS_PER_RAC);
   state._debugFlank = flankDbg;
@@ -134,7 +123,7 @@ export function runLabBattle(content: ContentBundle, cfg: LabRunConfig): LabRunR
 
   const frames: LabFrame[] = [];
   // Capture tick 0 (pre-tick state)
-  frames.push(snapshotFrame(state, dbg, flankDbg));
+  frames.push(snapshotFrame(state, flankDbg));
 
   const breakAtTick = cfg.breakAtTick && cfg.breakAtTick > 0 ? cfg.breakAtTick : null;
   for (let t = 0; t < cfg.ticks; t++) {
@@ -149,7 +138,7 @@ export function runLabBattle(content: ContentBundle, cfg: LabRunConfig): LabRunR
         if (state.rac.alive[i]) state.rac.morale[i] = 0;
       }
     }
-    frames.push(snapshotFrame(state, dbg, flankDbg));
+    frames.push(snapshotFrame(state, flankDbg));
     if (state.winner !== -1) break;
   }
   return { frames, bounds: cfg.bounds };
@@ -157,13 +146,10 @@ export function runLabBattle(content: ContentBundle, cfg: LabRunConfig): LabRunR
 
 function snapshotFrame(
   state: ReturnType<typeof setupShapeBattle>,
-  dbg: Float32Array,
   flankDbg: Float32Array,
 ): LabFrame {
   const racs: RacFrame[] = [];
   for (let i = 0; i < state.rac.count; i++) {
-    const f = new Float32Array(FORCE_FLOATS_PER_RAC);
-    f.set(dbg.subarray(i * FORCE_FLOATS_PER_RAC, (i + 1) * FORCE_FLOATS_PER_RAC));
     const fl = new Float32Array(FLANK_DEBUG_FLOATS_PER_RAC);
     fl.set(flankDbg.subarray(i * FLANK_DEBUG_FLOATS_PER_RAC, (i + 1) * FLANK_DEBUG_FLOATS_PER_RAC));
     const racId = state.rac.id[i];
@@ -188,7 +174,6 @@ function snapshotFrame(
         state.rac.morale[i] <
         (MORALE_BREAK_THRESHOLD_BY_ENV[state.rac.env[i]] ?? MORALE_BREAK_THRESHOLD),
       behavior: state.rac.behavior[i],
-      forces: f,
       flankDebug: fl,
     });
   }
