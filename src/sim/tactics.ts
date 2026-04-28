@@ -179,7 +179,11 @@ export const DEFAULT_CAVALRY: TacticProfile = {
   alignmentRadius: 0,
   alignmentK: 0, // free agents — commit hard
   targetSeekK: 4.5,
-  speedMul: 1.4, // mounted / fast
+  // Mounted speed: 1.8× foot pace, ~30% faster than infantry. Real
+  // cavalry rode at 2-3× march speed; 1.4 felt only marginally faster
+  // than a tank, which let infantry/tank pin the flank before cavalry
+  // could swing around it.
+  speedMul: 1.8,
   archerKiteFraction: 0,
   // Cavalry has heft but they're agile — small inertia blend keeps
   // motion smooth without locking the heading like tank inertia does.
