@@ -35,6 +35,10 @@ export interface LabRunConfig {
   flags: ForceFlagMap;
   /** Bounds (meters). Lab keeps it small for tight visuals. */
   bounds: { w: number; h: number };
+  /** Max racs per platoon. count > this → spawn ceil(count/max) platoons. */
+  maxPlatoonSize?: number;
+  /** Spacing (meters) between platoon centers along march axis. */
+  platoonStride?: number;
 }
 
 export interface RacFrame {
@@ -84,6 +88,8 @@ export function runLabBattle(content: ContentBundle, cfg: LabRunConfig): LabRunR
     formationId: cfg.formationId,
     enemyBinUnitId: cfg.enemyBinUnitId,
     disableSynergies: true,
+    maxPlatoonSize: cfg.maxPlatoonSize,
+    platoonStride: cfg.platoonStride,
   };
   const state = setupShapeBattle(content, battleCfg);
   state.forceFlags = cfg.flags;

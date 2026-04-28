@@ -54,6 +54,10 @@ interface CellConfig {
   overlays: Record<OverlayKey, boolean>;
   /** Force-arrow scale multiplier (drawn in meters per force-unit). */
   arrowScale: number;
+  /** Max racs per platoon (column of platoons stacked behind the front). */
+  maxPlatoonSize: number;
+  /** Spacing between platoon centers along march axis (meters). */
+  platoonStride: number;
 }
 
 const DEFAULT_FLAGS: ForceFlagMap = {
@@ -90,6 +94,8 @@ export function LabView() {
     flags: DEFAULT_FLAGS,
     overlays: DEFAULT_OVERLAYS,
     arrowScale: 1.5,
+    maxPlatoonSize: 20,
+    platoonStride: 6,
   });
   const [result, setResult] = useState<LabRunResult | null>(null);
   const [tickIdx, setTickIdx] = useState(0);
@@ -133,7 +139,9 @@ export function LabView() {
         enemyBinUnitId: cfg.enemyBin,
         ticks: cfg.ticks,
         flags: cfg.flags,
-        bounds: { w: 80, h: 60 },
+        bounds: { w: 120, h: 80 },
+        maxPlatoonSize: cfg.maxPlatoonSize,
+        platoonStride: cfg.platoonStride,
       });
       setResult(r);
       setTickIdx(0);
@@ -207,6 +215,8 @@ export function LabView() {
               <Field label="enemy bin"><Select value={cfg.enemyBin} options={unitIds} onChange={(v) => setCfg({ ...cfg, enemyBin: v })} /></Field>
               <Field label="seed"><Num value={cfg.seed} onChange={(n) => setCfg({ ...cfg, seed: n })} /></Field>
               <Field label="ticks"><Num value={cfg.ticks} min={10} max={2000} onChange={(n) => setCfg({ ...cfg, ticks: n })} /></Field>
+              <Field label="platoon"><Num value={cfg.maxPlatoonSize} min={1} max={500} onChange={(n) => setCfg({ ...cfg, maxPlatoonSize: n })} /></Field>
+              <Field label="stride"><Num value={cfg.platoonStride} min={1} max={50} step={0.5} onChange={(n) => setCfg({ ...cfg, platoonStride: n })} /></Field>
             </Group>
             <Group title="forces">
               {ALL_FORCES.map((f) => (
@@ -509,11 +519,20 @@ function drawFrame(
     }
   }
 
-  // Racs
+  // Racs — color by groupId hash so platoons are visually distinct.
   for (const r of frame.racs) {
     if (!r.alive) continue;
     const [px, py] = worldToPx(r.x, r.y);
-    ctx.fillStyle = r.id === hoverId ? "#fff" : r.contact ? "#9cf" : "#6cf";
+    ctx.fillStyle = r.id === hoverId ? "#fff" : groupColor(r.groupId, r.contact === 1);
     ctx.fillRect(px - 3, py - 3, 6, 6);
   }
+}
+
+function groupColor(gid: number, contact: boolean): string {
+  // Hash gid → hue; saturation/lightness vary slightly between platoons.
+  const h = ((gid * 2654435761) >>> 0) / 4294967296;
+  const hue = Math.floor(h * 360);
+  const sat = contact ? 80 : 65;
+  const lit = contact ? 70 : 60;
+  return `hsl(${hue}, ${sat}%, ${lit}%)`;
 }

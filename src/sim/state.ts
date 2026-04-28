@@ -429,6 +429,15 @@ export interface ShapeBattleConfig {
   /** Optional HP override for the punching-bag bin (default = card hp). */
   enemyBinHp?: number;
   disableSynergies?: boolean;
+  /** Max racs per platoon. When count > this, we spawn ceil(count/this)
+   *  platoons stacked along the march axis (column of platoons), each
+   *  with its own groupId so cohesion / formation-split treats them
+   *  as independent units. Default: spawn everyone in one group. */
+  maxPlatoonSize?: number;
+  /** Spacing (meters) between platoon centers along the march axis.
+   *  Default 6 m — wide enough that platoons read as separate, tight
+   *  enough to stay inside the bounds for typical lab counts. */
+  platoonStride?: number;
 }
 
 /** Build a state for the shape-lab: N alive racs of one unit vs a
@@ -505,62 +514,78 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
   state.binRowById.set(state.bin.id[binSlot], binSlot);
 
   // Place side-0 racs in formation arrangement around (-30% of bounds, 0).
-  // Each rac's slot offset is stored on the rac so boids cohesion pulls
-  // it back toward (centroid + slot) — that's what holds shape on the
-  // march. Small RNG jitter so spawn positions aren't pixel-identical
-  // (looks alive even at tick 0 + breaks symmetry that can stall the
-  // anti-overlap d=0 path).
+  // When count exceeds maxPlatoonSize, split into multiple platoons
+  // stacked along the march axis (column of platoons): front platoon
+  // closest to the target, reserves behind. Each platoon gets its own
+  // groupId so cohesion and formation-split treat them as independent
+  // tactical units. Each rac's slot offset is stored on the rac so
+  // boids cohesion pulls it back toward (centroid + slot) — that's
+  // what holds shape on the march. Small RNG jitter so spawn positions
+  // aren't pixel-identical.
   const baseX = -halfW * 0.6;
   const baseY = 0;
-  const groupId = state.nextGroupId++;
   const profile = state.formationProfile[0][formationIdx];
   // forward = +1 because the enemy is in +x direction from us.
   const forward = 1;
-  for (let k = 0; k < cfg.count; k++) {
-    if (state.rac.count >= state.rac.id.length) break;
-    const off = formation.arrange({ burstIdx: k, burstSize: cfg.count, forward });
-    const jx = (rngFloat(state.rng) - 0.5) * 0.2;
-    const jy = (rngFloat(state.rng) - 0.5) * 0.2;
-    const racRow = state.rac.count;
-    const racId = state.nextRacId++;
-    state.rac.id[racRow] = racId;
-    state.racRowById.set(racId, racRow);
-    state.rac.owner[racRow] = 0;
-    state.rac.sourceBinId[racRow] = -1;
-    state.rac.sourceSlotIdx[racRow] = -1;
-    state.rac.unitIdIdx[racRow] = internUnitId(state, unit.id);
-    state.rac.role[racRow] = ROLE_TO_IDX[unit.role];
-    state.rac.env[racRow] = ENV_TO_IDX[unit.environment];
-    state.rac.cur[racRow] = CURIOSITY_TO_IDX[unit.curiosity];
-    state.rac.hp[racRow] = unit.stats.hp;
-    state.rac.hpMax[racRow] = unit.stats.hp;
-    state.rac.rage[racRow] = 0;
-    state.rac.rageCap[racRow] = unit.rage.capacity;
-    state.rac.x[racRow] = baseX + off.dx + jx;
-    state.rac.y[racRow] = baseY + off.dy + jy;
-    state.rac.vx[racRow] = 0;
-    state.rac.vy[racRow] = 0;
-    state.rac.facing[racRow] = 0; // +x toward enemy
-    state.rac.prevFacing[racRow] = 0;
-    state.rac.targetId[racRow] = state.bin.id[binSlot];
-    state.rac.targetKind[racRow] = TARGET_KIND_BIN;
-    state.rac.attackCooldown[racRow] = 0;
-    state.rac.statuses[racRow] = [];
-    state.rac.alive[racRow] = 1;
-    state.rac.effSpeed[racRow] = unit.stats.speed * profile.speedMul;
-    state.rac.effDamage[racRow] = unit.stats.damage;
-    state.rac.effRange[racRow] = unit.stats.range;
-    state.rac.effAttackRate[racRow] = unit.stats.attack_rate;
-    state.rac.effArmor[racRow] = unit.stats.armor;
-    state.rac.dmgTakenMul[racRow] = 1;
-    state.rac.surroundedDamageMul[racRow] = 1;
-    state.rac.formationIdx[racRow] = formationIdx;
-    state.rac.doctrineIdx[racRow] = doctrineIdx;
-    state.rac.teamId[racRow] = Math.floor(k / teamSize);
-    state.rac.groupId[racRow] = groupId;
-    state.rac.slotDx[racRow] = off.dx;
-    state.rac.slotDy[racRow] = off.dy;
-    state.rac.count = racRow + 1;
+  const maxPlatoon = cfg.maxPlatoonSize && cfg.maxPlatoonSize > 0 ? cfg.maxPlatoonSize : cfg.count;
+  const platoonCount = Math.max(1, Math.ceil(cfg.count / maxPlatoon));
+  const platoonStride = cfg.platoonStride ?? 6;
+  let remaining = cfg.count;
+  for (let p = 0; p < platoonCount; p++) {
+    const thisPlatoonSize = Math.min(maxPlatoon, remaining);
+    if (thisPlatoonSize <= 0) break;
+    remaining -= thisPlatoonSize;
+    // Platoon p centered at (baseX - p*stride, baseY) — p=0 is the
+    // front; later platoons are reserves trailing behind.
+    const px = baseX - p * platoonStride;
+    const py = baseY;
+    const groupId = state.nextGroupId++;
+    for (let k = 0; k < thisPlatoonSize; k++) {
+      if (state.rac.count >= state.rac.id.length) break;
+      const off = formation.arrange({ burstIdx: k, burstSize: thisPlatoonSize, forward });
+      const jx = (rngFloat(state.rng) - 0.5) * 0.2;
+      const jy = (rngFloat(state.rng) - 0.5) * 0.2;
+      const racRow = state.rac.count;
+      const racId = state.nextRacId++;
+      state.rac.id[racRow] = racId;
+      state.racRowById.set(racId, racRow);
+      state.rac.owner[racRow] = 0;
+      state.rac.sourceBinId[racRow] = -1;
+      state.rac.sourceSlotIdx[racRow] = -1;
+      state.rac.unitIdIdx[racRow] = internUnitId(state, unit.id);
+      state.rac.role[racRow] = ROLE_TO_IDX[unit.role];
+      state.rac.env[racRow] = ENV_TO_IDX[unit.environment];
+      state.rac.cur[racRow] = CURIOSITY_TO_IDX[unit.curiosity];
+      state.rac.hp[racRow] = unit.stats.hp;
+      state.rac.hpMax[racRow] = unit.stats.hp;
+      state.rac.rage[racRow] = 0;
+      state.rac.rageCap[racRow] = unit.rage.capacity;
+      state.rac.x[racRow] = px + off.dx + jx;
+      state.rac.y[racRow] = py + off.dy + jy;
+      state.rac.vx[racRow] = 0;
+      state.rac.vy[racRow] = 0;
+      state.rac.facing[racRow] = 0; // +x toward enemy
+      state.rac.prevFacing[racRow] = 0;
+      state.rac.targetId[racRow] = state.bin.id[binSlot];
+      state.rac.targetKind[racRow] = TARGET_KIND_BIN;
+      state.rac.attackCooldown[racRow] = 0;
+      state.rac.statuses[racRow] = [];
+      state.rac.alive[racRow] = 1;
+      state.rac.effSpeed[racRow] = unit.stats.speed * profile.speedMul;
+      state.rac.effDamage[racRow] = unit.stats.damage;
+      state.rac.effRange[racRow] = unit.stats.range;
+      state.rac.effAttackRate[racRow] = unit.stats.attack_rate;
+      state.rac.effArmor[racRow] = unit.stats.armor;
+      state.rac.dmgTakenMul[racRow] = 1;
+      state.rac.surroundedDamageMul[racRow] = 1;
+      state.rac.formationIdx[racRow] = formationIdx;
+      state.rac.doctrineIdx[racRow] = doctrineIdx;
+      state.rac.teamId[racRow] = Math.floor(k / teamSize);
+      state.rac.groupId[racRow] = groupId;
+      state.rac.slotDx[racRow] = off.dx;
+      state.rac.slotDy[racRow] = off.dy;
+      state.rac.count = racRow + 1;
+    }
   }
   return state;
 }
