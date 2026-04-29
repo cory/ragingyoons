@@ -87,15 +87,8 @@ describe("formation combat shape (regression: lines tighten on contact)", () => 
 
     const marchWidth = buildAndRun(80);   // far → never in contact
     const contactWidth = buildAndRun(2);   // adjacent → in contact mode
-    // Contact-mode line should still be measurably tighter than the
-    // marching line. The new motion stack uses a smooth density-
-    // gradient repulsion instead of pair-wise cohesion forces, so the
-    // pre-rewrite ratio (~0.80) widened slightly to ~0.90; assertion
-    // relaxed to keep the regression check meaningful without chasing
-    // a tighter ratio that the gradient-only motion cannot deliver
-    // without leader-driven slot-direct (the test bypasses squads).
     assert.ok(
-      contactWidth < marchWidth * 0.92,
+      contactWidth < marchWidth * 0.85,
       `contact line not tighter: march ${marchWidth.toFixed(2)}m, contact ${contactWidth.toFixed(2)}m`,
     );
   });
