@@ -69,6 +69,16 @@ import {
  *  a rac knocked outside it has lost formation cohesion at that spot
  *  and shouldn't claim the frontal-defense bonus anymore. */
 const IN_FORMATION_R = 2.0;
+/** Arrival deadband for RALLY/ROUT: once a routed/rallying rac is
+ *  within this radius of its aim point (leader / friendly bin), it
+ *  stops seeking and lets the cross-unit repulsion settle it into
+ *  a ring. Without the deadband the seek force at maxV plows every
+ *  rac into the same pixel, the gentle ~1 m/s repulsion can't
+ *  overcome it, and the squad collapses into a blob. */
+const RALLY_ARRIVAL_R = 4.0;
+const RALLY_ARRIVAL_R2 = RALLY_ARRIVAL_R * RALLY_ARRIVAL_R;
+const ROUT_ARRIVAL_R = 6.0;
+const ROUT_ARRIVAL_R2 = ROUT_ARRIVAL_R * ROUT_ARRIVAL_R;
 /** How often to recompute the inFormation flag. Drives a damage
  *  multiplier in combat; combat fires at 1+ Hz so this can be
  *  refreshed every 4 ticks (~165 ms) without missing combat events. */
@@ -586,11 +596,19 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       // friendly bin fallback). Intent just steers toward cached aim
       // each tick — fresh leader position is picked up at the next
       // cadence tick. Morale recovers in moraleTick while rallying.
+      //
+      // Arrival deadband: once we're within RALLY_ARRIVAL_R of the aim
+      // point, stop seeking. Without this every rallying rac plows
+      // toward the leader's exact pixel, the seek force overpowers
+      // the cross-unit repulsion until they're packed at <0.8 m, and
+      // the squad collapses into a blob. With the deadband racs settle
+      // in a ring around the leader and repulsion spaces them out.
       if (state.rac.aimValid[i]) {
         const dx = state.rac.aimX[i] - myX;
         const dy = state.rac.aimY[i] - myY;
-        const d = Math.hypot(dx, dy);
-        if (d > 1e-3) {
+        const d2 = dx * dx + dy * dy;
+        if (d2 > RALLY_ARRIVAL_R2) {
+          const d = Math.sqrt(d2);
           desiredVx = (dx / d) * maxV;
           desiredVy = (dy / d) * maxV;
         }
@@ -749,10 +767,17 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       // aimValid=0 → flee-from below). Off-cadence ticks just steer
       // toward cached aim; the heavy bin/leader search runs at most once
       // per behavior-cadence (default 8 ticks for infantry).
+      //
+      // Arrival deadband mirrors RALLY: once we're within ROUT_ARRIVAL_R
+      // of the bin / fallback leader, hold instead of plowing onto the
+      // exact spot. Without it a wave of routed racs all aiming at the
+      // same bin compresses into a blob.
       let fx = 0, fy = 0;
+      let arrived = false;
       if (state.rac.aimValid[i]) {
         fx = state.rac.aimX[i] - myX;
         fy = state.rac.aimY[i] - myY;
+        if (fx * fx + fy * fy < ROUT_ARRIVAL_R2) arrived = true;
       } else {
         // No bin, no leader — flee nearest enemy.
         let nearestRow = -1;
@@ -808,7 +833,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       }
 
       const fl = Math.hypot(fx, fy);
-      if (fl > 1e-3) {
+      if (fl > 1e-3 && !arrived) {
         const speed = maxV * ROUT_SPEED_MUL;
         desiredVx = (fx / fl) * speed;
         desiredVy = (fy / fl) * speed;
