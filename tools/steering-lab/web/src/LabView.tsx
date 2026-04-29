@@ -8,6 +8,7 @@ import { runLabBattle, type LabFrame, type LabRunResult } from "./runBattle.js";
 type OverlayKey =
   | "slotTarget"
   | "velocityArrow"
+  | "aimArrow"
   | "flankProbes"
   | "behaviorColor"
   | "attackRange";
@@ -15,6 +16,7 @@ type OverlayKey =
 const ALL_OVERLAYS: { key: OverlayKey; label: string }[] = [
   { key: "slotTarget", label: "slot target (formation)" },
   { key: "velocityArrow", label: "velocity arrow" },
+  { key: "aimArrow", label: "aim arrow (RALLY/ROUT cached aim)" },
   { key: "flankProbes", label: "cavalry flank probes" },
   { key: "behaviorColor", label: "color by behavior" },
   { key: "attackRange", label: "attack-range rings" },
@@ -42,9 +44,10 @@ interface CellConfig {
 
 const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
   slotTarget: false,
-  velocityArrow: false,
+  velocityArrow: true,
+  aimArrow: true,
   flankProbes: false,
-  behaviorColor: false,
+  behaviorColor: true,
   attackRange: false,
 };
 
@@ -498,23 +501,59 @@ function drawFrame(
     ctx.fillRect(px - 6, py - 6, 12, 12);
   }
 
-  // Velocity arrow
+  // Velocity arrow — actual motion this tick. White stem, arrow head.
   if (cfg.overlays.velocityArrow) {
+    ctx.strokeStyle = "#fff";
+    ctx.fillStyle = "#fff";
+    ctx.lineWidth = 1.5;
     for (const r of frame.racs) {
       if (!r.alive) continue;
       const [px, py] = worldToPx(r.x, r.y);
       const m = Math.hypot(r.vx, r.vy);
       if (m < 0.01) continue;
       const len = m * 1.5 * s;
-      const dx = (r.vx / m) * len;
-      const dy = -(r.vy / m) * len;
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 1.5;
+      const ux = r.vx / m;
+      const uy = -r.vy / m; // flip y for canvas
+      const ex = px + ux * len;
+      const ey = py + uy * len;
       ctx.beginPath();
       ctx.moveTo(px, py);
-      ctx.lineTo(px + dx, py + dy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      // Arrow head
+      const ah = 4;
+      const aw = 3;
+      const lx = -uy;
+      const ly = ux;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - ux * ah + lx * aw, ey - uy * ah + ly * aw);
+      ctx.lineTo(ex - ux * ah - lx * aw, ey - uy * ah - ly * aw);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // Aim arrow — for RALLY/ROUT racs, dashed line to their cached aim
+  // point. Color matches the behavior (orange = ROUT, cyan = RALLY) so
+  // a glance shows where routed/rallying squads are headed.
+  if (cfg.overlays.aimArrow) {
+    ctx.lineWidth = 1.0;
+    for (const r of frame.racs) {
+      if (!r.alive) continue;
+      if (!r.aimValid) continue;
+      // Behavior 5 = RALLY, 2 = ROUT (per RacFrame docs)
+      if (r.behavior !== 2 && r.behavior !== 5) continue;
+      const [px, py] = worldToPx(r.x, r.y);
+      const [ax, ay] = worldToPx(r.aimX, r.aimY);
+      ctx.strokeStyle = r.behavior === 5 ? "#5ce" : "#f93";
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(ax, ay);
       ctx.stroke();
     }
+    ctx.setLineDash([]);
   }
 
   // Slot-target markers — each rac's (leaderPos + slot) cohesion target.

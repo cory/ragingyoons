@@ -74,6 +74,11 @@ export interface RacFrame {
   squadThreat: number;
   /** Standing-order index — 0=hold, 1=slow, 2=advance, 3=charge, 4=skirmish. */
   standingOrder: number;
+  /** Cached aim point for RALLY/ROUT (world coords). aimValid=0 means
+   *  no cached aim — intent recomputes per tick from target/slot. */
+  aimX: number;
+  aimY: number;
+  aimValid: 0 | 1;
   /** Per-rac flank debug data (FLANK_DEBUG_FLOATS_PER_RAC floats).
    *  Slot 0 (inFlank) is 1 only when this rac was in BEHAVIOR_FLANK
    *  this tick. The lab reads probe XY pairs + aim point + grad +
@@ -189,6 +194,9 @@ function snapshotFrame(
       pinned: state.rac.pinnedUntilTick[i] > state.tick,
       squadThreat: state.squadFlankThreat?.get(state.rac.squadId[i]) ?? 0,
       standingOrder: state.rac.standingOrder[i],
+      aimX: state.rac.aimX[i],
+      aimY: state.rac.aimY[i],
+      aimValid: state.rac.aimValid[i] as 0 | 1,
       flankDebug: fl,
     });
   }
