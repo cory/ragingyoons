@@ -11,15 +11,17 @@ type OverlayKey =
   | "aimArrow"
   | "flankProbes"
   | "behaviorColor"
-  | "attackRange";
+  | "attackRange"
+  | "projectiles";
 
 const ALL_OVERLAYS: { key: OverlayKey; label: string }[] = [
+  { key: "projectiles", label: "arrows / projectiles" },
+  { key: "attackRange", label: "attack-range rings" },
+  { key: "behaviorColor", label: "color by behavior" },
   { key: "slotTarget", label: "slot target (formation)" },
   { key: "velocityArrow", label: "velocity arrow" },
   { key: "aimArrow", label: "aim arrow (RALLY/ROUT cached aim)" },
   { key: "flankProbes", label: "cavalry flank probes" },
-  { key: "behaviorColor", label: "color by behavior" },
-  { key: "attackRange", label: "attack-range rings" },
 ];
 
 interface SideConfig {
@@ -44,11 +46,12 @@ interface CellConfig {
 
 const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
   slotTarget: false,
-  velocityArrow: true,
-  aimArrow: true,
+  velocityArrow: false,
+  aimArrow: false,
   flankProbes: false,
-  behaviorColor: true,
+  behaviorColor: false,
   attackRange: false,
+  projectiles: true,
 };
 
 export function LabView() {
@@ -499,6 +502,41 @@ function drawFrame(
     const [px, py] = worldToPx(b.x, b.y);
     ctx.fillStyle = "#c33";
     ctx.fillRect(px - 6, py - 6, 12, 12);
+  }
+
+  // Projectiles (archer arrows). Draw each as a short line along -v
+  // (a trail behind the head) plus a tiny arrow head — reads as
+  // motion at low frame rates. Color matches the firing side.
+  if (cfg.overlays.projectiles && frame.projectiles) {
+    ctx.lineWidth = 1.5;
+    const TRAIL_TICKS = 0.12; // visual trail length, in seconds
+    for (const p of frame.projectiles) {
+      const [px, py] = worldToPx(p.x, p.y);
+      const m = Math.hypot(p.vx, p.vy);
+      if (m < 0.01) continue;
+      const tailLen = m * TRAIL_TICKS * s;
+      const ux = p.vx / m;
+      const uy = -p.vy / m; // canvas y flip
+      const tailX = px - ux * tailLen;
+      const tailY = py - uy * tailLen;
+      ctx.strokeStyle = p.owner === 0 ? "#7cf" : "#f88";
+      ctx.beginPath();
+      ctx.moveTo(tailX, tailY);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      // Arrow head triangle.
+      const ah = 3;
+      const aw = 2;
+      const lx = -uy;
+      const ly = ux;
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px - ux * ah + lx * aw, py - uy * ah + ly * aw);
+      ctx.lineTo(px - ux * ah - lx * aw, py - uy * ah - ly * aw);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   // Velocity arrow — actual motion this tick. White stem, arrow head.

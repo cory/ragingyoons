@@ -95,10 +95,22 @@ export interface BinFrame {
   alive: 0 | 1;
 }
 
+/** In-flight projectile (archer arrow). Position + velocity captured
+ *  per tick; the lab draws a short trail along -velocity so it reads
+ *  as a moving arrow. Owner determines color (blue / red). */
+export interface ProjectileFrame {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  owner: 0 | 1;
+}
+
 export interface LabFrame {
   tick: number;
   racs: RacFrame[];
   bins: BinFrame[];
+  projectiles: ProjectileFrame[];
 }
 
 export interface LabRunResult {
@@ -211,7 +223,18 @@ function snapshotFrame(
       alive: state.bin.alive[i] as 0 | 1,
     });
   }
-  return { tick: state.tick, racs, bins };
+  const projectiles: ProjectileFrame[] = [];
+  for (let i = 0; i < state.atk.count; i++) {
+    if (!state.atk.alive[i]) continue;
+    projectiles.push({
+      x: state.atk.x[i],
+      y: state.atk.y[i],
+      vx: state.atk.vx[i],
+      vy: state.atk.vy[i],
+      owner: state.atk.sourceOwner[i] as 0 | 1,
+    });
+  }
+  return { tick: state.tick, racs, bins, projectiles };
 }
 
 export const SECONDS_PER_TICK = 1 / TICK_RATE_HZ;
