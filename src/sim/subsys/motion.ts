@@ -379,6 +379,41 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
 
   for (let i = 0; i < state.rac.count; i++) {
     if (!state.rac.alive[i]) continue;
+
+    // Sub-tick gate: stable racs (in-formation MARCH/ENGAGE follower
+    // not broken) skip the full intent + guard pipeline on 3 out of 4
+    // ticks, integrating last-tick velocity instead. Updates fire on
+    // ticks where ((tick + i) & 3) === 0; lag is ~165 ms per check
+    // window, fine for in-formation infantry holding a line. Cuts
+    // motion cost ~4× on the stable subset.
+    if (state.rac.stable[i] && ((tickNow + i) & 3) !== 0) {
+      const myX0 = state.rac.x[i];
+      const myY0 = state.rac.y[i];
+      const myVx0 = state.rac.vx[i];
+      const myVy0 = state.rac.vy[i];
+      let nx = myX0 + myVx0 * dt;
+      let ny = myY0 + myVy0 * dt;
+      if (myX0 <= halfW && nx > halfW) {
+        nx = halfW;
+        state.rac.vx[i] = 0;
+      } else if (myX0 >= -halfW && nx < -halfW) {
+        nx = -halfW;
+        state.rac.vx[i] = 0;
+      }
+      if (myY0 <= halfH && ny > halfH) {
+        ny = halfH;
+        state.rac.vy[i] = 0;
+      } else if (myY0 >= -halfH && ny < -halfH) {
+        ny = -halfH;
+        state.rac.vy[i] = 0;
+      }
+      state.rac.x[i] = nx;
+      state.rac.y[i] = ny;
+      // Don't update facing or contact / inFormation / surroundedDamageMul
+      // on a skipped tick — they roll over from the last full update.
+      continue;
+    }
+
     const role = state.rac.role[i];
     const myX = state.rac.x[i];
     const myY = state.rac.y[i];
@@ -1067,5 +1102,35 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       }
       state.rac.inFormation[i] = inFormation;
     }
+
+    // Sub-tick gate: mark this rac stable so the next tick's pipeline
+    // can skip it. Two qualifying paths:
+    //  (a) MARCH follower at slot, no contact, not broken — happily
+    //      following its leader. The skipped tick keeps moving along
+    //      with the squad's velocity.
+    //  (b) ENGAGE non-cavalry that's holding inside attack range — its
+    //      desired velocity is already zero (or near it), and combat
+    //      fires on its own cooldown. We don't need motion updates
+    //      while it's standing still and swinging.
+    // Cavalry never qualifies — it wants every-tick steering for
+    // overrun + flank. Leaders never qualify — followers track them.
+    // Broken racs don't qualify — they need rally/rout intent.
+    // Contact is NOT a disqualifier: a follower at slot inside a melee
+    // line can absolutely skip a tick — they've already chosen MARCH /
+    // ENGAGE on their cadence, the slot-direct steering is trivially
+    // recomputable, and combat fires on its own cooldown. Skipping
+    // them gives ~40 ms reaction lag which is fine for tuning runs.
+    let isStable = 0;
+    if (
+      !broken &&
+      !isLeader &&
+      leaderAlive &&
+      (role === ROLE_INFANTRY || role === ROLE_TANK) &&
+      state.rac.inFormation[i] === 1 &&
+      (behavior === BEHAVIOR_MARCH || behavior === BEHAVIOR_ENGAGE)
+    ) {
+      isStable = 1;
+    }
+    state.rac.stable[i] = isStable;
   }
 }

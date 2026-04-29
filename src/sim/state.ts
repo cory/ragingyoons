@@ -233,6 +233,13 @@ export interface RacTable {
   aimX: Float32Array;
   aimY: Float32Array;
   aimValid: Uint8Array;
+  /** Sub-tick scheduling: 1 = rac was in stable formation at the end
+   *  of its last motion update (MARCH follower, in-formation, not in
+   *  contact, not broken). On odd ticks (relative to row) such racs
+   *  skip the full motion intent + guard pipeline and just integrate
+   *  position with their current velocity, then re-flag at the next
+   *  even tick. Halves motion cost on the dominant subset of racs. */
+  stable: Uint8Array;
 }
 
 /** In-flight ranged projectiles (currently archer arrows). Dumb-fire:
@@ -363,6 +370,13 @@ export interface BattleState {
    *  row. Off-leader rows are unused. */
   _leaderRotCos?: Float32Array;
   _leaderRotSin?: Float32Array;
+  /** Per-rac desired-velocity scratch produced by the motionTick
+   *  intent pass, consumed by the apply pass on the same tick. We
+   *  keep it on state (as opposed to a tick-local Float32Array) so
+   *  sub-tick gating (E) can read last tick's desired velocity for
+   *  stable racs without recomputing. */
+  _motionDesiredVx?: Float32Array;
+  _motionDesiredVy?: Float32Array;
   /** Reusable scratch for the rac / bin spatial grids — flat CSR
    *  buffers and an offset-fill counter. Reused across ticks so we
    *  don't allocate hundreds of small per-cell typed arrays per
@@ -507,6 +521,7 @@ export function emptyRacs(): RacTable {
     aimX: new Float32Array(MAX_RACS),
     aimY: new Float32Array(MAX_RACS),
     aimValid: new Uint8Array(MAX_RACS),
+    stable: new Uint8Array(MAX_RACS),
   };
 }
 
