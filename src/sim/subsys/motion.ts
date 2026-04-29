@@ -69,6 +69,16 @@ import {
  *  a rac knocked outside it has lost formation cohesion at that spot
  *  and shouldn't claim the frontal-defense bonus anymore. */
 const IN_FORMATION_R = 2.0;
+/** Distance a panicked rac flees from its nearest enemy before
+ *  arriving and standing still while it recovers morale. Bigger than
+ *  any unit's attack range (longest is archer ~10–12 m) so a fleeing
+ *  rac actually gets out of harm's way and recovers. */
+const FLEE_DIST = 30.0;
+/** Radius the panicked rac scans for "nearest enemy". A rac whose
+ *  enemies have all moved past this radius is by definition no longer
+ *  in trouble; aim falls back to the friendly-bin defense path. */
+const FLEE_ENEMY_SCAN_R = 50.0;
+
 /** Arrival deadband for RALLY/ROUT: once a routed/rallying rac is
  *  within this radius of its aim point (leader / friendly bin), it
  *  stops seeking and lets the cross-unit repulsion settle it into
@@ -241,6 +251,33 @@ function findFriendlyBin(state: BattleState, i: number): number {
       bestRow = k;
     }
   }
+  return bestRow;
+}
+
+/** Find the nearest alive ENEMY rac within FLEE_ENEMY_SCAN_R via the
+ *  spatial grid. Returns row index or -1. Panicked racs flee from
+ *  this rac's position so each broken rac picks its own scatter
+ *  direction instead of converging on a shared rally point. */
+function findNearestEnemy(state: BattleState, i: number): number {
+  const grid = state._racGrid;
+  if (!grid) return -1;
+  const myOwner = state.rac.owner[i];
+  const myX = state.rac.x[i];
+  const myY = state.rac.y[i];
+  let bestRow = -1;
+  let bestD2 = FLEE_ENEMY_SCAN_R * FLEE_ENEMY_SCAN_R;
+  forEachNear(grid, myX, myY, FLEE_ENEMY_SCAN_R, (j) => {
+    if (j === i) return;
+    if (!state.rac.alive[j]) return;
+    if (state.rac.owner[j] === myOwner) return;
+    const dx = state.rac.x[j] - myX;
+    const dy = state.rac.y[j] - myY;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestRow = j;
+    }
+  });
   return bestRow;
 }
 
@@ -488,24 +525,14 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // ----- Behavior decision (cadence-gated) -----
     if (tickNow >= state.rac.nextDecisionTick[i]) {
       let next = state.rac.behavior[i];
-      let cachedRallyLeaderRow = -1;
       if (broken) {
-        // Broken racs rally on a leader. Priority:
-        //   1. My own squad's leader if alive (cheap pointer read).
-        //   2. Any friendly leader within RALLY_RADIUS (25 m).
-        //   3. Any friendly leader anywhere on the map (so a wiped-
-        //      squad rac doesn't sprint to the spawn bin 100+ m away;
-        //      it joins whatever neighboring squad still has a leader).
-        //   4. ROUT to bin only if no leader exists at all.
-        if (!isLeader && leaderAlive) {
-          cachedRallyLeaderRow = leaderRow;
-        } else {
-          cachedRallyLeaderRow = findRallyLeader(state, i);
-          if (cachedRallyLeaderRow < 0) {
-            cachedRallyLeaderRow = findRoutLeader(state, i);
-          }
-        }
-        next = cachedRallyLeaderRow >= 0 ? BEHAVIOR_RALLY : BEHAVIOR_ROUT;
+        // Panicked scatter: every broken rac flees from its OWN
+        // nearest enemy (set in the aim block below), so a hit squad
+        // doesn't pile onto a single rally point. Rally-on-leader was
+        // tried and produced a blob — too many broken racs converging
+        // on the same coordinate. Now they spread apart and recover
+        // morale once they're clear of enemy density (moraleTick).
+        next = BEHAVIOR_ROUT;
       } else if (
         // CHARGE order skips FLANK detour — fanatics plow in.
         order !== STANDING_ORDER_IDX_CHARGE &&
@@ -541,45 +568,36 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         next = BEHAVIOR_MARCH;
       }
       state.rac.behavior[i] = next;
-      // Cadence-gated aim refresh for the lookup-heavy behaviors.
-      // RALLY: cached leader row (or fallback bin) found during
-      // decision. ROUT: bin if alive, else any friendly leader, else
-      // flee-from nearest enemy (ROUT intent picks fleeFrom; here we
-      // just stash bin if available so the intent can skip the search).
-      // FLANK / KITE / MARCH / ENGAGE recompute aim per-tick from
-      // current target — cheap, always fresh.
+      // Cadence-gated aim refresh for ROUT: each broken rac picks its
+      // OWN flee direction (away from its nearest enemy) and aims at a
+      // point FLEE_DIST out along that vector. Per-rac directions =
+      // panicked scatter, not a blob. If no enemy is reachable (e.g.
+      // ally ROUT after wipe), fall back to nearest friendly bin so
+      // they head somewhere useful instead of standing there.
       let aimValid = 0;
       let aimX = 0;
       let aimY = 0;
-      if (next === BEHAVIOR_RALLY) {
-        if (cachedRallyLeaderRow >= 0) {
-          aimX = state.rac.x[cachedRallyLeaderRow];
-          aimY = state.rac.y[cachedRallyLeaderRow];
-          aimValid = 1;
-        } else {
+      if (next === BEHAVIOR_ROUT) {
+        const enemyRow = findNearestEnemy(state, i);
+        if (enemyRow >= 0) {
+          const ex = state.rac.x[enemyRow];
+          const ey = state.rac.y[enemyRow];
+          const fdx = myX - ex;
+          const fdy = myY - ey;
+          const fd = Math.hypot(fdx, fdy);
+          if (fd > 1e-3) {
+            aimX = myX + (fdx / fd) * FLEE_DIST;
+            aimY = myY + (fdy / fd) * FLEE_DIST;
+            aimValid = 1;
+          }
+        }
+        if (!aimValid) {
+          // No nearby enemy to flee from — head to a friendly bin
+          // (defensive fallback, e.g. last survivor or post-rout).
           const binRow = findFriendlyBin(state, i);
           if (binRow >= 0) {
             aimX = state.bin.x[binRow];
             aimY = state.bin.y[binRow];
-            aimValid = 1;
-          }
-        }
-      } else if (next === BEHAVIOR_ROUT) {
-        const binRow = findFriendlyBin(state, i);
-        if (binRow >= 0) {
-          aimX = state.bin.x[binRow];
-          aimY = state.bin.y[binRow];
-          aimValid = 1;
-        } else {
-          // No friendly bin — try to rally on any friendly squad
-          // leader anywhere on the map. Searches via the spatial grid
-          // with a map-diagonal radius so we still cross the map but
-          // skip empty cells. If neither bin nor leader exists, intent
-          // falls through to flee-from-enemy.
-          const leaderRow = findRoutLeader(state, i);
-          if (leaderRow >= 0) {
-            aimX = state.rac.x[leaderRow];
-            aimY = state.rac.y[leaderRow];
             aimValid = 1;
           }
         }
@@ -610,31 +628,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const pinned = state.rac.pinnedUntilTick[i] > tickNow;
     const maxV = state.rac.effSpeed[i] * (pinned ? PIN_SPEED_MUL : 1);
 
-    if (behavior === BEHAVIOR_RALLY) {
-      // Rally: aim point cached on decision tick (nearest leader, or
-      // friendly bin fallback). Intent just steers toward cached aim
-      // each tick — fresh leader position is picked up at the next
-      // cadence tick. Morale recovers in moraleTick while rallying.
-      //
-      // Arrival deadband: once we're within RALLY_ARRIVAL_R of the aim
-      // point, stop seeking. Without this every rallying rac plows
-      // toward the leader's exact pixel, the seek force overpowers
-      // the cross-unit repulsion until they're packed at <0.8 m, and
-      // the squad collapses into a blob. With the deadband racs settle
-      // in a ring around the leader and repulsion spaces them out.
-      if (state.rac.aimValid[i]) {
-        const dx = state.rac.aimX[i] - myX;
-        const dy = state.rac.aimY[i] - myY;
-        const d2 = dx * dx + dy * dy;
-        const arrR =
-          role === ROLE_CAVALRY ? RALLY_ARRIVAL_R_CAVALRY : RALLY_ARRIVAL_R_DEFAULT;
-        if (d2 > arrR * arrR) {
-          const d = Math.sqrt(d2);
-          desiredVx = (dx / d) * maxV;
-          desiredVy = (dy / d) * maxV;
-        }
-      }
-    } else if (behavior === BEHAVIOR_FLANK) {
+    if (behavior === BEHAVIOR_FLANK) {
       // Cavalry flank: locate the LINE (highest-density spot along
       // the seek path), measure the gradient AT the line (perpendicular
       // to the line direction), probe laterally from the line position
@@ -784,87 +778,50 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         }
       }
     } else if (behavior === BEHAVIOR_ROUT) {
-      // Retreat priority cascade (target chosen on cadence-tick decision
-      // and stashed in aim*: bin if alive, else any friendly leader, else
-      // aimValid=0 → flee-from below). Off-cadence ticks just steer
-      // toward cached aim; the heavy bin/leader search runs at most once
-      // per behavior-cadence (default 8 ticks for infantry).
-      //
-      // Arrival deadband mirrors RALLY: once we're within ROUT_ARRIVAL_R
-      // of the bin / fallback leader, hold instead of plowing onto the
-      // exact spot. Without it a wave of routed racs all aiming at the
-      // same bin compresses into a blob.
-      let fx = 0, fy = 0;
-      let arrived = false;
+      // Panicked flee. Aim point cached on cadence tick = my own
+      // position + FLEE_DIST along the away-from-nearest-enemy vector
+      // (so each broken rac runs in its own direction). Speed boosted
+      // to ROUT_SPEED_MUL × maxV. Corner-avoidance blends the flee
+      // direction toward field-center near the bounds so racs don't
+      // pin themselves against a wall.
       if (state.rac.aimValid[i]) {
-        fx = state.rac.aimX[i] - myX;
-        fy = state.rac.aimY[i] - myY;
-        const arrR =
-          role === ROLE_CAVALRY ? ROUT_ARRIVAL_R_CAVALRY : ROUT_ARRIVAL_R_DEFAULT;
-        if (fx * fx + fy * fy < arrR * arrR) arrived = true;
-      } else {
-        // No bin, no leader — flee nearest enemy.
-        let nearestRow = -1;
-        let nearestD2 = Number.POSITIVE_INFINITY;
-        if (grid) {
-          forEachNear(grid, myX, myY, 30, (j) => {
-            if (j === i) return;
-            if (!state.rac.alive[j]) return;
-            if (state.rac.owner[j] === state.rac.owner[i]) return;
-            const dx = state.rac.x[j] - myX;
-            const dy = state.rac.y[j] - myY;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < nearestD2) {
-              nearestD2 = d2;
-              nearestRow = j;
-            }
-          });
-        }
-        const fleeFromX = nearestRow >= 0 ? state.rac.x[nearestRow] : tgtFound ? tgtX : myX;
-        const fleeFromY = nearestRow >= 0 ? state.rac.y[nearestRow] : tgtFound ? tgtY : myY;
-        fx = myX - fleeFromX;
-        fy = myY - fleeFromY;
-      }
-
-      // Corner-avoidance: as we approach a wall, blend the flee
-      // direction toward field-center so racs don't pin themselves
-      // in a corner. Bias scales 0..1 with proximity to bounds —
-      // 0 inside the central 60% of the field, 1 right at the edge.
-      const wallSlackX = 0.6;
-      const wallSlackY = 0.6;
-      const overX = Math.max(0, Math.abs(myX) / halfW - wallSlackX) / (1 - wallSlackX);
-      const overY = Math.max(0, Math.abs(myY) / halfH - wallSlackY) / (1 - wallSlackY);
-      const wallBias = Math.min(0.8, Math.max(overX, overY));
-      if (wallBias > 0) {
-        // Direction toward center.
-        const cx = -myX;
-        const cy = -myY;
-        const cl = Math.hypot(cx, cy);
-        if (cl > 1e-3) {
-          const fl = Math.hypot(fx, fy);
-          if (fl > 1e-3) {
-            const fux = fx / fl;
-            const fuy = fy / fl;
+        let fx = state.rac.aimX[i] - myX;
+        let fy = state.rac.aimY[i] - myY;
+        // Corner-avoidance: blend toward field center near edges.
+        const wallSlack = 0.6;
+        const overX = Math.max(0, Math.abs(myX) / halfW - wallSlack) / (1 - wallSlack);
+        const overY = Math.max(0, Math.abs(myY) / halfH - wallSlack) / (1 - wallSlack);
+        const wallBias = Math.min(0.8, Math.max(overX, overY));
+        if (wallBias > 0) {
+          const cx = -myX;
+          const cy = -myY;
+          const cl = Math.hypot(cx, cy);
+          const fl0 = Math.hypot(fx, fy);
+          if (cl > 1e-3 && fl0 > 1e-3) {
+            const fux = fx / fl0;
+            const fuy = fy / fl0;
             const cux = cx / cl;
             const cuy = cy / cl;
             fx = fux * (1 - wallBias) + cux * wallBias;
             fy = fuy * (1 - wallBias) + cuy * wallBias;
-          } else {
-            fx = cx / cl;
-            fy = cy / cl;
           }
         }
-      }
-
-      const fl = Math.hypot(fx, fy);
-      if (fl > 1e-3 && !arrived) {
-        const speed = maxV * ROUT_SPEED_MUL;
-        desiredVx = (fx / fl) * speed;
-        desiredVy = (fy / fl) * speed;
+        const fl = Math.hypot(fx, fy);
+        // Arrival deadband: once we're past FLEE_DIST from the enemy,
+        // we've arrived at the aim point. Stand still (cross-unit
+        // repulsion will spread the cluster) while morale recovers.
+        const arrR =
+          role === ROLE_CAVALRY ? ROUT_ARRIVAL_R_CAVALRY : ROUT_ARRIVAL_R_DEFAULT;
+        if (fl > arrR) {
+          const speed = maxV * ROUT_SPEED_MUL;
+          desiredVx = (fx / fl) * speed;
+          desiredVy = (fy / fl) * speed;
+        }
       }
     } else if (behavior === BEHAVIOR_ENGAGE) {
       if (tgtFound) {
-        if (role === ROLE_CAVALRY) {
+        const tkindLocal = state.rac.targetKind[i];
+        if (role === ROLE_CAVALRY && tkindLocal === TARGET_KIND_RAC) {
           // Cavalry OVERRUN — aim PAST the target so they charge
           // through. Pack of cavalry chasing the same enemy gets
           // herd-intercept: each rac picks a different lookahead
@@ -872,14 +829,16 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
           // across intercept points instead of all crashing the
           // same spot. Senior (lowest-id) attackers tend toward the
           // current position; juniors aim further ahead.
+          //
+          // Bins are NOT overrun: a bin can't flee, so charging
+          // through it just leaves the cavalry on the far side, where
+          // they retarget and charge back. Multiple cavalry doing
+          // that around a bin = a self-swirl (the user-visible bug).
+          // Cavalry-vs-bin uses the standard close-and-attack path
+          // below, with the same per-id angular offset so they spread
+          // around the bin instead of piling onto its center.
           const tid = state.rac.targetId[i];
-          const tkindLocal = state.rac.targetKind[i];
-          const tRow =
-            tkindLocal === TARGET_KIND_RAC
-              ? findRacRowById(state, tid)
-              : tkindLocal === TARGET_KIND_BIN
-                ? findBinRowById(state, tid)
-                : -1;
+          const tRow = findRacRowById(state, tid);
           let pX = tgtX, pY = tgtY;
           if (tRow >= 0) {
             const aim = herdAimPoint(state, myRacId, tkindLocal, tRow);
@@ -899,6 +858,24 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
               desiredVx = (ax / ad) * maxV;
               desiredVy = (ay / ad) * maxV;
             }
+          }
+        } else if (tkindLocal === TARGET_KIND_BIN) {
+          // Engaging a static bin: aim at a per-id angular offset
+          // around the bin's perimeter so the squad surrounds it
+          // instead of converging on a single point. Each rac stakes
+          // out one slot of a ring at ~85% of attack range and holds.
+          const ringR = state.rac.effRange[i] * 0.85;
+          // Golden-angle distribution from rac id keeps neighbors at
+          // visually different angles (same trick as Vogel disc).
+          const ang = myRacId * 2.39996323; // ~golden angle in radians
+          const aimXBin = tgtX + Math.cos(ang) * ringR;
+          const aimYBin = tgtY + Math.sin(ang) * ringR;
+          const dxA = aimXBin - myX;
+          const dyA = aimYBin - myY;
+          const dA = Math.hypot(dxA, dyA);
+          if (dA > 1e-3) {
+            desiredVx = (dxA / dA) * maxV;
+            desiredVy = (dyA / dA) * maxV;
           }
         } else if (distToTarget > state.rac.effRange[i]) {
           // Tank / infantry / archer: walk to attack range, then hold.

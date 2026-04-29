@@ -115,7 +115,12 @@ export function moraleTick(state: BattleState): void {
     // = false → MARCH/ENGAGE). Capped at 1.0 to avoid drifting past
     // full morale. Rally racs are exempt from the flank penalty —
     // they're already broken, no point piling on.
-    if (state.rac.behavior[i] === BEHAVIOR_RALLY) {
+    // Morale recovery: any broken rac that's no longer in contact
+    // with enemies gains morale per second. Used to be RALLY-only
+    // (broken racs heading to a leader), but the rally-on-leader
+    // attractor produced blobs; now broken racs scatter via per-rac
+    // ROUT and recover whenever they've fled out of contact range.
+    if (state.rac.morale[i] < myThreshold && state.rac.contact[i] === 0) {
       state.rac.morale[i] = Math.min(
         1,
         state.rac.morale[i] + RALLY_RECOVERY_RATE * dt,
