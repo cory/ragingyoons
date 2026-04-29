@@ -100,7 +100,12 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
   const minCadence = Math.min(
     ...state.tacticPerSide.flat().map((p) => p.targetRethinkTicks),
   );
-  if (state.tick % minCadence !== 0) return;
+  // Tick 1 always runs, so newly-spawned racs pick a target before
+  // their first motionTick — without this, infantry (cadence 20)
+  // would have no target until tick 20, and squads spend ~1 second
+  // standing still at round start.
+  const isFirstTick = state.tick === 1;
+  if (!isFirstTick && state.tick % minCadence !== 0) return;
 
   const n = state.rac.count;
   const m = state.bin.count;
@@ -172,7 +177,7 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     // Per-rac cadence gate (different roles can rethink at different
     // rates). The outer mod ensures we even get here.
     const cadence = state.tacticPerSide[myOwner][state.rac.role[i]].targetRethinkTicks;
-    if (state.tick % cadence !== 0) continue;
+    if (!isFirstTick && state.tick % cadence !== 0) continue;
 
     // Sticky targets: if the current target is still alive and within
     // STICKY_RADIUS, keep it. Skips the scan in the common case.

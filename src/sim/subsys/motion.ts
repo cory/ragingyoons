@@ -485,7 +485,17 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       let next = state.rac.behavior[i];
       let cachedRallyLeaderRow = -1;
       if (broken) {
-        cachedRallyLeaderRow = findRallyLeader(state, i);
+        // Prefer my OWN squad's leader if alive — broken racs should
+        // fall back to the formation they belong to, not run all the
+        // way to the spawn bin (which can be 100+ m away on a big
+        // field — the user-visible bug was "soldiers run way too far
+        // after getting hit"). Falls back to any leader within
+        // RALLY_RADIUS, then to ROUT.
+        if (!isLeader && leaderAlive) {
+          cachedRallyLeaderRow = leaderRow;
+        } else {
+          cachedRallyLeaderRow = findRallyLeader(state, i);
+        }
         next = cachedRallyLeaderRow >= 0 ? BEHAVIOR_RALLY : BEHAVIOR_ROUT;
       } else if (
         // CHARGE order skips FLANK detour — fanatics plow in.
@@ -927,9 +937,18 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
           desiredVx = dx / dt;
           desiredVy = dy / dt;
         }
-      } else if (tgtFound && order !== STANDING_ORDER_IDX_HOLD) {
+      } else if (
+        tgtFound &&
+        order !== STANDING_ORDER_IDX_HOLD &&
+        role !== ROLE_ARCHER
+      ) {
         // Leader / non-formation roles: aim at world target unless
         // standing order is HOLD (then sit until enemy comes to us).
+        // Archers explicitly excluded — they should never plow toward
+        // an out-of-kite-range target. Outside KITE band, they hold
+        // position (or follow squad leader once we wire that up); the
+        // visible bug was archers chasing fleeing units across the
+        // map at full speed.
         const dx = tgtX - myX;
         const dy = tgtY - myY;
         const d = distToTarget;
@@ -1155,8 +1174,9 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // Mod-N gate: this drives a damage multiplier that's only meaningful
     // in melee (combat fires at 1+ Hz, far slower than 24-tick sim).
     // Refresh every IN_FORMATION_CHECK_TICKS; off-cadence ticks reuse
-    // the cached value. Phase by row so the cost spreads evenly.
-    if ((tickNow + i) % IN_FORMATION_CHECK_TICKS === 0) {
+    // the cached value. Phase by row so the cost spreads evenly. Tick 1
+    // always runs so the first frame has correct inFormation flags.
+    if (tickNow === 1 || (tickNow + i) % IN_FORMATION_CHECK_TICKS === 0) {
       let inFormation = 0;
       if (
         (role === ROLE_INFANTRY || role === ROLE_TANK) &&
