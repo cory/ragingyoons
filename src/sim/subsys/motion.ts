@@ -979,14 +979,21 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         }
       }
       if (usingSlotDirect) {
-        // Aim at predicted slot = leader.next-tick-pos + rotated offset.
-        // slotSx / slotSy were already computed (with current leader pos);
-        // adding leader.vel * dt projects forward one tick so a moving
-        // leader doesn't leave the squad behind.
-        const sX = slotSx + lvx * dt;
-        const sY = slotSy + lvy * dt;
-        const dx = sX - myX;
-        const dy = sY - myY;
+        // Aim at slot = leader.pos + rotated-offset. We used to add
+        // leader.vel * dt to predict next-tick slot, but motionTick
+        // iterates racs in a shuffled per-tick order — when the leader
+        // had already integrated this tick the prediction "doubled
+        // up" (used post-integration leader pos PLUS one more tick of
+        // velocity), so followers landed one tick ahead of slot;
+        // when the leader hadn't yet integrated, followers landed
+        // exactly at slot. Tick-to-tick the order shuffles, so each
+        // follower oscillated between two states — the start-of-
+        // round wiggle. Without prediction followers lag the leader
+        // by leader.vel * dt = 0.17 m at maxV, which is invisible.
+        void lvx;
+        void lvy;
+        const dx = slotSx - myX;
+        const dy = slotSy - myY;
         const reqSpeed = Math.hypot(dx, dy) / dt;
         if (reqSpeed > marchMaxV) {
           const inv = 1 / Math.hypot(dx, dy);
