@@ -100,11 +100,19 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
   const minCadence = Math.min(
     ...state.tacticPerSide.flat().map((p) => p.targetRethinkTicks),
   );
-  // Tick 1 always runs, so newly-spawned racs pick a target before
-  // their first motionTick — without this, infantry (cadence 20)
-  // would have no target until tick 20, and squads spend ~1 second
-  // standing still at round start.
-  const isFirstTick = state.tick === 1;
+  // First-call seeding: every rac runs its scoring loop on the very
+  // first targetTick so newly-spawned racs pick a target before their
+  // first motionTick. Without this, infantry (cadence 20) would have
+  // no target until tick 20 and squads spend ~1 second standing still
+  // at round start.
+  //
+  // We use a one-shot flag instead of `state.tick === 1` because
+  // state.tick varies by caller — runBattle/bench-shape set it
+  // manually AND tick() increments, so subsystems see state.tick=2
+  // on their first invocation, not 1. The flag fires reliably on
+  // the literal first call regardless of starting tick.
+  const isFirstTick = !state._targetTickRanOnce;
+  state._targetTickRanOnce = true;
   if (!isFirstTick && state.tick % minCadence !== 0) return;
 
   const n = state.rac.count;

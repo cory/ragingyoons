@@ -394,6 +394,13 @@ export interface BattleState {
   _leaderPreY?: Float32Array;
   _leaderPreVx?: Float32Array;
   _leaderPreVy?: Float32Array;
+  /** Set true after targetTick's first run. Used to seed initial
+   *  targets exactly once regardless of where state.tick happens to
+   *  be when the sim starts (callers vary in whether they set
+   *  state.tick before tick() or rely on tick()'s internal
+   *  increment, so a literal `state.tick === 1` check missed the
+   *  first call in the lab + bench paths). */
+  _targetTickRanOnce?: boolean;
   /** Per-rac desired-velocity scratch produced by the motionTick
    *  intent pass, consumed by the apply pass on the same tick. We
    *  keep it on state (as opposed to a tick-local Float32Array) so
