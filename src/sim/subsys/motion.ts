@@ -1111,7 +1111,14 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // tick-to-tick. Cavalry is the only role with a finite cap so a
     // full-speed charger has real momentum (can't stop on a dime,
     // can't pivot 180°). Other roles use Infinity (no cap).
-    const maxAccel = MAX_ACCEL_BY_ROLE[role] ?? Infinity;
+    //
+    // ROUT bypasses the cap — adrenaline. Without this, cavalry that
+    // breaks while holding station (e.g. attacking a bin at V=0)
+    // takes >1 s to ramp up to flee speed because 8 m/s² × dt is only
+    // 0.34 m/s of velocity change per tick, looking like "they just
+    // stop" before slowly running.
+    const maxAccel =
+      behavior === BEHAVIOR_ROUT ? Infinity : MAX_ACCEL_BY_ROLE[role] ?? Infinity;
     if (Number.isFinite(maxAccel)) {
       const dvx = newVx - myVx;
       const dvy = newVy - myVy;
