@@ -207,9 +207,9 @@ function findFriendlyBin(state: BattleState, i: number): number {
   // Prefer the rac's source bin if it's still alive — that's our
   // home base. Otherwise fall back to nearest alive friendly bin.
   const srcBinId = state.rac.sourceBinId[i];
-  if (srcBinId >= 0) {
-    const row = state.binRowById.get(srcBinId);
-    if (row !== undefined && state.bin.alive[row] && state.bin.owner[row] === myOwner) {
+  if (srcBinId >= 0 && srcBinId < state.binRowById.length) {
+    const row = state.binRowById[srcBinId];
+    if (row >= 0 && state.bin.alive[row] && state.bin.owner[row] === myOwner) {
       return row;
     }
   }
@@ -368,13 +368,28 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
   }
   const leaderRotCos = state._leaderRotCos;
   const leaderRotSin = state._leaderRotSin!;
+  const leaderRowArr = state.rac.leaderRow;
+  // Combined pass: cache leader rotation (cos/sin) for each squad
+  // leader, AND resolve every follower's leader row from squadLeaderId
+  // → row. Followers in the main loop then read leaderRow[i] directly
+  // instead of doing a per-tick findRacRowById Map lookup.
   for (let r = 0; r < state.rac.count; r++) {
     if (!state.rac.alive[r]) continue;
-    if (state.rac.squadLeaderId[r] !== state.rac.id[r]) continue;
-    const spawnFacing = state.rac.owner[r] === 0 ? 0 : Math.PI;
-    const dFace = state.rac.facing[r] - spawnFacing;
-    leaderRotCos[r] = Math.cos(dFace);
-    leaderRotSin[r] = Math.sin(dFace);
+    const myRid = state.rac.id[r];
+    const myLid = state.rac.squadLeaderId[r];
+    if (myLid === myRid || myLid < 0) {
+      // Leader (or unaffiliated). Cache its own rotation for any
+      // follower lookups; mark its leaderRow as -1 (intent paths
+      // gate on "isLeader" via squadLeaderId, not leaderRow).
+      const spawnFacing = state.rac.owner[r] === 0 ? 0 : Math.PI;
+      const dFace = state.rac.facing[r] - spawnFacing;
+      leaderRotCos[r] = Math.cos(dFace);
+      leaderRotSin[r] = Math.sin(dFace);
+      leaderRowArr[r] = -1;
+    } else {
+      // Follower — resolve leader's row once per tick.
+      leaderRowArr[r] = findRacRowById(state, myLid);
+    }
   }
 
   for (let i = 0; i < state.rac.count; i++) {
@@ -427,7 +442,7 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const myRacId = state.rac.id[i];
     const myLeaderId = state.rac.squadLeaderId[i];
     const isLeader = myLeaderId === myRacId || myLeaderId < 0;
-    const leaderRow = isLeader ? -1 : findRacRowById(state, myLeaderId);
+    const leaderRow = isLeader ? -1 : leaderRowArr[i];
     const leaderAlive = leaderRow >= 0;
 
     // Resolve current target position (used by both decision + intent).
@@ -940,39 +955,73 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     let nudgeVx = 0;
     let nudgeVy = 0;
     if (grid) {
+      // Inlined cell walk for the close-range / cross-unit repulsion
+      // scan. The closure form (forEachNear with a callback) was
+      // measurable in profiling; inlining lets the JIT keep all the
+      // loop locals (myOwner, mySquadId, the nudge accumulators) in
+      // registers and eliminates the per-cell function-call overhead.
       const mySquadId = state.rac.squadId[i];
+      const myRacIdLocal = state.rac.id[i];
       const SCAN_R = CLOSE_R > CROSS_UNIT_R ? CLOSE_R : CROSS_UNIT_R;
-      forEachNear(grid, myX, myY, SCAN_R, (j) => {
-        if (j === i) return;
-        if (!state.rac.alive[j]) return;
-        const dx = myX - state.rac.x[j];
-        const dy = myY - state.rac.y[j];
-        const d2 = dx * dx + dy * dy;
-        if (d2 < CLOSE_R2) {
-          if (d2 < 1e-6) {
-            const h = ((state.rac.id[i] * 31 + state.rac.id[j]) >>> 0) / 4294967296;
-            const ang = h * Math.PI * 2;
-            nudgeVx += Math.cos(ang) * CLOSE_K;
-            nudgeVy += Math.sin(ang) * CLOSE_K;
-            return;
+      const gCellSize = grid.cellSize;
+      const gCols = grid.cols;
+      const gRows = grid.rows;
+      const gHalfW = grid.halfW;
+      const gHalfH = grid.halfH;
+      const gCellStart = grid.cellStart;
+      const gEntries = grid.entries;
+      const gAcross = Math.ceil(SCAN_R / gCellSize);
+      const baseCx = Math.floor((myX + gHalfW) / gCellSize);
+      const baseCy = Math.floor((myY + gHalfH) / gCellSize);
+      let gMinCx = baseCx - gAcross; if (gMinCx < 0) gMinCx = 0;
+      let gMaxCx = baseCx + gAcross; if (gMaxCx >= gCols) gMaxCx = gCols - 1;
+      let gMinCy = baseCy - gAcross; if (gMinCy < 0) gMinCy = 0;
+      let gMaxCy = baseCy + gAcross; if (gMaxCy >= gRows) gMaxCy = gRows - 1;
+      const racX = state.rac.x;
+      const racY = state.rac.y;
+      const racAlive = state.rac.alive;
+      const racOwner = state.rac.owner;
+      const racSquadId = state.rac.squadId;
+      const racIdArr = state.rac.id;
+      for (let cy = gMinCy; cy <= gMaxCy; cy++) {
+        for (let cx = gMinCx; cx <= gMaxCx; cx++) {
+          const c = cy * gCols + cx;
+          const start = gCellStart[c];
+          const end = gCellStart[c + 1];
+          for (let k = start; k < end; k++) {
+            const j = gEntries[k];
+            if (j === i) continue;
+            if (!racAlive[j]) continue;
+            const dx = myX - racX[j];
+            const dy = myY - racY[j];
+            const d2 = dx * dx + dy * dy;
+            if (d2 < CLOSE_R2) {
+              if (d2 < 1e-6) {
+                const h = ((myRacIdLocal * 31 + racIdArr[j]) >>> 0) / 4294967296;
+                const ang = h * Math.PI * 2;
+                nudgeVx += Math.cos(ang) * CLOSE_K;
+                nudgeVy += Math.sin(ang) * CLOSE_K;
+                continue;
+              }
+              const d = Math.sqrt(d2);
+              const w = ((CLOSE_R - d) / CLOSE_R) * CLOSE_K;
+              nudgeVx += (dx / d) * w;
+              nudgeVy += (dy / d) * w;
+              continue;
+            }
+            if (
+              d2 < CROSS_UNIT_R2 &&
+              racOwner[j] === myOwner &&
+              racSquadId[j] !== mySquadId
+            ) {
+              const d = Math.sqrt(d2);
+              const w = ((CROSS_UNIT_R - d) / CROSS_UNIT_R) * CROSS_UNIT_K;
+              nudgeVx += (dx / d) * w;
+              nudgeVy += (dy / d) * w;
+            }
           }
-          const d = Math.sqrt(d2);
-          const w = ((CLOSE_R - d) / CLOSE_R) * CLOSE_K;
-          nudgeVx += (dx / d) * w;
-          nudgeVy += (dy / d) * w;
-          return;
         }
-        if (
-          d2 < CROSS_UNIT_R2 &&
-          state.rac.owner[j] === myOwner &&
-          state.rac.squadId[j] !== mySquadId
-        ) {
-          const d = Math.sqrt(d2);
-          const w = ((CROSS_UNIT_R - d) / CROSS_UNIT_R) * CROSS_UNIT_K;
-          nudgeVx += (dx / d) * w;
-          nudgeVy += (dy / d) * w;
-        }
-      });
+      }
     }
     state.rac.contact[i] = contact;
 

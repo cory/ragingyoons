@@ -24,10 +24,13 @@ import {
   MAX_BINS,
   MAX_GARRISON_SLOTS,
   MAX_RACS,
+  allocIdIndex,
   composeFormationProfiles,
   emptyAtks,
   emptyBins,
   emptyRacs,
+  setBinRowById,
+  setRacRowById,
   type BattleState,
   type Owner,
 } from "../../src/sim/state.js";
@@ -120,8 +123,8 @@ export function emptyState(opts: { seed?: number; bounds?: { w: number; h: numbe
     tacticPerSide: composeTactics(),
     formationProfile: [[], []],
     formationContactProfile: [[], []],
-    racRowById: new Map(),
-    binRowById: new Map(),
+    racRowById: allocIdIndex(),
+    binRowById: allocIdIndex(),
   };
   // Build formation-profile lookup; subsystems read from this directly.
   composeFormationProfiles(state);
@@ -162,7 +165,7 @@ export function addBin(
   }
   state.bin.alive[slot] = 1;
   state.bin.count = slot + 1;
-  state.binRowById.set(state.bin.id[slot], slot);
+  setBinRowById(state, state.bin.id[slot], slot);
   return slot;
 }
 
@@ -225,7 +228,7 @@ export function addRac(
   // which would freeze tests that don't explicitly set it).
   state.rac.standingOrder[slot] = 2; // STANDING_ORDER_IDX_ADVANCE
   state.rac.count = slot + 1;
-  state.racRowById.set(state.rac.id[slot], slot);
+  setRacRowById(state, state.rac.id[slot], slot);
   return slot;
 }
 

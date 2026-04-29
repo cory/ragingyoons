@@ -198,6 +198,11 @@ export interface RacTable {
    *  squadLeaderId gets rewritten to point at the new leader. -1 if
    *  the squad has been wiped. */
   squadLeaderId: Int32Array;
+  /** Cached row of this rac's squad leader. Refreshed once at the top
+   *  of motionTick (after squadTick, so squadLeaderId is current).
+   *  Saves one findRacRowById per follower per tick in motion's hot
+   *  path. -1 = leader is gone, or this rac IS its own leader. */
+  leaderRow: Int16Array;
   /** Set by motionTick each tick: 1 if this rac is currently in
    *  formation (non-broken follower with a live leader, close enough
    *  to its slot target). Read by combat for the in-formation frontal
@@ -331,8 +336,14 @@ export interface BattleState {
   _tickIterOrder?: Int32Array;
   /** id → row index lookup tables. Maintained by spawn/death code paths
    *  so findRacRowById / findBinRowById are O(1) instead of O(N). */
-  racRowById: Map<number, number>;
-  binRowById: Map<number, number>;
+  /** Sparse id → row map for racs / bins. Replaces a Map<number,number>:
+   *  Int32Array indexed by id is ~5–10× faster for the hot lookup path
+   *  (target/combat/motion call this several times per rac per tick).
+   *  Sentinel -1 means "no such id". Auto-grows when an id beyond the
+   *  current capacity is written. Uses Int32Array (signed) so we can
+   *  store -1; row indices are always ≥ 0 and ≤ MAX_RACS / MAX_BINS. */
+  racRowById: Int32Array;
+  binRowById: Int32Array;
   /** When true, synergyModsFor / synergyBinMods return identity. Set
    *  from BattleConfig.disableSynergies; read by synergy.ts. */
   disableSynergies?: boolean;
@@ -513,6 +524,7 @@ export function emptyRacs(): RacTable {
     morale: new Float32Array(MAX_RACS),
     squadId: new Uint16Array(MAX_RACS),
     squadLeaderId: new Int32Array(MAX_RACS),
+    leaderRow: new Int16Array(MAX_RACS),
     inFormation: new Uint8Array(MAX_RACS),
     behavior: new Uint8Array(MAX_RACS),
     nextDecisionTick: new Int32Array(MAX_RACS),
@@ -659,7 +671,7 @@ function spawnSideRacs(
         const racRow = state.rac.count;
         const racId = state.nextRacId++;
         state.rac.id[racRow] = racId;
-        state.racRowById.set(racId, racRow);
+        setRacRowById(state, racId,  racRow);
         state.rac.owner[racRow] = owner;
         state.rac.sourceBinId[racRow] = sourceBinId;
         state.rac.sourceSlotIdx[racRow] = -1;
@@ -744,8 +756,8 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
     tacticPerSide: composeTactics(),
     formationProfile: [[], []],
     formationContactProfile: [[], []],
-    racRowById: new Map(),
-    binRowById: new Map(),
+    racRowById: allocIdIndex(),
+    binRowById: allocIdIndex(),
     disableSynergies: cfg.disableSynergies ?? false,
   };
   composeFormationProfiles(state);
@@ -782,7 +794,7 @@ export function setupShapeBattle(content: ContentBundle, cfg: ShapeBattleConfig)
     }
     state.bin.alive[slot] = 1;
     state.bin.count = slot + 1;
-    state.binRowById.set(state.bin.id[slot], slot);
+    setBinRowById(state, state.bin.id[slot],  slot);
     return state.bin.id[slot];
   };
 
@@ -879,8 +891,8 @@ export function setupBattle(content: ContentBundle, cfg: BattleConfig): BattleSt
     tacticPerSide: composeTactics(cfg.tacticsA, cfg.tacticsB),
     formationProfile: [[], []],
     formationContactProfile: [[], []],
-    racRowById: new Map(),
-    binRowById: new Map(),
+    racRowById: allocIdIndex(),
+    binRowById: allocIdIndex(),
     disableSynergies: cfg.disableSynergies ?? false,
   };
   // Compose per-formation effective profiles for both sides. Indexed
@@ -955,7 +967,7 @@ function placeComp(state: BattleState, content: ContentBundle, comp: CompDef, ow
     }
     state.bin.alive[slot] = 1;
     state.bin.count = slot + 1;
-    state.binRowById.set(state.bin.id[slot], slot);
+    setBinRowById(state, state.bin.id[slot],  slot);
     // Pre-mark role/env/cur indices for whatever subsystem wants them later.
     void ROLE_TO_IDX[u.role];
     void ENV_TO_IDX[u.environment];
@@ -1059,23 +1071,61 @@ export function summarize(state: BattleState): {
   };
 }
 
+/** Initial capacity of the id→row arrays. Grows on overflow; this is
+ *  generous enough that almost no battle hits the grow path. */
+const ID_INDEX_INITIAL_CAP = 4096;
+
+/** Allocate / reset an id-index array. -1 means "no such row". */
+export function allocIdIndex(initial: number = ID_INDEX_INITIAL_CAP): Int32Array {
+  const arr = new Int32Array(initial);
+  arr.fill(-1);
+  return arr;
+}
+
+/** Grow `arr` to accommodate index `id`, keeping existing entries and
+ *  filling new tail with -1. Returns the (possibly new) buffer.  */
+function ensureIdIndexCap(arr: Int32Array, id: number): Int32Array {
+  if (id < arr.length) return arr;
+  let cap = arr.length;
+  while (cap <= id) cap *= 2;
+  const next = new Int32Array(cap);
+  next.set(arr);
+  next.fill(-1, arr.length);
+  return next;
+}
+
+/** Set racRowById[id] = row, growing the buffer if id is past cap. */
+export function setRacRowById(state: BattleState, id: number, row: number): void {
+  if (id >= state.racRowById.length) {
+    state.racRowById = ensureIdIndexCap(state.racRowById, id);
+  }
+  state.racRowById[id] = row;
+}
+
+export function setBinRowById(state: BattleState, id: number, row: number): void {
+  if (id >= state.binRowById.length) {
+    state.binRowById = ensureIdIndexCap(state.binRowById, id);
+  }
+  state.binRowById[id] = row;
+}
+
 /** Returns the row index of an alive raccoon by its id, or -1.
- *  O(1) via state.racRowById; the map is updated on spawn (in
+ *  O(1) via state.racRowById; the index is updated on spawn (in
  *  spawn.ts) and on death (in spawn.ts:freeRacSlot / combat.ts:
  *  markRacDead). Falls back to -1 if the id isn't tracked or the row
  *  is no longer alive. */
 export function findRacRowById(state: BattleState, id: number): number {
-  if (id < 0) return -1;
-  const row = state.racRowById.get(id);
-  if (row === undefined) return -1;
+  if (id < 0 || id >= state.racRowById.length) return -1;
+  const row = state.racRowById[id];
+  if (row < 0) return -1;
   if (!state.rac.alive[row]) return -1;
   return row;
 }
 
 export function findBinRowById(state: BattleState, id: number): number {
-  if (id < 0) return -1;
-  const row = state.binRowById.get(id);
-  if (row === undefined) return -1;
+  if (id < 0 || id >= state.binRowById.length) return -1;
+  const row = state.binRowById[id];
+  if (row < 0) return -1;
   if (!state.bin.alive[row]) return -1;
   return row;
 }

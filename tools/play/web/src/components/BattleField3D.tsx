@@ -377,8 +377,11 @@ export function BattleField3D({
           const r = battleState.rac;
           // 1. Release slots for racs that died since last snapshot.
           for (const [racId, slot] of slotByRacId) {
-            const row = battleState.racRowById.get(racId);
-            if (row === undefined || !r.alive[row]) {
+            const row =
+              racId >= 0 && racId < battleState.racRowById.length
+                ? battleState.racRowById[racId]
+                : -1;
+            if (row < 0 || !r.alive[row]) {
               slotByRacId.delete(racId);
               freeSlots.push(slot);
               curAlive[slot] = 0;

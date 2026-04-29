@@ -40,7 +40,10 @@ export function decayTick(state: BattleState, content: ContentBundle, log: Logge
     if (after <= 0) {
       state.bin.hp[i] = 0;
       state.bin.alive[i] = 0;
-      state.binRowById.delete(state.bin.id[i]);
+      {
+        const _id = state.bin.id[i];
+        if (_id >= 0 && _id < state.binRowById.length) state.binRowById[_id] = -1;
+      }
       for (let s = 0; s < MAX_GARRISON_SLOTS; s++) {
         const slotIdx = i * MAX_GARRISON_SLOTS + s;
         state.bin.slotOccupant[slotIdx] = -1;

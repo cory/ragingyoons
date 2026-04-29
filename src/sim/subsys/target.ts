@@ -119,9 +119,9 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     if (!state.rac.alive[j]) continue;
     if (state.rac.targetKind[j] !== TARGET_KIND_RAC) continue;
     const tid = state.rac.targetId[j];
-    if (tid < 0) continue;
-    const tRow = state.racRowById.get(tid);
-    if (tRow !== undefined) attackerCountByRow[tRow]++;
+    if (tid < 0 || tid >= state.racRowById.length) continue;
+    const tRow = state.racRowById[tid];
+    if (tRow >= 0) attackerCountByRow[tRow]++;
   }
 
   // Pre-compute, per side, a 0/1 flag per rac row indicating whether
@@ -189,18 +189,23 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     const STICKY_RADIUS_BIN = 60;
     const curKind = state.rac.targetKind[i];
     const curId = state.rac.targetId[i];
-    if (curKind === TARGET_KIND_RAC && curId >= 0) {
-      const curRow = state.racRowById.get(curId);
-      if (curRow !== undefined && state.rac.alive[curRow]) {
+    if (curKind === TARGET_KIND_RAC && curId >= 0 && curId < state.racRowById.length) {
+      const curRow = state.racRowById[curId];
+      if (curRow >= 0 && state.rac.alive[curRow]) {
         if (state.rac.owner[curRow] !== myOwner) {
           const dx = state.rac.x[curRow] - myX;
           const dy = state.rac.y[curRow] - myY;
           if (dx * dx + dy * dy <= STICKY_RADIUS_RAC * STICKY_RADIUS_RAC) continue;
         }
       }
-    } else if (curKind === TARGET_KIND_BIN && curId >= 0 && isLockpicker) {
-      const curRow = state.binRowById.get(curId);
-      if (curRow !== undefined && state.bin.alive[curRow]) {
+    } else if (
+      curKind === TARGET_KIND_BIN &&
+      curId >= 0 &&
+      curId < state.binRowById.length &&
+      isLockpicker
+    ) {
+      const curRow = state.binRowById[curId];
+      if (curRow >= 0 && state.bin.alive[curRow]) {
         const dx = state.bin.x[curRow] - myX;
         const dy = state.bin.y[curRow] - myY;
         if (dx * dx + dy * dy <= STICKY_RADIUS_BIN * STICKY_RADIUS_BIN) continue;
@@ -225,8 +230,8 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
     let bestRacScore = -Infinity;
     let bestRacD2 = Infinity;
     const myCurTargetRow =
-      curKind === TARGET_KIND_RAC && curId >= 0
-        ? (state.racRowById.get(curId) ?? -1)
+      curKind === TARGET_KIND_RAC && curId >= 0 && curId < state.racRowById.length
+        ? state.racRowById[curId]
         : -1;
     const defenseBase = myOwner * MAX_RACS;
     // Inline cell walk (was forEachNear with a scoreOne closure). The

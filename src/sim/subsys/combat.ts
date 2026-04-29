@@ -109,10 +109,10 @@ export function combatTick(state: BattleState, content: ContentBundle, log: Logg
     // Lockpicker walking past a closer enemy rac to reach a bin).
     const fastTid = state.rac.targetId[i];
     const fastKind = state.rac.targetKind[i];
-    if (fastTid >= 0 && fastKind === TARGET_KIND_RAC) {
-      const fastRow = state.racRowById.get(fastTid);
+    if (fastTid >= 0 && fastKind === TARGET_KIND_RAC && fastTid < state.racRowById.length) {
+      const fastRow = state.racRowById[fastTid];
       if (
-        fastRow !== undefined &&
+        fastRow >= 0 &&
         state.rac.alive[fastRow] &&
         state.rac.owner[fastRow] !== myOwner
       ) {
@@ -532,7 +532,10 @@ export function applyBinDamage(
   if (hpAfter <= 0 && state.bin.alive[tgtBinRow]) {
     state.bin.alive[tgtBinRow] = 0;
     state.bin.hp[tgtBinRow] = 0;
-    state.binRowById.delete(state.bin.id[tgtBinRow]);
+    {
+      const _id = state.bin.id[tgtBinRow];
+      if (_id >= 0 && _id < state.binRowById.length) state.binRowById[_id] = -1;
+    }
     // Mark all garrison slots empty so spawn.ts won't spawn from a dead
     // bin even if their respawn timers happened to expire.
     for (let s = 0; s < MAX_GARRISON_SLOTS; s++) {

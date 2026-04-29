@@ -366,9 +366,9 @@ const lastStandRoutToBin = (c: PhaseCtx): PhaseMod => {
   let bx = 0;
   let by = 0;
   let found = false;
-  if (srcBinId >= 0) {
-    const row = c.state.binRowById.get(srcBinId);
-    if (row !== undefined && c.state.bin.alive[row]) {
+  if (srcBinId >= 0 && srcBinId < c.state.binRowById.length) {
+    const row = c.state.binRowById[srcBinId];
+    if (row >= 0 && c.state.bin.alive[row]) {
       bx = c.state.bin.x[row];
       by = c.state.bin.y[row];
       found = true;

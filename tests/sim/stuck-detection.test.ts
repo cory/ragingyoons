@@ -67,8 +67,9 @@ function tracePaths(
     tick(state, content, log);
     for (let p = 0; p < ids.length; p++) {
       const id = ids[p];
-      const row = state.racRowById.get(id);
-      if (row === undefined || !state.rac.alive[row]) {
+      const row =
+        id >= 0 && id < state.racRowById.length ? state.racRowById[id] : -1;
+      if (row < 0 || !state.rac.alive[row]) {
         positions[p].push(positions[p][positions[p].length - 1]);
         continue;
       }

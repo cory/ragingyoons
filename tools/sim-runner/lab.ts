@@ -39,7 +39,10 @@ import {
   MAX_GARRISON_SLOTS,
   TARGET_KIND_RAC,
   TARGET_KIND_BIN,
+  allocIdIndex,
   composeFormationProfiles,
+  setBinRowById,
+  setRacRowById,
 } from "../../src/sim/state.js";
 import { composeTactics } from "../../src/sim/tactics.js";
 import {
@@ -114,8 +117,8 @@ function emptyState(seed: number): BattleState {
     tacticPerSide: composeTactics(),
     formationProfile: [[], []] as BattleState["formationProfile"],
     formationContactProfile: [[], []] as BattleState["formationContactProfile"],
-    racRowById: new Map<number, number>(),
-    binRowById: new Map<number, number>(),
+    racRowById: allocIdIndex(),
+    binRowById: allocIdIndex(),
   };
   const state = stateAny as unknown as BattleState;
   composeFormationProfiles(state);
@@ -272,7 +275,7 @@ function placeRac(
   state.rac.sourceBinId[slot] = -1;
   state.rac.sourceSlotIdx[slot] = -1;
   state.rac.count = slot + 1;
-  state.racRowById.set(state.rac.id[slot], slot);
+  setRacRowById(state, state.rac.id[slot], slot);
   return slot;
 }
 
@@ -301,7 +304,7 @@ function placeBin(
   }
   state.bin.alive[slot] = 1;
   state.bin.count = slot + 1;
-  state.binRowById.set(state.bin.id[slot], slot);
+  setBinRowById(state, state.bin.id[slot], slot);
   return slot;
 }
 

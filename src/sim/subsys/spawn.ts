@@ -43,7 +43,12 @@ import {
 } from "../doctrines.js";
 import type { Logger } from "../log.js";
 import { rngRange } from "../rng.js";
-import { MAX_GARRISON_SLOTS, SECONDS_PER_TICK, type BattleState } from "../state.js";
+import {
+  MAX_GARRISON_SLOTS,
+  SECONDS_PER_TICK,
+  setRacRowById,
+  type BattleState,
+} from "../state.js";
 import { synergyBinMods, synergyModsFor } from "./synergy.js";
 
 /** Default per-slot respawn time when a raccoon dies. v0a constant; later
@@ -193,7 +198,7 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
         const jy = off.dy + rngRange(state.rng, -SPAWN_JITTER * 0.4, SPAWN_JITTER * 0.4);
 
         state.rac.id[racRow] = racId;
-        state.racRowById.set(racId, racRow);
+        setRacRowById(state, racId, racRow);
         state.rac.owner[racRow] = owner;
         state.rac.sourceBinId[racRow] = state.bin.id[bi];
         state.rac.sourceSlotIdx[racRow] = slotIdx;
@@ -287,7 +292,8 @@ export function spawnTick(state: BattleState, content: ContentBundle, log: Logge
  *  respawn timer starts so a fresh burst can be emitted. Also evicts
  *  the rac id from the row-lookup map. */
 export function freeRacSlot(state: BattleState, racRow: number): void {
-  state.racRowById.delete(state.rac.id[racRow]);
+  const id = state.rac.id[racRow];
+  if (id >= 0 && id < state.racRowById.length) state.racRowById[id] = -1;
   const slotIdx = state.rac.sourceSlotIdx[racRow];
   if (slotIdx < 0) return;
   const next = state.bin.slotOccupant[slotIdx] - 1;
