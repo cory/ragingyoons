@@ -1,10 +1,9 @@
 /**
- * Quick perf bench for shape battles (the lab pipeline). Spawns 48
- * blue infantry vs 48 red infantry on a 120×80 field with the new
- * motion stack, runs 1500 ticks, prints wall time and ticks/sec. No
- * logging, single-threaded.
+ * Quick perf bench for shape battles (the lab pipeline). Spawns 200
+ * blue infantry vs 200 red infantry on a 200×140 field, runs 1000
+ * ticks, prints wall time and ticks/sec. No logging, single-thread.
  *
- *   npx tsx tools/sim-runner/bench-shape.ts [unitId] [count] [ticks]
+ *   npx tsx tools/sim-runner/bench-shape.ts [unitId] [count] [ticks] [battles]
  */
 
 import path from "node:path";
@@ -21,9 +20,9 @@ async function main() {
   const content = await loadContentFromFs({ repoRoot: REPO_ROOT });
   const arg2 = process.argv[2];
   const unitId = arg2 && arg2.length > 0 ? arg2 : findFirst(content, "infantry", "phalanx");
-  const count = Number(process.argv[3] ?? "48");
+  const count = Number(process.argv[3] ?? "200");
   const ticks = Number(process.argv[4] ?? "1000");
-  const battles = Number(process.argv[5] ?? "5");
+  const battles = Number(process.argv[5] ?? "3");
 
   let totalNs = 0n;
   let totalTicksRun = 0;
@@ -31,7 +30,7 @@ async function main() {
     const cfg: ShapeBattleConfig = {
       seed: 1 + b,
       battleId: `bench-${b}`,
-      bounds: { w: 120, h: 80 },
+      bounds: { w: 200, h: 140 },
       unitId,
       count,
       enemyBinUnitId: unitId,

@@ -16,6 +16,13 @@
 
 import type { BattleState } from "./state.js";
 
+/**
+ * Flat CSR layout: instead of one Int32Array per cell, all entries
+ * live in a single `entries` buffer; `cellStart[c]` is the start
+ * offset into `entries` for cell c, and `cellStart[c+1]` is the end.
+ * No per-cell allocations per tick — buffers grow only when bounds
+ * or rac count outgrow the previous high-water mark.
+ */
 export interface SpatialGrid {
   cellSize: number;
   cols: number;
@@ -23,67 +30,176 @@ export interface SpatialGrid {
   /** Half-extents of the world (canvas centered at origin). */
   halfW: number;
   halfH: number;
-  /** cells[cellIdx] = array of entity ROW indices in that cell. */
-  cells: Int32Array[];
+  /** Flat entries indexed by cellStart[c]..cellStart[c+1]-1. */
+  entries: Int32Array;
+  /** Length = cols*rows + 1. */
+  cellStart: Int32Array;
 }
 
-/** Build a fresh grid over the alive raccoons. */
-export function buildRacGrid(state: BattleState, cellSize: number): SpatialGrid {
+/** Per-state reusable scratch so we don't allocate on every build. */
+interface GridScratch {
+  cellSize: number;
+  cols: number;
+  rows: number;
+  halfW: number;
+  halfH: number;
+  entries: Int32Array;
+  cellStart: Int32Array;
+  cellFill: Int32Array;
+}
+
+function getRacScratch(state: BattleState, cellSize: number): GridScratch {
   const halfW = state.bounds.w * 0.5;
   const halfH = state.bounds.h * 0.5;
   const cols = Math.max(1, Math.ceil(state.bounds.w / cellSize));
   const rows = Math.max(1, Math.ceil(state.bounds.h / cellSize));
   const total = cols * rows;
-  // First pass: count per cell.
-  const counts = new Int32Array(total);
-  for (let i = 0; i < state.rac.count; i++) {
-    if (!state.rac.alive[i]) continue;
-    const cx = Math.min(cols - 1, Math.max(0, Math.floor((state.rac.x[i] + halfW) / cellSize)));
-    const cy = Math.min(rows - 1, Math.max(0, Math.floor((state.rac.y[i] + halfH) / cellSize)));
-    counts[cy * cols + cx]++;
+  const cap = state.rac.x.length;
+  let s = state._racGridScratch as GridScratch | undefined;
+  if (
+    !s ||
+    s.cols !== cols ||
+    s.rows !== rows ||
+    s.cellSize !== cellSize ||
+    s.entries.length < cap
+  ) {
+    s = {
+      cellSize,
+      cols,
+      rows,
+      halfW,
+      halfH,
+      entries: new Int32Array(cap),
+      cellStart: new Int32Array(total + 1),
+      cellFill: new Int32Array(total),
+    };
+    state._racGridScratch = s;
+  } else {
+    s.halfW = halfW;
+    s.halfH = halfH;
+    s.cellStart.fill(0);
+    s.cellFill.fill(0);
   }
-  // Allocate per-cell arrays.
-  const cells: Int32Array[] = new Array(total);
-  const offsets = new Int32Array(total);
-  for (let c = 0; c < total; c++) {
-    cells[c] = new Int32Array(counts[c]);
+  return s;
+}
+
+function getBinScratch(state: BattleState, cellSize: number): GridScratch {
+  const halfW = state.bounds.w * 0.5;
+  const halfH = state.bounds.h * 0.5;
+  const cols = Math.max(1, Math.ceil(state.bounds.w / cellSize));
+  const rows = Math.max(1, Math.ceil(state.bounds.h / cellSize));
+  const total = cols * rows;
+  const cap = state.bin.x.length;
+  let s = state._binGridScratch as GridScratch | undefined;
+  if (
+    !s ||
+    s.cols !== cols ||
+    s.rows !== rows ||
+    s.cellSize !== cellSize ||
+    s.entries.length < cap
+  ) {
+    s = {
+      cellSize,
+      cols,
+      rows,
+      halfW,
+      halfH,
+      entries: new Int32Array(cap),
+      cellStart: new Int32Array(total + 1),
+      cellFill: new Int32Array(total),
+    };
+    state._binGridScratch = s;
+  } else {
+    s.halfW = halfW;
+    s.halfH = halfH;
+    s.cellStart.fill(0);
+    s.cellFill.fill(0);
   }
-  // Second pass: fill.
-  for (let i = 0; i < state.rac.count; i++) {
-    if (!state.rac.alive[i]) continue;
-    const cx = Math.min(cols - 1, Math.max(0, Math.floor((state.rac.x[i] + halfW) / cellSize)));
-    const cy = Math.min(rows - 1, Math.max(0, Math.floor((state.rac.y[i] + halfH) / cellSize)));
+  return s;
+}
+
+/** Build a fresh grid over the alive raccoons. Reuses scratch across
+ *  ticks; only the prefix-sum + fill passes run per tick. */
+export function buildRacGrid(state: BattleState, cellSize: number): SpatialGrid {
+  const s = getRacScratch(state, cellSize);
+  const cols = s.cols;
+  const rows = s.rows;
+  const total = cols * rows;
+  const halfW = s.halfW;
+  const halfH = s.halfH;
+  const cellStart = s.cellStart;
+  const cellFill = s.cellFill;
+  const entries = s.entries;
+  const racX = state.rac.x;
+  const racY = state.rac.y;
+  const alive = state.rac.alive;
+  const n = state.rac.count;
+  // Pass 1: count per cell.
+  for (let i = 0; i < n; i++) {
+    if (!alive[i]) continue;
+    let cx = Math.floor((racX[i] + halfW) / cellSize);
+    let cy = Math.floor((racY[i] + halfH) / cellSize);
+    if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
+    if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
+    cellStart[cy * cols + cx + 1]++;
+  }
+  // Pass 2: prefix sum to turn counts into start offsets.
+  for (let c = 1; c <= total; c++) cellStart[c] += cellStart[c - 1];
+  // Pass 3: scatter into entries[].
+  for (let i = 0; i < n; i++) {
+    if (!alive[i]) continue;
+    let cx = Math.floor((racX[i] + halfW) / cellSize);
+    let cy = Math.floor((racY[i] + halfH) / cellSize);
+    if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
+    if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
     const idx = cy * cols + cx;
-    cells[idx][offsets[idx]++] = i;
+    entries[cellStart[idx] + cellFill[idx]++] = i;
   }
-  return { cellSize, cols, rows, halfW, halfH, cells };
+  return {
+    cellSize,
+    cols,
+    rows,
+    halfW,
+    halfH,
+    entries,
+    cellStart,
+  };
 }
 
 /** Build a fresh grid over the alive bins. */
 export function buildBinGrid(state: BattleState, cellSize: number): SpatialGrid {
-  const halfW = state.bounds.w * 0.5;
-  const halfH = state.bounds.h * 0.5;
-  const cols = Math.max(1, Math.ceil(state.bounds.w / cellSize));
-  const rows = Math.max(1, Math.ceil(state.bounds.h / cellSize));
+  const s = getBinScratch(state, cellSize);
+  const cols = s.cols;
+  const rows = s.rows;
   const total = cols * rows;
-  const counts = new Int32Array(total);
-  for (let i = 0; i < state.bin.count; i++) {
-    if (!state.bin.alive[i]) continue;
-    const cx = Math.min(cols - 1, Math.max(0, Math.floor((state.bin.x[i] + halfW) / cellSize)));
-    const cy = Math.min(rows - 1, Math.max(0, Math.floor((state.bin.y[i] + halfH) / cellSize)));
-    counts[cy * cols + cx]++;
+  const halfW = s.halfW;
+  const halfH = s.halfH;
+  const cellStart = s.cellStart;
+  const cellFill = s.cellFill;
+  const entries = s.entries;
+  const bx = state.bin.x;
+  const by = state.bin.y;
+  const alive = state.bin.alive;
+  const n = state.bin.count;
+  for (let i = 0; i < n; i++) {
+    if (!alive[i]) continue;
+    let cx = Math.floor((bx[i] + halfW) / cellSize);
+    let cy = Math.floor((by[i] + halfH) / cellSize);
+    if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
+    if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
+    cellStart[cy * cols + cx + 1]++;
   }
-  const cells: Int32Array[] = new Array(total);
-  const offsets = new Int32Array(total);
-  for (let c = 0; c < total; c++) cells[c] = new Int32Array(counts[c]);
-  for (let i = 0; i < state.bin.count; i++) {
-    if (!state.bin.alive[i]) continue;
-    const cx = Math.min(cols - 1, Math.max(0, Math.floor((state.bin.x[i] + halfW) / cellSize)));
-    const cy = Math.min(rows - 1, Math.max(0, Math.floor((state.bin.y[i] + halfH) / cellSize)));
+  for (let c = 1; c <= total; c++) cellStart[c] += cellStart[c - 1];
+  for (let i = 0; i < n; i++) {
+    if (!alive[i]) continue;
+    let cx = Math.floor((bx[i] + halfW) / cellSize);
+    let cy = Math.floor((by[i] + halfH) / cellSize);
+    if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
+    if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
     const idx = cy * cols + cx;
-    cells[idx][offsets[idx]++] = i;
+    entries[cellStart[idx] + cellFill[idx]++] = i;
   }
-  return { cellSize, cols, rows, halfW, halfH, cells };
+  return { cellSize, cols, rows, halfW, halfH, entries, cellStart };
 }
 
 /** Iterate every entity row whose cell overlaps the (x, y, radius)
@@ -103,10 +219,15 @@ export function forEachNear(
   const maxCx = Math.min(grid.cols - 1, baseCx + cellsAcross);
   const minCy = Math.max(0, baseCy - cellsAcross);
   const maxCy = Math.min(grid.rows - 1, baseCy + cellsAcross);
+  const cols = grid.cols;
+  const cellStart = grid.cellStart;
+  const entries = grid.entries;
   for (let cy = minCy; cy <= maxCy; cy++) {
     for (let cx = minCx; cx <= maxCx; cx++) {
-      const occupants = grid.cells[cy * grid.cols + cx];
-      for (let i = 0; i < occupants.length; i++) fn(occupants[i]);
+      const c = cy * cols + cx;
+      const start = cellStart[c];
+      const end = cellStart[c + 1];
+      for (let k = start; k < end; k++) fn(entries[k]);
     }
   }
 }

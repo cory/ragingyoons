@@ -138,7 +138,7 @@ export const DEFAULT_TANK: TacticProfile = {
   speedMul: 0.7, // heavy / slow
   archerKiteFraction: 0,
   inertiaBlend: 0.5,
-  targetRethinkTicks: 12,
+  targetRethinkTicks: 30,
   adjacentRange: 1.5,
   infantryRagePerSec: 0,
   hideBehindK: 0, // tanks ARE the front
@@ -160,7 +160,7 @@ export const DEFAULT_ARCHER: TacticProfile = {
   speedMul: 1.0,
   archerKiteFraction: 0.7,
   inertiaBlend: 0,
-  targetRethinkTicks: 8,
+  targetRethinkTicks: 15,
   adjacentRange: 1.5,
   infantryRagePerSec: 0,
   hideBehindK: 3.0, // strong preference for back-line behind friendlies
@@ -191,9 +191,10 @@ export const DEFAULT_CAVALRY: TacticProfile = {
   // MAX_ACCEL_BY_ROLE cap (8 m/s² for cavalry); inertia is just a
   // light low-pass over the result.
   inertiaBlend: 0.2,
-  // Cavalry hunts — keep retarget cadence tight so they swap to a
-  // wounded archer when one drops. Other roles can rethink less often.
-  targetRethinkTicks: 4,
+  // Cavalry hunts — tightest retarget cadence so they swap to a
+  // wounded archer when one drops. Tanks/infantry rethink at 20-30
+  // tick scale; archers split the difference.
+  targetRethinkTicks: 10,
   adjacentRange: 1.5,
   infantryRagePerSec: 0,
   hideBehindK: 0, // commit hard, no hiding
@@ -215,7 +216,7 @@ export const DEFAULT_INFANTRY: TacticProfile = {
   speedMul: 1.0,
   archerKiteFraction: 0,
   inertiaBlend: 0,
-  targetRethinkTicks: 12,
+  targetRethinkTicks: 20,
   adjacentRange: 1.5,
   infantryRagePerSec: 5,
   hideBehindK: 0, // front line with tanks

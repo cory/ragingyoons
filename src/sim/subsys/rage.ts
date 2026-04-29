@@ -42,45 +42,52 @@ export function rageTick(state: BattleState, content: ContentBundle, log: Logger
   const dt = SECONDS_PER_TICK;
   const n = state.rac.count;
 
-  // Infantry adjacency rage. Grid scan over a tiny radius (1.5m) so
-  // most cells are empty; early-exit on first friendly hit. Beats the
-  // O(n²) double loop at >~64 racs.
+  // Infantry adjacency rage. Mod-N gate: only re-check adjacency every
+  // ADJ_CHECK_TICKS. Rage gains over seconds, accuracy doesn't need
+  // per-tick — but when we DO check, we pay for the elapsed window
+  // (rate × ADJ_CHECK_TICKS × dt) so the average gain rate stays the
+  // same. Saves the per-tick neighbor scan on 4 of every 5 ticks.
+  const ADJ_CHECK_TICKS = 5;
   const grid = state._racGrid;
-  for (let i = 0; i < n; i++) {
-    if (!state.rac.alive[i]) continue;
-    if (state.rac.role[i] !== ROLE_INFANTRY) continue;
-    const profile = state.tacticPerSide[state.rac.owner[i]][state.rac.role[i]];
-    if (profile.infantryRagePerSec <= 0) continue;
-    const adj = profile.adjacentRange;
-    const adj2 = adj * adj;
-    const myX = state.rac.x[i];
-    const myY = state.rac.y[i];
-    const myOwner = state.rac.owner[i];
-    let adjacent = false;
-    if (grid) {
-      forEachNear(grid, myX, myY, adj, (j) => {
-        if (adjacent) return;
-        if (j === i) return;
-        if (!state.rac.alive[j]) return;
-        if (state.rac.owner[j] !== myOwner) return;
-        const dx = state.rac.x[j] - myX;
-        const dy = state.rac.y[j] - myY;
-        if (dx * dx + dy * dy <= adj2) adjacent = true;
-      });
-    } else {
-      for (let j = 0; j < n; j++) {
-        if (i === j) continue;
-        if (!state.rac.alive[j]) continue;
-        if (state.rac.owner[j] !== myOwner) continue;
-        const dx = state.rac.x[j] - myX;
-        const dy = state.rac.y[j] - myY;
-        if (dx * dx + dy * dy <= adj2) {
-          adjacent = true;
-          break;
+  if (state.tick % ADJ_CHECK_TICKS === 0) {
+    for (let i = 0; i < n; i++) {
+      if (!state.rac.alive[i]) continue;
+      if (state.rac.role[i] !== ROLE_INFANTRY) continue;
+      const profile = state.tacticPerSide[state.rac.owner[i]][state.rac.role[i]];
+      if (profile.infantryRagePerSec <= 0) continue;
+      const adj = profile.adjacentRange;
+      const adj2 = adj * adj;
+      const myX = state.rac.x[i];
+      const myY = state.rac.y[i];
+      const myOwner = state.rac.owner[i];
+      let adjacent = false;
+      if (grid) {
+        forEachNear(grid, myX, myY, adj, (j) => {
+          if (adjacent) return;
+          if (j === i) return;
+          if (!state.rac.alive[j]) return;
+          if (state.rac.owner[j] !== myOwner) return;
+          const dx = state.rac.x[j] - myX;
+          const dy = state.rac.y[j] - myY;
+          if (dx * dx + dy * dy <= adj2) adjacent = true;
+        });
+      } else {
+        for (let j = 0; j < n; j++) {
+          if (i === j) continue;
+          if (!state.rac.alive[j]) continue;
+          if (state.rac.owner[j] !== myOwner) continue;
+          const dx = state.rac.x[j] - myX;
+          const dy = state.rac.y[j] - myY;
+          if (dx * dx + dy * dy <= adj2) {
+            adjacent = true;
+            break;
+          }
         }
       }
+      if (adjacent) {
+        gainRage(state, i, profile.infantryRagePerSec * dt * ADJ_CHECK_TICKS);
+      }
     }
-    if (adjacent) gainRage(state, i, profile.infantryRagePerSec * dt);
   }
 
   // Auto-fire.

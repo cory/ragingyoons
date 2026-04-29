@@ -46,17 +46,9 @@ export interface BoidFields {
   /** Total density (any side, any role). For separation. Length = cols*rows. */
   totalDensity: Float32Array;
   /** Per-side density (sum across all roles on that side). Used by
-   *  hide-behind to ask "how many friendlies are between me and the
-   *  enemy?" without having to sum 4 role channels at sample time. */
+   *  contact detection (sum of enemy density in nearby cells) and
+   *  the cavalry FLANK density-gradient probe. Length = cols*rows. */
   sideDensity: Float32Array[]; // [2], length cols*rows each
-  /** Per-(side*4+role) density, length cols*rows. 8 slots. */
-  density: Float32Array[];
-  /** Per-(side*4+role) sum of x*weight. Same length. */
-  centroidNumX: Float32Array[];
-  centroidNumY: Float32Array[];
-  /** Per-(side*4+role) sum of vx*weight. */
-  velNumX: Float32Array[];
-  velNumY: Float32Array[];
 }
 
 /** Allocate a fresh fields object sized for the given world bounds.
@@ -66,18 +58,6 @@ export function allocBoidFields(boundsW: number, boundsH: number): BoidFields {
   const cols = Math.max(1, Math.ceil(boundsW / cellSize));
   const rows = Math.max(1, Math.ceil(boundsH / cellSize));
   const total = cols * rows;
-  const density: Float32Array[] = [];
-  const centroidNumX: Float32Array[] = [];
-  const centroidNumY: Float32Array[] = [];
-  const velNumX: Float32Array[] = [];
-  const velNumY: Float32Array[] = [];
-  for (let i = 0; i < 8; i++) {
-    density.push(new Float32Array(total));
-    centroidNumX.push(new Float32Array(total));
-    centroidNumY.push(new Float32Array(total));
-    velNumX.push(new Float32Array(total));
-    velNumY.push(new Float32Array(total));
-  }
   return {
     cellSize,
     cols,
@@ -86,11 +66,6 @@ export function allocBoidFields(boundsW: number, boundsH: number): BoidFields {
     halfH: boundsH * 0.5,
     totalDensity: new Float32Array(total),
     sideDensity: [new Float32Array(total), new Float32Array(total)],
-    density,
-    centroidNumX,
-    centroidNumY,
-    velNumX,
-    velNumY,
   };
 }
 
@@ -99,13 +74,6 @@ export function clearBoidFields(f: BoidFields): void {
   f.totalDensity.fill(0);
   f.sideDensity[0].fill(0);
   f.sideDensity[1].fill(0);
-  for (let i = 0; i < 8; i++) {
-    f.density[i].fill(0);
-    f.centroidNumX[i].fill(0);
-    f.centroidNumY[i].fill(0);
-    f.velNumX[i].fill(0);
-    f.velNumY[i].fill(0);
-  }
 }
 
 /** Splat all alive raccoons into the fields. Bilinear footprint = the
@@ -123,11 +91,7 @@ export function buildBoidFields(state: BattleState, f: BoidFields): void {
     if (!state.rac.alive[i]) continue;
     const wx = state.rac.x[i];
     const wy = state.rac.y[i];
-    const vx = state.rac.vx[i];
-    const vy = state.rac.vy[i];
-    const role = state.rac.role[i];
     const owner = state.rac.owner[i];
-    const ch = owner * 4 + role;
 
     // Convert world → continuous cell coords. Cell (0,0)'s center is at
     // (-halfW + cellSize/2, -halfH + cellSize/2). We want the 2×2 cells
@@ -174,37 +138,6 @@ export function buildBoidFields(state: BattleState, f: BoidFields): void {
     sideD[i10] += w10;
     sideD[i01] += w01;
     sideD[i11] += w11;
-
-    const dens = f.density[ch];
-    const cnx = f.centroidNumX[ch];
-    const cny = f.centroidNumY[ch];
-    const vnx = f.velNumX[ch];
-    const vny = f.velNumY[ch];
-
-    dens[i00] += w00;
-    dens[i10] += w10;
-    dens[i01] += w01;
-    dens[i11] += w11;
-
-    cnx[i00] += w00 * wx;
-    cnx[i10] += w10 * wx;
-    cnx[i01] += w01 * wx;
-    cnx[i11] += w11 * wx;
-
-    cny[i00] += w00 * wy;
-    cny[i10] += w10 * wy;
-    cny[i01] += w01 * wy;
-    cny[i11] += w11 * wy;
-
-    vnx[i00] += w00 * vx;
-    vnx[i10] += w10 * vx;
-    vnx[i01] += w01 * vx;
-    vnx[i11] += w11 * vx;
-
-    vny[i00] += w00 * vy;
-    vny[i10] += w10 * vy;
-    vny[i01] += w01 * vy;
-    vny[i11] += w11 * vy;
   }
 }
 

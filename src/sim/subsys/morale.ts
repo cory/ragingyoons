@@ -34,6 +34,11 @@ import {
  *  result drives morale drain over seconds (FLANK_THREAT_RATE = 0.04
  *  / s), so a 6-tick refresh (~250 ms at 24 Hz) is fine. */
 const SQUAD_THREAT_CADENCE = 6;
+/** How often to run the routing-ally morale cascade. Cascade rate is
+ *  per-second (MORALE_ROUTING_RATE), so on a check tick we apply the
+ *  full window's worth of drain (rate × CADENCE × dt). Mod-N gate
+ *  amortizes the per-rac neighbor scan. */
+const ROUTING_CASCADE_CADENCE = 4;
 
 export function moraleTick(state: BattleState): void {
   const grid = state._racGrid;
@@ -135,6 +140,11 @@ export function moraleTick(state: BattleState): void {
     // Routing-cascade short-circuit: if no friendly is broken, no
     // neighbor will be a router, so skip the spatial scan entirely.
     if (brokenBySide[state.rac.owner[i]] === 0) continue;
+    // Mod-N gate the per-rac neighbor scan. We apply a CADENCE-wide
+    // window of drain on the check tick (rate × CADENCE × dt) so the
+    // average drop rate stays the same. The (i + tick) phase spreads
+    // work evenly across the cycle.
+    if ((state.tick + i) % ROUTING_CASCADE_CADENCE !== 0) continue;
 
     let routingNearby = 0;
     forEachNear(grid, state.rac.x[i], state.rac.y[i], MORALE_ROUTING_RADIUS, (j) => {
@@ -148,7 +158,7 @@ export function moraleTick(state: BattleState): void {
     if (routingNearby === 0) continue;
 
     const ratePerSec = Math.min(routingNearby * MORALE_ROUTING_RATE, MORALE_ROUTING_MAX);
-    const drop = ratePerSec * dt;
+    const drop = ratePerSec * dt * ROUTING_CASCADE_CADENCE;
     const current = state.rac.morale[i];
     // Soft floor: routing-only damage can't push below MORALE_ROUTING_FLOOR.
     // If we're already below from other causes, this leaves us alone.

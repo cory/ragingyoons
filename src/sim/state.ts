@@ -354,6 +354,22 @@ export interface BattleState {
    *  bin owned by `side`. Read by inner scoring to apply the
    *  bin-defense multiplier. Indexed as side*MAX_RACS + row. */
   _defenseFlag?: Uint8Array;
+  /** Per-leader cached rotation (cos / sin of leader.facing -
+   *  spawnFacing) computed once at the top of motionTick, read by
+   *  every follower of that squad. Without this cache the wheel
+   *  rotation gets recomputed per follower per tick — 2 sin/cos
+   *  per follower per tick at ~200 followers = 800 trig calls/tick
+   *  for the same handful of leader values. Indexed by leader's
+   *  row. Off-leader rows are unused. */
+  _leaderRotCos?: Float32Array;
+  _leaderRotSin?: Float32Array;
+  /** Reusable scratch for the rac / bin spatial grids — flat CSR
+   *  buffers and an offset-fill counter. Reused across ticks so we
+   *  don't allocate hundreds of small per-cell typed arrays per
+   *  build. Typed as `unknown` here to keep state.ts free of a
+   *  grid.ts back-reference. */
+  _racGridScratch?: unknown;
+  _binGridScratch?: unknown;
   /** Built each tick by moraleTick: squadId → flank/rear threat level
    *  (0=none, 1=flank, 2=rear). Used by the lab to surface "this
    *  squad is being outflanked" in the tooltip; the morale penalty

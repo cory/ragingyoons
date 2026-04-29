@@ -82,6 +82,16 @@ const BIN_DEFENSE_MUL = 4;
  *  grid neighborhood is the big perf win on this subsystem. Big
  *  enough to cover the full lab field (120×80) end-to-end. */
 const MAX_TARGET_RADIUS = 80;
+/** Forward search cone (radians). Targeting first scans only enemies
+ *  whose direction from the rac is within this half-angle of the
+ *  rac's facing — racs don't need to scope out enemies behind them.
+ *  At π/3 (60° half-angle = 120° cone), forward arc covers ~33% of
+ *  the disc, so candidate count drops by ~3× in steady combat. If
+ *  the cone scan finds nothing the rac falls back to a full-circle
+ *  scan ("look around if no targets") so isolated racs can find
+ *  enemies regardless of facing. */
+const FORWARD_CONE_HALF_ANGLE = Math.PI / 3;
+const FORWARD_CONE_COS = Math.cos(FORWARD_CONE_HALF_ANGLE);
 
 export function targetTick(state: BattleState, content: ContentBundle, log: Logger): void {
   void content;
@@ -219,41 +229,137 @@ export function targetTick(state: BattleState, content: ContentBundle, log: Logg
         ? (state.racRowById.get(curId) ?? -1)
         : -1;
     const defenseBase = myOwner * MAX_RACS;
-    const scoreOne = (j: number) => {
-      if (j === i) return;
-      if (!state.rac.alive[j]) return;
-      if (state.rac.owner[j] === myOwner) return;
-      const dx = state.rac.x[j] - myX;
-      const dy = state.rac.y[j] - myY;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < 1) return;
-      const tgtRole = state.rac.role[j];
-      const affinity = affRow[tgtRole];
-      const hpFrac = state.rac.hpMax[j] > 0 ? state.rac.hp[j] / state.rac.hpMax[j] : 1;
-      const lowHpBoost = 1 + LOW_HP_BONUS * (1 - Math.max(0, Math.min(1, hpFrac)));
-      const id = state.rac.id[j];
-      const tgtDps = state.rac.effDamage[j] * state.rac.effAttackRate[j];
-      const dpsBoost = 1 + DPS_BONUS * Math.min(1, tgtDps / DPS_NORM_MAX);
-      const inRange = d2 <= myEffRange2;
-      let saturationPenalty = 1;
-      if (!inRange) {
-        let attackers = attackerCountByRow[j];
-        if (j === myCurTargetRow && attackers > 0) attackers -= 1;
-        saturationPenalty = 1 / (1 + TARGET_SATURATION_K * attackers);
+    // Inline cell walk (was forEachNear with a scoreOne closure). The
+    // closure-per-call overhead and capture of a dozen locals per
+    // inner iteration was measurable in profiling. Hot fields are
+    // hoisted to locals so the JIT can keep them in registers.
+    const grid = state._racGrid;
+    const racX = state.rac.x;
+    const racY = state.rac.y;
+    const racAlive = state.rac.alive;
+    const racOwner = state.rac.owner;
+    const racRole = state.rac.role;
+    const racHp = state.rac.hp;
+    const racHpMax = state.rac.hpMax;
+    const racEffDamage = state.rac.effDamage;
+    const racEffAttackRate = state.rac.effAttackRate;
+    const racIdArr = state.rac.id;
+    // Forward 120° cone scan first; if nothing found, fall back to a
+    // full-circle scan ("look around if no targets"). Most racs face
+    // their fight, so the cone path is the steady-state hot path —
+    // ~3× fewer candidates scored vs full-circle.
+    const myFacing = state.rac.facing[i];
+    const fwdX = Math.cos(myFacing);
+    const fwdY = Math.sin(myFacing);
+    let coneFwdX = fwdX;
+    let coneFwdY = fwdY;
+    let coneCosThr = FORWARD_CONE_COS;
+    for (let pass = 0; pass < 2; pass++) {
+      if (grid) {
+        const cellSize = grid.cellSize;
+        const cols = grid.cols;
+        const rows = grid.rows;
+        const halfWg = grid.halfW;
+        const halfHg = grid.halfH;
+        const cellsAcross = Math.ceil(MAX_TARGET_RADIUS / cellSize);
+        const baseCx = Math.floor((myX + halfWg) / cellSize);
+        const baseCy = Math.floor((myY + halfHg) / cellSize);
+        const minCx = Math.max(0, baseCx - cellsAcross);
+        const maxCx = Math.min(cols - 1, baseCx + cellsAcross);
+        const minCy = Math.max(0, baseCy - cellsAcross);
+        const maxCy = Math.min(rows - 1, baseCy + cellsAcross);
+        const cellStart = grid.cellStart;
+        const entries = grid.entries;
+        for (let cy = minCy; cy <= maxCy; cy++) {
+          for (let cx = minCx; cx <= maxCx; cx++) {
+            const c = cy * cols + cx;
+            const start = cellStart[c];
+            const end = cellStart[c + 1];
+            for (let k = start; k < end; k++) {
+              const j = entries[k];
+              if (j === i) continue;
+              if (!racAlive[j]) continue;
+              if (racOwner[j] === myOwner) continue;
+              const dx = racX[j] - myX;
+              const dy = racY[j] - myY;
+              const d2 = dx * dx + dy * dy;
+              if (d2 < 1) continue;
+              // Forward-cone gate (cosA ≥ threshold). Skip when
+              // threshold ≤ -1 (full-circle fallback).
+              if (coneCosThr > -1 && (dx * coneFwdX + dy * coneFwdY) < coneCosThr * Math.sqrt(d2)) {
+                continue;
+              }
+              const tgtRole = racRole[j];
+              const affinity = affRow[tgtRole];
+              const hpMaxJ = racHpMax[j];
+              const hpFrac = hpMaxJ > 0 ? racHp[j] / hpMaxJ : 1;
+              const lowHpBoost =
+                1 + LOW_HP_BONUS * (1 - (hpFrac < 0 ? 0 : hpFrac > 1 ? 1 : hpFrac));
+              const id = racIdArr[j];
+              const tgtDps = racEffDamage[j] * racEffAttackRate[j];
+              const dpsNorm = tgtDps / DPS_NORM_MAX;
+              const dpsBoost = 1 + DPS_BONUS * (dpsNorm > 1 ? 1 : dpsNorm);
+              let saturationPenalty = 1;
+              if (d2 > myEffRange2) {
+                let attackers = attackerCountByRow[j];
+                if (j === myCurTargetRow && attackers > 0) attackers -= 1;
+                saturationPenalty = 1 / (1 + TARGET_SATURATION_K * attackers);
+              }
+              const defenseMul = defenseFlag[defenseBase + j] ? BIN_DEFENSE_MUL : 1;
+              const score =
+                (affinity * lowHpBoost * dpsBoost * saturationPenalty * defenseMul) / d2;
+              if (score > bestRacScore || (score === bestRacScore && id < bestRacId)) {
+                bestRacScore = score;
+                bestRacId = id;
+                bestRacD2 = d2;
+              }
+            }
+          }
+        }
+      } else {
+        // Test/no-grid path — scan everything. Same body as above.
+        for (let j = 0; j < n; j++) {
+          if (j === i) continue;
+          if (!racAlive[j]) continue;
+          if (racOwner[j] === myOwner) continue;
+          const dx = racX[j] - myX;
+          const dy = racY[j] - myY;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < 1) continue;
+          if (coneCosThr > -1 && (dx * coneFwdX + dy * coneFwdY) < coneCosThr * Math.sqrt(d2)) {
+            continue;
+          }
+          const tgtRole = racRole[j];
+          const affinity = affRow[tgtRole];
+          const hpMaxJ = racHpMax[j];
+          const hpFrac = hpMaxJ > 0 ? racHp[j] / hpMaxJ : 1;
+          const lowHpBoost =
+            1 + LOW_HP_BONUS * (1 - (hpFrac < 0 ? 0 : hpFrac > 1 ? 1 : hpFrac));
+          const id = racIdArr[j];
+          const tgtDps = racEffDamage[j] * racEffAttackRate[j];
+          const dpsNorm = tgtDps / DPS_NORM_MAX;
+          const dpsBoost = 1 + DPS_BONUS * (dpsNorm > 1 ? 1 : dpsNorm);
+          let saturationPenalty = 1;
+          if (d2 > myEffRange2) {
+            let attackers = attackerCountByRow[j];
+            if (j === myCurTargetRow && attackers > 0) attackers -= 1;
+            saturationPenalty = 1 / (1 + TARGET_SATURATION_K * attackers);
+          }
+          const defenseMul = defenseFlag[defenseBase + j] ? BIN_DEFENSE_MUL : 1;
+          const score =
+            (affinity * lowHpBoost * dpsBoost * saturationPenalty * defenseMul) / d2;
+          if (score > bestRacScore || (score === bestRacScore && id < bestRacId)) {
+            bestRacScore = score;
+            bestRacId = id;
+            bestRacD2 = d2;
+          }
+        }
       }
-      const defenseMul = defenseFlag[defenseBase + j] ? BIN_DEFENSE_MUL : 1;
-      const score =
-        (affinity * lowHpBoost * dpsBoost * saturationPenalty * defenseMul) / d2;
-      if (score > bestRacScore || (score === bestRacScore && id < bestRacId)) {
-        bestRacScore = score;
-        bestRacId = id;
-        bestRacD2 = d2;
-      }
-    };
-    if (state._racGrid) {
-      forEachNear(state._racGrid, myX, myY, MAX_TARGET_RADIUS, scoreOne);
-    } else {
-      for (let j = 0; j < n; j++) scoreOne(j);
+      if (bestRacId >= 0) break; // cone-pass found a target; skip fallback.
+      // Fallback: open the cone for the second pass.
+      coneCosThr = -2;
+      void coneFwdX;
+      void coneFwdY;
     }
 
     // Find nearest enemy bin

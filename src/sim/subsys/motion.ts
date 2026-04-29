@@ -69,6 +69,10 @@ import {
  *  a rac knocked outside it has lost formation cohesion at that spot
  *  and shouldn't claim the frontal-defense bonus anymore. */
 const IN_FORMATION_R = 2.0;
+/** How often to recompute the inFormation flag. Drives a damage
+ *  multiplier in combat; combat fires at 1+ Hz so this can be
+ *  refreshed every 4 ticks (~165 ms) without missing combat events. */
+const IN_FORMATION_CHECK_TICKS = 4;
 /** Close-range pairwise anti-overlap radius. Keeps physical bodies
  *  from occupying the same point. Same value as the old boid loop. */
 const CLOSE_R = 0.8;
@@ -82,14 +86,42 @@ const CROSS_UNIT_K = 3.0;
 /** Contact-mode flag radius — any enemy within this m sets contact[i]=1.
  *  Used by combat (phalanx anti-cav recoil, shield-vs-projectile) and
  *  formation-tightening overrides. */
-/** Threshold on the enemy-side bilinear density sample for "in
- *  contact" classification. Each rac splats weight 1.0 across its
- *  surrounding 2×2 grid cells (FIELD_CELL_SIZE = 4 m), so a single
- *  enemy at the rac's exact position would sample to ~0.0625
- *  (1.0 / 4 m × 4 m cell area). This threshold (~0.04) fires when
- *  any enemy is within ~one grid cell — comparable to the previous
- *  8 m forEachNear scan but O(1) instead of O(neighbors). */
-const CONTACT_DENSITY_THRESHOLD = 0.04;
+/** Threshold on the SUM of enemy-side density across a 3×3 cell
+ *  window (12 m reach with 4 m cells) for "in contact" classification.
+ *  Each rac splats with weight 1.0 spread bilinearly across 4 cells,
+ *  so a 3×3 sum captures the full splat for any enemy whose rac
+ *  position is in the central cell, plus partial contributions from
+ *  neighboring cells. Threshold ~0.5 fires when at least one enemy
+ *  is within ~8 m — comparable to the original forEachNear scan but
+ *  O(1) instead of O(neighbors). Tuned against the formation-combat-
+ *  shape regression test. */
+const CONTACT_DENSITY_THRESHOLD = 0.5;
+/** Density-gradient repulsion: scale on the negative gradient of
+ *  totalDensity at the rac's position. Chosen to roughly match the
+ *  m/s magnitude that the previous pair-wise CLOSE_K nudge produced
+ *  at typical formation overlap. The gradient field gives a smooth,
+ *  always-on crowd-pressure force that pushes racs out of dense
+ *  pockets without per-pair scans. */
+const GRAD_REPEL_K = 8.0;
+/** Pair-wise hard-overlap fallback. The density gradient is a 4 m
+ *  smooth field, and gradient is zero at the center of a perfectly
+ *  symmetric stack — so two racs on top of each other never separate
+ *  via gradient alone. The hard-overlap pair check kicks them apart.
+ *  Tight radius (~one body diameter) keeps the grid walk to a single
+ *  cell and the inner loop to ~one neighbor in steady state. */
+const HARD_OVERLAP_R = 0.8;
+const HARD_OVERLAP_R2 = HARD_OVERLAP_R * HARD_OVERLAP_R;
+const HARD_OVERLAP_K = 12.0;
+/** Mod-N gate on the hard-overlap pair check. Each rac checks on
+ *  ticks where (tick % N) === (row % N), spreading the work evenly
+ *  across the cycle. N=2 was chosen so a rac that just spawned can
+ *  separate from its stack-mates within ~1-2 checks (~80 ms) while
+ *  the per-tick guard cost is roughly halved. Bumping further
+ *  starves separation under tight spawn / wheel scenarios. */
+const HARD_OVERLAP_CHECK_TICKS = 2;
+/** Finite-difference step for the density gradient sample. Half a
+ *  cell so the two samples land in adjacent cells along each axis. */
+const GRAD_H = 2.0;
 /** Engage band: a rac in engage state holds position when within
  *  effRange. This wider band (effRange × this) is the stop-to-attack
  *  trigger — once you're inside it you're fighting. */
@@ -350,6 +382,26 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
   // headless sim runs (bench / mass tuning) this is null and we skip.
   const dbg = state._debugFlank ?? null;
   if (dbg) dbg.fill(0);
+
+  // Pre-pass: cache (cos, sin) of each leader's wheel rotation. The
+  // wheel rotates slot offsets by (leader.facing - spawnFacing), and
+  // every follower of that leader needs the same matrix. Computing
+  // once per leader rather than per follower turns 2 × n_followers
+  // trig calls per tick into 2 × n_leaders.
+  if (!state._leaderRotCos || state._leaderRotCos.length < state.rac.x.length) {
+    state._leaderRotCos = new Float32Array(state.rac.x.length);
+    state._leaderRotSin = new Float32Array(state.rac.x.length);
+  }
+  const leaderRotCos = state._leaderRotCos;
+  const leaderRotSin = state._leaderRotSin!;
+  for (let r = 0; r < state.rac.count; r++) {
+    if (!state.rac.alive[r]) continue;
+    if (state.rac.squadLeaderId[r] !== state.rac.id[r]) continue;
+    const spawnFacing = state.rac.owner[r] === 0 ? 0 : Math.PI;
+    const dFace = state.rac.facing[r] - spawnFacing;
+    leaderRotCos[r] = Math.cos(dFace);
+    leaderRotSin[r] = Math.sin(dFace);
+  }
 
   for (let i = 0; i < state.rac.count; i++) {
     if (!state.rac.alive[i]) continue;
@@ -806,17 +858,9 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         const ly = state.rac.y[leaderRow];
         const lvx = state.rac.vx[leaderRow];
         const lvy = state.rac.vy[leaderRow];
-        // Wheel: slot offsets are stored in formation-local frame
-        // (forward = leader's spawn facing). Rotate by the delta
-        // between the leader's CURRENT facing and the squad's spawn
-        // facing so the formation pivots with the leader. Side 0
-        // spawned facing 0 (+x), side 1 facing π (-x); we recover
-        // the spawn facing from the leader's owner.
-        const spawnFacing =
-          state.rac.owner[leaderRow] === 0 ? 0 : Math.PI;
-        const dFace = state.rac.facing[leaderRow] - spawnFacing;
-        const cF = Math.cos(dFace);
-        const sF = Math.sin(dFace);
+        // Wheel matrix cached once per leader at the top of motionTick.
+        const cF = leaderRotCos[leaderRow];
+        const sF = leaderRotSin[leaderRow];
         const sdx0 = state.rac.slotDx[i];
         const sdy0 = state.rac.slotDy[i];
         const rdx = sdx0 * cF - sdy0 * sF;
@@ -847,63 +891,86 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       }
     }
 
-    // ----- Guards: close-range + cross-unit repulsion -----
-    // Nudges are velocity contributions (m/s), summed with the
-    // behavior's desired velocity. The post-sum cap at maxV decides
-    // who wins when behavior + guards conflict — at high overlap the
-    // close-range nudge dominates because CLOSE_K (10 m/s/m of
-    // overlap) saturates the cap; far apart, behavior dominates and
-    // the nudge is a small correction.
+    // ----- Guards: density-gradient repulsion + occasional hard-overlap pair check -----
+    // Crowd pressure is a vector field: each rac splats its presence
+    // onto the totalDensity grid in buildBoidFields above; here we
+    // sample the negative gradient at our position to get a smooth
+    // "push away from the pack" force. Cost is 4 bilinear samples
+    // per rac per tick — O(1), no neighbor walk.
     //
-    // Pair-wise scan radius is just max(CLOSE_R, CROSS_UNIT_R) = 1.5m
-    // (~one grid cell) — the previous 8m CONTACT_R extension forced a
-    // 5×5 cell walk and was the dominant per-rac cost. CONTACT mode
-    // now reads a bilinear sample of the enemy density field — same
-    // information, O(1) instead of O(neighbors).
-    let nudgeVx = 0;
-    let nudgeVy = 0;
+    // Hard overlaps (racs basically on top of each other) need a
+    // sharper response than the 4 m smoothed grid can provide, so a
+    // tiny pair-wise scan at HARD_OVERLAP_R catches them and applies
+    // a strong push. Mod-N gated — racs can't traverse the exclusion
+    // zone in a single check window at sim speeds.
+    //
+    // CONTACT mode is a single density sample of the enemy side.
     const myOwner = state.rac.owner[i];
     const enemyCh = (1 - myOwner) as 0 | 1;
-    const enemyDensHere = sampleField(
-      fields,
-      fields.sideDensity[enemyCh],
-      myX,
-      myY,
-    );
-    const contact = enemyDensHere > CONTACT_DENSITY_THRESHOLD ? 1 : 0;
-    if (grid) {
-      const mySquadId = state.rac.squadId[i];
-      const SCAN_R = Math.max(CLOSE_R, CROSS_UNIT_R);
-      forEachNear(grid, myX, myY, SCAN_R, (j) => {
+    const totalCh = fields.totalDensity;
+    // Contact: sum the 5×5 cells of enemy-density centered on my cell.
+    // 5×5 with 4 m cells reaches ±10 m (2 cells past my cell), which
+    // matches the previous 8 m forEachNear-scan semantics. Direct cell
+    // reads, no bilinear interpolation, no closure.
+    const fCellSize = fields.cellSize;
+    const fCols = fields.cols;
+    const fRows = fields.rows;
+    const fHalfW = fields.halfW;
+    const fHalfH = fields.halfH;
+    const myCx = Math.max(0, Math.min(fCols - 1, Math.floor((myX + fHalfW) / fCellSize)));
+    const myCy = Math.max(0, Math.min(fRows - 1, Math.floor((myY + fHalfH) / fCellSize)));
+    const enemyDens = fields.sideDensity[enemyCh];
+    let enemySum = 0;
+    {
+      const cx0 = Math.max(0, myCx - 2);
+      const cx1 = Math.min(fCols - 1, myCx + 2);
+      const cy0 = Math.max(0, myCy - 2);
+      const cy1 = Math.min(fRows - 1, myCy + 2);
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const rowBase = cy * fCols;
+        for (let cx = cx0; cx <= cx1; cx++) {
+          enemySum += enemyDens[rowBase + cx];
+        }
+      }
+    }
+    const contact = enemySum > CONTACT_DENSITY_THRESHOLD ? 1 : 0;
+    const myCellRow = myCy * fCols;
+    // Negative density gradient → push away from dense pockets. We use
+    // bilinear samples (sampleField) at ±GRAD_H instead of raw cell-
+    // center finite differences because direct cell reads give huge
+    // discontinuous jumps when racs cross cell boundaries — destabilizes
+    // formations. The 4 sampleField calls = 16 cell reads is the price
+    // of smoothness here.
+    const dRho_dx =
+      sampleField(fields, totalCh, myX + GRAD_H, myY) -
+      sampleField(fields, totalCh, myX - GRAD_H, myY);
+    const dRho_dy =
+      sampleField(fields, totalCh, myX, myY + GRAD_H) -
+      sampleField(fields, totalCh, myX, myY - GRAD_H);
+    let nudgeVx = -dRho_dx * GRAD_REPEL_K;
+    let nudgeVy = -dRho_dy * GRAD_REPEL_K;
+    // Hard-overlap pair check, mod-N. The tight radius keeps the
+    // grid walk to a single cell; the loop body only runs at ~one
+    // overlap per rac per check.
+    if (grid && (tickNow + i) % HARD_OVERLAP_CHECK_TICKS === 0) {
+      forEachNear(grid, myX, myY, HARD_OVERLAP_R, (j) => {
         if (j === i) return;
         if (!state.rac.alive[j]) return;
         const dx = myX - state.rac.x[j];
         const dy = myY - state.rac.y[j];
         const d2 = dx * dx + dy * dy;
-        if (d2 < CLOSE_R2) {
-          if (d2 < 1e-6) {
-            const h = ((state.rac.id[i] * 31 + state.rac.id[j]) >>> 0) / 4294967296;
-            const ang = h * Math.PI * 2;
-            nudgeVx += Math.cos(ang) * CLOSE_K;
-            nudgeVy += Math.sin(ang) * CLOSE_K;
-            return;
-          }
-          const d = Math.sqrt(d2);
-          const w = ((CLOSE_R - d) / CLOSE_R) * CLOSE_K;
-          nudgeVx += (dx / d) * w;
-          nudgeVy += (dy / d) * w;
+        if (d2 >= HARD_OVERLAP_R2) return;
+        if (d2 < 1e-6) {
+          const h = ((state.rac.id[i] * 31 + state.rac.id[j]) >>> 0) / 4294967296;
+          const ang = h * Math.PI * 2;
+          nudgeVx += Math.cos(ang) * HARD_OVERLAP_K;
+          nudgeVy += Math.sin(ang) * HARD_OVERLAP_K;
           return;
         }
-        if (
-          d2 < CROSS_UNIT_R2 &&
-          state.rac.owner[j] === myOwner &&
-          state.rac.squadId[j] !== mySquadId
-        ) {
-          const d = Math.sqrt(d2);
-          const w = ((CROSS_UNIT_R - d) / CROSS_UNIT_R) * CROSS_UNIT_K;
-          nudgeVx += (dx / d) * w;
-          nudgeVy += (dy / d) * w;
-        }
+        const d = Math.sqrt(d2);
+        const w = ((HARD_OVERLAP_R - d) / HARD_OVERLAP_R) * HARD_OVERLAP_K;
+        nudgeVx += (dx / d) * w;
+        nudgeVy += (dy / d) * w;
       });
     }
     state.rac.contact[i] = contact;
@@ -923,8 +990,10 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     const supportFullAt = supportProfile.supportBonusFullAt;
     let dmgMul = 1;
     if (supportMax > 0 && supportFullAt > 0) {
-      const myCh = state.rac.owner[i] === 0 ? 0 : 1;
-      const friendlyDens = sampleField(fields, fields.sideDensity[myCh], myX, myY);
+      // Direct cell read of the friendly-side density at my cell.
+      // Bilinear interpolation would give a smoother profile but the
+      // damage multiplier doesn't need sub-cell precision.
+      const friendlyDens = fields.sideDensity[myOwner][myCellRow + myCx];
       const supportFrac = Math.min(1, friendlyDens / supportFullAt);
       dmgMul *= 1 - supportMax * supportFrac;
     }
@@ -1001,31 +1070,36 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // Read by combat for the frontal damage/defense bonus. Independent
     // of behavior — if you're at your slot, you're in formation, even
     // if you're currently in engage state.
-    let inFormation = 0;
-    if (
-      (role === ROLE_INFANTRY || role === ROLE_TANK) &&
-      !isLeader &&
-      leaderAlive &&
-      !broken
-    ) {
-      const lx = state.rac.x[leaderRow];
-      const ly = state.rac.y[leaderRow];
-      // Same wheel rotation as in MARCH slot-direct above.
-      const spawnFacing =
-        state.rac.owner[leaderRow] === 0 ? 0 : Math.PI;
-      const dFace = state.rac.facing[leaderRow] - spawnFacing;
-      const cF = Math.cos(dFace);
-      const sF = Math.sin(dFace);
-      const sdx0 = state.rac.slotDx[i];
-      const sdy0 = state.rac.slotDy[i];
-      const rdx = sdx0 * cF - sdy0 * sF;
-      const rdy = sdx0 * sF + sdy0 * cF;
-      const sX = lx + rdx;
-      const sY = ly + rdy;
-      if (Math.hypot(sX - state.rac.x[i], sY - state.rac.y[i]) < IN_FORMATION_R) {
-        inFormation = 1;
+    //
+    // Mod-N gate: this drives a damage multiplier that's only meaningful
+    // in melee (combat fires at 1+ Hz, far slower than 24-tick sim).
+    // Refresh every IN_FORMATION_CHECK_TICKS; off-cadence ticks reuse
+    // the cached value. Phase by row so the cost spreads evenly.
+    if ((tickNow + i) % IN_FORMATION_CHECK_TICKS === 0) {
+      let inFormation = 0;
+      if (
+        (role === ROLE_INFANTRY || role === ROLE_TANK) &&
+        !isLeader &&
+        leaderAlive &&
+        !broken
+      ) {
+        const lx = state.rac.x[leaderRow];
+        const ly = state.rac.y[leaderRow];
+        const cF = leaderRotCos[leaderRow];
+        const sF = leaderRotSin[leaderRow];
+        const sdx0 = state.rac.slotDx[i];
+        const sdy0 = state.rac.slotDy[i];
+        const rdx = sdx0 * cF - sdy0 * sF;
+        const rdy = sdx0 * sF + sdy0 * cF;
+        const sX = lx + rdx;
+        const sY = ly + rdy;
+        const ddx = sX - state.rac.x[i];
+        const ddy = sY - state.rac.y[i];
+        if (ddx * ddx + ddy * ddy < IN_FORMATION_R * IN_FORMATION_R) {
+          inFormation = 1;
+        }
       }
+      state.rac.inFormation[i] = inFormation;
     }
-    state.rac.inFormation[i] = inFormation;
   }
 }
