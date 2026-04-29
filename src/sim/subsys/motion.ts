@@ -1009,11 +1009,17 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
               nudgeVy += (dy / d) * w;
               continue;
             }
-            if (
-              d2 < CROSS_UNIT_R2 &&
-              racOwner[j] === myOwner &&
-              racSquadId[j] !== mySquadId
-            ) {
+            if (d2 < CROSS_UNIT_R2 && racOwner[j] === myOwner) {
+              // Medium-range same-side repulsion. Used to be gated to
+              // different-squad neighbors so a phalanx at 1.4 m pitch
+              // wouldn't fight its own cohesion — but that left
+              // formation-less roles (cavalry, archers, broken units)
+              // with only the 0.8 m close-range push, so squads of
+              // them collapsed into a single point. We let the force
+              // fire for any same-side neighbor; for in-formation
+              // followers the slot-direct desired velocity easily
+              // dominates the gentle 0.07–1.4 m/s repulsion at 0.8–1.4 m.
+              void mySquadId;
               const d = Math.sqrt(d2);
               const w = ((CROSS_UNIT_R - d) / CROSS_UNIT_R) * CROSS_UNIT_K;
               nudgeVx += (dx / d) * w;
