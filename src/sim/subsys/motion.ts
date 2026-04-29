@@ -74,11 +74,16 @@ const IN_FORMATION_R = 2.0;
  *  stops seeking and lets the cross-unit repulsion settle it into
  *  a ring. Without the deadband the seek force at maxV plows every
  *  rac into the same pixel, the gentle ~1 m/s repulsion can't
- *  overcome it, and the squad collapses into a blob. */
-const RALLY_ARRIVAL_R = 4.0;
-const RALLY_ARRIVAL_R2 = RALLY_ARRIVAL_R * RALLY_ARRIVAL_R;
-const ROUT_ARRIVAL_R = 6.0;
-const ROUT_ARRIVAL_R2 = ROUT_ARRIVAL_R * ROUT_ARRIVAL_R;
+ *  overcome it, and the squad collapses into a blob.
+ *
+ *  Per-role: cavalry has the smallest separationRadius (0.6 m) and
+ *  highest speed, so a 4 m deadband still packs them tight (the
+ *  user's "wounded cavalry clump" report). A wider deadband gives
+ *  the cross-unit repulsion enough room to space them naturally. */
+const RALLY_ARRIVAL_R_DEFAULT = 4.0;
+const RALLY_ARRIVAL_R_CAVALRY = 12.0;
+const ROUT_ARRIVAL_R_DEFAULT = 6.0;
+const ROUT_ARRIVAL_R_CAVALRY = 14.0;
 /** How often to recompute the inFormation flag. Drives a damage
  *  multiplier in combat; combat fires at 1+ Hz so this can be
  *  refreshed every 4 ticks (~165 ms) without missing combat events. */
@@ -485,16 +490,20 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       let next = state.rac.behavior[i];
       let cachedRallyLeaderRow = -1;
       if (broken) {
-        // Prefer my OWN squad's leader if alive — broken racs should
-        // fall back to the formation they belong to, not run all the
-        // way to the spawn bin (which can be 100+ m away on a big
-        // field — the user-visible bug was "soldiers run way too far
-        // after getting hit"). Falls back to any leader within
-        // RALLY_RADIUS, then to ROUT.
+        // Broken racs rally on a leader. Priority:
+        //   1. My own squad's leader if alive (cheap pointer read).
+        //   2. Any friendly leader within RALLY_RADIUS (25 m).
+        //   3. Any friendly leader anywhere on the map (so a wiped-
+        //      squad rac doesn't sprint to the spawn bin 100+ m away;
+        //      it joins whatever neighboring squad still has a leader).
+        //   4. ROUT to bin only if no leader exists at all.
         if (!isLeader && leaderAlive) {
           cachedRallyLeaderRow = leaderRow;
         } else {
           cachedRallyLeaderRow = findRallyLeader(state, i);
+          if (cachedRallyLeaderRow < 0) {
+            cachedRallyLeaderRow = findRoutLeader(state, i);
+          }
         }
         next = cachedRallyLeaderRow >= 0 ? BEHAVIOR_RALLY : BEHAVIOR_ROUT;
       } else if (
@@ -617,7 +626,9 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         const dx = state.rac.aimX[i] - myX;
         const dy = state.rac.aimY[i] - myY;
         const d2 = dx * dx + dy * dy;
-        if (d2 > RALLY_ARRIVAL_R2) {
+        const arrR =
+          role === ROLE_CAVALRY ? RALLY_ARRIVAL_R_CAVALRY : RALLY_ARRIVAL_R_DEFAULT;
+        if (d2 > arrR * arrR) {
           const d = Math.sqrt(d2);
           desiredVx = (dx / d) * maxV;
           desiredVy = (dy / d) * maxV;
@@ -788,7 +799,9 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       if (state.rac.aimValid[i]) {
         fx = state.rac.aimX[i] - myX;
         fy = state.rac.aimY[i] - myY;
-        if (fx * fx + fy * fy < ROUT_ARRIVAL_R2) arrived = true;
+        const arrR =
+          role === ROLE_CAVALRY ? ROUT_ARRIVAL_R_CAVALRY : ROUT_ARRIVAL_R_DEFAULT;
+        if (fx * fx + fy * fy < arrR * arrR) arrived = true;
       } else {
         // No bin, no leader — flee nearest enemy.
         let nearestRow = -1;
