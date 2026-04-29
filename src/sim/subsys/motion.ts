@@ -458,9 +458,15 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
   if (!state._leaderRotCos || state._leaderRotCos.length < state.rac.x.length) {
     state._leaderRotCos = new Float32Array(state.rac.x.length);
     state._leaderRotSin = new Float32Array(state.rac.x.length);
+    state._leaderPreX = new Float32Array(state.rac.x.length);
+    state._leaderPreY = new Float32Array(state.rac.x.length);
+    state._leaderPreVx = new Float32Array(state.rac.x.length);
+    state._leaderPreVy = new Float32Array(state.rac.x.length);
   }
   const leaderRotCos = state._leaderRotCos;
   const leaderRotSin = state._leaderRotSin!;
+  const leaderPreX = state._leaderPreX!;
+  const leaderPreY = state._leaderPreY!;
   const leaderRowArr = state.rac.leaderRow;
   // Combined pass: cache leader rotation (cos/sin) for each squad
   // leader, AND resolve every follower's leader row from squadLeaderId
@@ -478,6 +484,8 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       const dFace = state.rac.facing[r] - spawnFacing;
       leaderRotCos[r] = Math.cos(dFace);
       leaderRotSin[r] = Math.sin(dFace);
+      leaderPreX[r] = state.rac.x[r];
+      leaderPreY[r] = state.rac.y[r];
       leaderRowArr[r] = -1;
     } else {
       // Follower — resolve leader's row once per tick.
@@ -957,10 +965,14 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       let slotSx = 0, slotSy = 0;
       let lvx = 0, lvy = 0;
       if (usesFormation && !isLeader && leaderAlive) {
-        const lx = state.rac.x[leaderRow];
-        const ly = state.rac.y[leaderRow];
-        lvx = state.rac.vx[leaderRow];
-        lvy = state.rac.vy[leaderRow];
+        // Use the PRE-motion snapshot of leader pos so every follower
+        // sees the same leader state regardless of motionTick's
+        // shuffled iteration order. Reading state.rac.x[leaderRow]
+        // here would race the leader's own integration this tick.
+        const lx = leaderPreX[leaderRow];
+        const ly = leaderPreY[leaderRow];
+        lvx = 0; // velocity term removed — caused a separate race condition; constant ~0.17m lag is invisible.
+        lvy = 0;
         const cF = leaderRotCos[leaderRow];
         const sF = leaderRotSin[leaderRow];
         const sdx0 = state.rac.slotDx[i];

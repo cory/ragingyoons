@@ -381,6 +381,19 @@ export interface BattleState {
    *  row. Off-leader rows are unused. */
   _leaderRotCos?: Float32Array;
   _leaderRotSin?: Float32Array;
+  /** Pre-motion snapshot of every leader's position and velocity,
+   *  captured at the top of motionTick before any rac integrates.
+   *  Followers' slot-direct steering reads from these snapshots so
+   *  the answer is independent of motionTick's per-tick shuffled
+   *  iteration order — without the snapshot, a follower processed
+   *  AFTER its leader sees the leader's already-integrated state
+   *  while one processed BEFORE sees the pre-integration state, and
+   *  the squad oscillates between the two configurations every tick
+   *  (the start-of-round wiggle). Indexed by leader row. */
+  _leaderPreX?: Float32Array;
+  _leaderPreY?: Float32Array;
+  _leaderPreVx?: Float32Array;
+  _leaderPreVy?: Float32Array;
   /** Per-rac desired-velocity scratch produced by the motionTick
    *  intent pass, consumed by the apply pass on the same tick. We
    *  keep it on state (as opposed to a tick-local Float32Array) so
@@ -722,8 +735,16 @@ function spawnSideRacs(
       for (let k = 0; k < thisSquadSize; k++) {
         if (state.rac.count >= state.rac.id.length) break;
         const off = formation.arrange({ burstIdx: k, burstSize: thisSquadSize, forward });
-        const jx = (rngFloat(state.rng) - 0.5) * 0.2;
-        const jy = (rngFloat(state.rng) - 0.5) * 0.2;
+        // Spawn jitter removed — the ±0.1 m random offset gave every
+        // formation a visible staggered/brick look at zoom (each rac
+        // shifted by some sub-pixel amount, which on a coarse render
+        // grid created an irregular pattern instead of clean rows).
+        // Squads spawn on the formation grid exactly. The first
+        // motionTick still produces some genuine motion (slot-direct
+        // pulls followers if the leader has any velocity), but
+        // there's no longer a static "noise" offset baked in.
+        const jx = 0;
+        const jy = 0;
         const racRow = state.rac.count;
         const racId = state.nextRacId++;
         state.rac.id[racRow] = racId;
