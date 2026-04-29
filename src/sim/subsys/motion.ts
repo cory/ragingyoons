@@ -241,6 +241,31 @@ function herdAimPoint(
  *  index or -1. Used as a fallback retreat target — broken / rally
  *  racs head back toward their own line instead of fleeing into
  *  empty space. */
+/** Nearest alive enemy bin (any range). Used by leader facing — bins
+ *  are static so the direction-to-bin barely changes as the squad
+ *  marches forward, keeping leader facing stable. Falling back to
+ *  per-tick enemy-rac target was producing ever-growing relative
+ *  angles as the leader closed in (the diagonal-wheel bug). */
+function findNearestEnemyBin(state: BattleState, i: number): number {
+  const myOwner = state.rac.owner[i];
+  const myX = state.rac.x[i];
+  const myY = state.rac.y[i];
+  let bestRow = -1;
+  let bestD2 = Number.POSITIVE_INFINITY;
+  for (let k = 0; k < state.bin.count; k++) {
+    if (!state.bin.alive[k]) continue;
+    if (state.bin.owner[k] === myOwner) continue;
+    const dx = state.bin.x[k] - myX;
+    const dy = state.bin.y[k] - myY;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestRow = k;
+    }
+  }
+  return bestRow;
+}
+
 function findFriendlyBin(state: BattleState, i: number): number {
   const myOwner = state.rac.owner[i];
   const myX = state.rac.x[i];
@@ -1213,16 +1238,31 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // their actual target so the formation stays oriented toward the
     // enemy line.
     state.rac.prevFacing[i] = state.rac.facing[i];
-    if (isLeader && tgtFound) {
-      // Leader's facing follows the target — drives the wheel
-      // rotation for the whole squad. But we don't snap; we cap the
-      // angular change per tick so retargeting to a slightly off-
-      // axis enemy doesn't pivot the entire formation 10° per
-      // decision tick. The squad still wheels to face the fight,
-      // just gradually.
-      const fdx = tgtX - myX;
-      const fdy = tgtY - myY;
-      if (fdx * fdx + fdy * fdy > 1e-6) {
+    if (isLeader) {
+      // Leader's facing drives the wheel rotation for every follower's
+      // slot. We anchor it to the direction-to-nearest-enemy-BIN so
+      // the angle stays stable as the squad walks: marching toward a
+      // bin moves the leader along the bin direction, so the relative
+      // angle barely changes. Anchoring to a per-tick enemy-rac
+      // target instead gave ever-growing relative angles as the
+      // leader closed (perpendicular offset stays constant while the
+      // parallel distance shrinks → arctan blows up), which produced
+      // the diagonal-march and end-to-end clash. Falls back to the
+      // current target rac if no enemy bins remain (cleanup phase),
+      // and to velocity if neither exists.
+      let didFace = false;
+      const enemyBinRow = findNearestEnemyBin(state, i);
+      let fdx = 0, fdy = 0;
+      if (enemyBinRow >= 0) {
+        fdx = state.bin.x[enemyBinRow] - myX;
+        fdy = state.bin.y[enemyBinRow] - myY;
+        didFace = fdx * fdx + fdy * fdy > 1e-6;
+      } else if (tgtFound) {
+        fdx = tgtX - myX;
+        fdy = tgtY - myY;
+        didFace = fdx * fdx + fdy * fdy > 1e-6;
+      }
+      if (didFace) {
         const desired = Math.atan2(fdy, fdx);
         let delta = desired - state.rac.facing[i];
         while (delta > Math.PI) delta -= 2 * Math.PI;
@@ -1231,6 +1271,8 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         if (delta > cap) delta = cap;
         else if (delta < -cap) delta = -cap;
         state.rac.facing[i] = state.rac.facing[i] + delta;
+      } else if (newVx * newVx + newVy * newVy > 1e-6) {
+        state.rac.facing[i] = Math.atan2(newVy, newVx);
       }
     } else if (newVx * newVx + newVy * newVy > 1e-6) {
       state.rac.facing[i] = Math.atan2(newVy, newVx);
