@@ -36,12 +36,17 @@ export type FormationId =
   | "tank-arrowhead"
   | "infantry-line"
   | "infantry-phalanx"
+  | "infantry-wedge"
+  | "infantry-column"
+  | "infantry-square"
   | "cavalry-loose-deuce"
   | "cavalry-flexible-fours"
   | "cavalry-lone-gunmen"
+  | "cavalry-wedge"
   | "archer-one-line"
   | "archer-two-line"
-  | "archer-sniper";
+  | "archer-sniper"
+  | "archer-skirmish";
 
 export interface FormationArrangeArgs {
   burstIdx: number;
@@ -190,6 +195,80 @@ export const FORMATIONS: FormationDef[] = [
       slotScale: 0.5, // synaspismos collapse: 1.4 m pitch → ~0.7 m (anti-overlap floors at ~0.8 m)
     },
   },
+  {
+    id: "infantry-wedge",
+    role: "infantry",
+    arrange(args) {
+      // V-shape, point forward (toward enemy). Each rank is one wider
+      // than the one in front. For burstSize n, ranks ≈ ceil(sqrt(2n)).
+      // Designed to break enemy lines: the apex hits first and the
+      // wider ranks behind exploit the gap.
+      const n = args.burstSize;
+      const ranks = Math.max(1, Math.ceil(Math.sqrt(2 * n)));
+      // Slot index → which rank: rank r has r+1 racs (0-indexed).
+      // Cumulative count up to rank r = (r+1)(r+2)/2 - wait, rank 0 has
+      // 1 rac, rank 1 has 2, ..., rank k has k+1 racs.
+      let rank = 0;
+      let inRankIdx = args.burstIdx;
+      let rankSize = 1;
+      while (inRankIdx >= rankSize && rank < ranks - 1) {
+        inRankIdx -= rankSize;
+        rank += 1;
+        rankSize = rank + 1;
+      }
+      const PITCH_X = 1.4;
+      const PITCH_Y = 1.4;
+      // Rank 0 is the APEX (furthest forward); rank `ranks-1` is rear.
+      const xOffset = (ranks - 1 - rank) * PITCH_X * args.forward;
+      // Y center per-rank.
+      const yOffset = (inRankIdx - (rankSize - 1) * 0.5) * PITCH_Y;
+      return { dx: xOffset, dy: yOffset };
+    },
+    tacticOverride: { alignmentK: 1.6, cohesionK: 1.2 },
+    contactOverride: {
+      alignmentK: 2.0,
+      cohesionK: 1.6,
+      separationK: 0.5,
+      slotScale: 0.7,
+    },
+  },
+  {
+    id: "infantry-column",
+    role: "infantry",
+    arrange(args) {
+      // Narrow tall column — 3 wide × N deep. Fast through corridors,
+      // poor at presenting a wide front. burstSize=12 → 3×4.
+      return gridPerp(args.burstIdx, args.burstSize, 3, 1.4, 1.4, args.forward);
+    },
+    tacticOverride: { alignmentK: 1.4, cohesionK: 1.4 },
+    contactOverride: { alignmentK: 1.8, cohesionK: 1.6, separationK: 0.6 },
+  },
+  {
+    id: "infantry-square",
+    role: "infantry",
+    arrange(args) {
+      // Defensive hollow square — racs distributed along a square's
+      // perimeter facing outward. All-around defense vs cavalry.
+      // For small bursts (< 8) falls back to a tight 3-wide grid.
+      const n = args.burstSize;
+      if (n < 8) return gridPerp(args.burstIdx, n, 3, 1.4, 1.4, args.forward);
+      // Perimeter: assign idx → (side, slot-on-side). Side count = 4.
+      const perSide = Math.ceil(n / 4);
+      const halfSide = (perSide - 1) * 0.5 * 1.4;
+      const side = Math.floor(args.burstIdx / perSide);
+      const slot = args.burstIdx % perSide;
+      const along = (slot - (perSide - 1) * 0.5) * 1.4;
+      // Sides: 0=front, 1=right, 2=back, 3=left (relative to forward).
+      switch (side) {
+        case 0: return { dx: halfSide * args.forward, dy: along };
+        case 1: return { dx: along * args.forward, dy: halfSide };
+        case 2: return { dx: -halfSide * args.forward, dy: -along };
+        default: return { dx: -along * args.forward, dy: -halfSide };
+      }
+    },
+    tacticOverride: { alignmentK: 1.0, cohesionK: 1.4 },
+    contactOverride: { alignmentK: 1.4, cohesionK: 2.0, separationK: 0.5, slotScale: 0.8 },
+  },
 
   // ----- CAVALRY -----
   {
@@ -229,6 +308,31 @@ export const FORMATIONS: FormationDef[] = [
       return { dx: Math.cos(a) * r, dy: Math.sin(a) * r };
     },
     tacticOverride: { cohesionK: 0, flankBiasK: 0.55, targetSeekK: 5.5 },
+  },
+  {
+    id: "cavalry-wedge",
+    role: "cavalry",
+    arrange(args) {
+      // Cavalry wedge — V-shape pointing forward. Designed to slam
+      // into enemy formations at the apex and rip a gap. Same layout
+      // logic as infantry-wedge but with a wider 1.8 m pitch (mounted
+      // units take more space).
+      const n = args.burstSize;
+      const ranks = Math.max(1, Math.ceil(Math.sqrt(2 * n)));
+      let rank = 0;
+      let inRankIdx = args.burstIdx;
+      let rankSize = 1;
+      while (inRankIdx >= rankSize && rank < ranks - 1) {
+        inRankIdx -= rankSize;
+        rank += 1;
+        rankSize = rank + 1;
+      }
+      const PITCH = 1.8;
+      const xOffset = (ranks - 1 - rank) * PITCH * args.forward;
+      const yOffset = (inRankIdx - (rankSize - 1) * 0.5) * PITCH;
+      return { dx: xOffset, dy: yOffset };
+    },
+    tacticOverride: { cohesionK: 1.0, flankBiasK: 0.2, targetSeekK: 4.5 },
   },
 
   // ----- ARCHER -----
@@ -293,6 +397,34 @@ export const FORMATIONS: FormationDef[] = [
       alignmentK: 0,
       flankBiasK: 0.5,
       speedMul: 0.7, // snipers are slow + careful
+    },
+  },
+  {
+    id: "archer-skirmish",
+    role: "archer",
+    arrange(args) {
+      // Loose dispersed line — wide spacing, jittered. Hard to hit
+      // with AOE, hard to flank because there's no formation to flank.
+      // Index-derived sub-pitch jitter keeps them from forming a
+      // clean line. Sits well back of the front; archers in skirmish
+      // mode kite eagerly (skirmisher standing order).
+      const PITCH_Y = 2.4;
+      const PITCH_X_JITTER = 0.8;
+      const center = (args.burstSize - 1) * 0.5;
+      const y = (args.burstIdx - center) * PITCH_Y;
+      // Pseudo-random forward jitter from index hash — keeps the line
+      // from being perfectly straight. Sin-of-hash for spread.
+      const jx = Math.sin(args.burstIdx * 1.6180339) * PITCH_X_JITTER;
+      const x = -args.forward * 1.5 + jx;
+      return { dx: x, dy: y };
+    },
+    tacticOverride: {
+      hideBehindK: 1.0,   // less hiding — committed to skirmish
+      hideStandoff: 10,
+      cohesionK: 0,
+      alignmentK: 0,
+      flankBiasK: 0.4,
+      speedMul: 0.9,      // faster than the careful sniper
     },
   },
 ];

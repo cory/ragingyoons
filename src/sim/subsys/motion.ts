@@ -127,16 +127,16 @@ const CROSS_UNIT_K = 3.0;
 /** Contact-mode flag radius — any enemy within this m sets contact[i]=1.
  *  Used by combat (phalanx anti-cav recoil, shield-vs-projectile) and
  *  formation-tightening overrides. */
-/** Threshold on the SUM of enemy-side density across a 3×3 cell
- *  window (12 m reach with 4 m cells) for "in contact" classification.
- *  Each rac splats with weight 1.0 spread bilinearly across 4 cells,
- *  so a 3×3 sum captures the full splat for any enemy whose rac
- *  position is in the central cell, plus partial contributions from
- *  neighboring cells. Threshold ~0.5 fires when at least one enemy
- *  is within ~8 m — comparable to the original forEachNear scan but
- *  O(1) instead of O(neighbors). Tuned against the formation-combat-
- *  shape regression test. */
-const CONTACT_DENSITY_THRESHOLD = 0.5;
+/** Threshold on the SUM of enemy-side density across a 5×5 cell
+ *  window (8 m reach with 4 m cells) for "in contact" classification.
+ *  Hysteresis: SET threshold to enter contact mode, CLEAR threshold
+ *  (lower) to leave. Without hysteresis the flag flickered at the
+ *  boundary as enemies drifted around the threshold each tick — the
+ *  leader's MARCH halt also flickered, producing a visible wiggle.
+ *  Once a rac's contact mode is set, density has to drop well below
+ *  the SET threshold before the rac un-engages. */
+const CONTACT_DENSITY_SET = 0.5;
+const CONTACT_DENSITY_CLEAR = 0.15;
 /** Engage band: a rac in engage state holds position when within
  *  effRange. This wider band (effRange × this) is the stop-to-attack
  *  trigger — once you're inside it you're fighting. */
@@ -1060,7 +1060,13 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         }
       }
     }
-    const contact = enemySum > CONTACT_DENSITY_THRESHOLD ? 1 : 0;
+    // Hysteresis on contact: stay in contact mode until density drops
+    // well below the SET threshold. Prevents the leader's halt from
+    // flickering at the boundary.
+    const wasContact = state.rac.contact[i] === 1;
+    const contact = wasContact
+      ? enemySum > CONTACT_DENSITY_CLEAR ? 1 : 0
+      : enemySum > CONTACT_DENSITY_SET ? 1 : 0;
     let nudgeVx = 0;
     let nudgeVy = 0;
     if (grid) {
