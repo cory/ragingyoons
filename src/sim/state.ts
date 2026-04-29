@@ -609,6 +609,34 @@ export interface ShapeBattleConfig {
 /** Spawn one side's racs as a column of platoons of squads, returns
  *  nothing — mutates state. Used by setupShapeBattle for both blue
  *  and red sides; keeps the per-side spawn logic in one place. */
+/** Pick the burstIdx whose formation slot is most FRONT (toward
+ *  enemy) and most CENTRAL (small |y|). Leader's facing rotation
+ *  drives the wheel matrix for every follower's slot; if the leader
+ *  sits at a lateral or rear edge, a small leader rotation swings
+ *  the whole formation through a wide arc. Front-center keeps slot
+ *  offsets approximately symmetric around the leader so the
+ *  formation rotates in place. */
+function computeLeaderBurstIdx(
+  formation: { arrange(args: { burstIdx: number; burstSize: number; forward: number }): { dx: number; dy: number } },
+  burstSize: number,
+  forward: number,
+): number {
+  let bestIdx = 0;
+  let bestScore = -Infinity;
+  for (let k = 0; k < burstSize; k++) {
+    const off = formation.arrange({ burstIdx: k, burstSize, forward });
+    // "frontness" weighted heavily; "centrality" is the tie-breaker.
+    const frontness = off.dx * forward;
+    const centrality = -Math.abs(off.dy);
+    const score = frontness * 10 + centrality;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = k;
+    }
+  }
+  return bestIdx;
+}
+
 function spawnSideRacs(
   state: BattleState,
   content: ContentBundle,
@@ -676,7 +704,15 @@ function spawnSideRacs(
       );
       const sCenterY = platoonY + (sRow - (rowsInThisCol - 1) * 0.5) * squadStrideY;
       const sCenterX = platoonX - forward * sCol * SQUAD_COL_STRIDE;
-      const leaderBurstIdx = Math.floor(thisSquadSize / 2);
+      // Pick the leader's burstIdx as the slot whose offset is most
+      // FRONT (toward enemy) and most CENTRAL (small |y|). Leader's
+      // facing rotation drives the wheel matrix for every follower
+      // slot; if the leader sits at a lateral edge of the formation,
+      // a small leader rotation swings the whole formation through a
+      // wide arc. Front-center keeps slot offsets symmetric around
+      // the leader so rotations pivot the formation in place rather
+      // than through space. */
+      const leaderBurstIdx = computeLeaderBurstIdx(formation, thisSquadSize, forward);
       const leaderOff = formation.arrange({
         burstIdx: leaderBurstIdx,
         burstSize: thisSquadSize,

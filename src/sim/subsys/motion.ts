@@ -1004,13 +1004,22 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
         // them outrun friendly infantry and chase fleeing enemies
         // across the map. At 0.5× a faster fleeing target stays out
         // of range and friendlies intercept first.
-        const archerSlow = role === ROLE_ARCHER ? 0.5 : 1;
-        const dx = tgtX - myX;
-        const dy = tgtY - myY;
-        const d = distToTarget;
-        if (d > 1e-3) {
-          desiredVx = (dx / d) * marchMaxV * archerSlow;
-          desiredVy = (dy / d) * marchMaxV * archerSlow;
+        //
+        // Contact halt: when the rac is in contact (enemy density
+        // within ~10 m), MARCH stops pushing forward — the front
+        // ranks are about to engage, and we don't want leaders
+        // marching their squad straight through the enemy line. This
+        // is the squad's collision response: formations meet at the
+        // boundary instead of interpenetrating.
+        if (state.rac.contact[i] === 0) {
+          const archerSlow = role === ROLE_ARCHER ? 0.5 : 1;
+          const dx = tgtX - myX;
+          const dy = tgtY - myY;
+          const d = distToTarget;
+          if (d > 1e-3) {
+            desiredVx = (dx / d) * marchMaxV * archerSlow;
+            desiredVy = (dy / d) * marchMaxV * archerSlow;
+          }
         }
       }
     }
