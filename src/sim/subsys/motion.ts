@@ -78,6 +78,13 @@ const IN_FORMATION_R = 2.0;
  *  this the slot-as-attractor isn't really part of the formation. */
 const FORMATION_SHATTER_R = 8.0;
 const FORMATION_SHATTER_R2 = FORMATION_SHATTER_R * FORMATION_SHATTER_R;
+/** Max angular rotation rate of a leader's facing (radians per second).
+ *  Leader.facing drives the wheel rotation matrix for every follower's
+ *  slot offset, so a fast facing change pivots the whole formation —
+ *  retargeting to a slightly off-axis enemy was rotating phalanxes
+ *  diagonally across the field. ~30°/s feels weighty but still lets
+ *  formations turn to face a flank attack inside ~6 s. */
+const LEADER_TURN_RATE = Math.PI / 6; // 30°/s
 /** Distance a panicked rac flees from its nearest enemy before
  *  arriving and standing still while it recovers morale. Bigger than
  *  any unit's attack range (longest is archer ~10–12 m) so a fleeing
@@ -1077,17 +1084,21 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
               nudgeVy += (dy / d) * w;
               continue;
             }
-            if (d2 < CROSS_UNIT_R2 && racOwner[j] === myOwner) {
-              // Medium-range same-side repulsion. Used to be gated to
-              // different-squad neighbors so a phalanx at 1.4 m pitch
-              // wouldn't fight its own cohesion — but that left
-              // formation-less roles (cavalry, archers, broken units)
-              // with only the 0.8 m close-range push, so squads of
-              // them collapsed into a single point. We let the force
-              // fire for any same-side neighbor; for in-formation
-              // followers the slot-direct desired velocity easily
-              // dominates the gentle 0.07–1.4 m/s repulsion at 0.8–1.4 m.
-              void mySquadId;
+            if (
+              d2 < CROSS_UNIT_R2 &&
+              racOwner[j] === myOwner &&
+              racSquadId[j] !== mySquadId
+            ) {
+              // Cross-unit repulsion at 1.5 m, only between DIFFERENT
+              // same-side squads — keeps adjacent friendly squads
+              // from merging. Same-squad neighbors are spaced by
+              // slot-direct steering (or, for non-formation roles,
+              // by their own behavior intent — cavalry-on-bin uses a
+              // golden-angle ring, broken racs flee in per-rac
+              // directions). Applying this force inside the squad
+              // pushed edge followers out of slot in tight formations
+              // (phalanx pitch = 1.4 m sits exactly inside this
+              // radius), so leaders outran their followers.
               const d = Math.sqrt(d2);
               const w = ((CROSS_UNIT_R - d) / CROSS_UNIT_R) * CROSS_UNIT_K;
               nudgeVx += (dx / d) * w;
@@ -1203,10 +1214,23 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // enemy line.
     state.rac.prevFacing[i] = state.rac.facing[i];
     if (isLeader && tgtFound) {
+      // Leader's facing follows the target — drives the wheel
+      // rotation for the whole squad. But we don't snap; we cap the
+      // angular change per tick so retargeting to a slightly off-
+      // axis enemy doesn't pivot the entire formation 10° per
+      // decision tick. The squad still wheels to face the fight,
+      // just gradually.
       const fdx = tgtX - myX;
       const fdy = tgtY - myY;
       if (fdx * fdx + fdy * fdy > 1e-6) {
-        state.rac.facing[i] = Math.atan2(fdy, fdx);
+        const desired = Math.atan2(fdy, fdx);
+        let delta = desired - state.rac.facing[i];
+        while (delta > Math.PI) delta -= 2 * Math.PI;
+        while (delta < -Math.PI) delta += 2 * Math.PI;
+        const cap = LEADER_TURN_RATE * dt;
+        if (delta > cap) delta = cap;
+        else if (delta < -cap) delta = -cap;
+        state.rac.facing[i] = state.rac.facing[i] + delta;
       }
     } else if (newVx * newVx + newVy * newVy > 1e-6) {
       state.rac.facing[i] = Math.atan2(newVy, newVx);
