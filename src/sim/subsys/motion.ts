@@ -747,10 +747,10 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       }
     } else if (behavior === BEHAVIOR_KITE) {
       // Archer kite: maintain preferred distance from target. Outside
-      // band → walk toward (close to attack range). Inside band →
-      // back-pedal (open distance). In band → settle (vel = 0). The
-      // deadband stops the archer from oscillating across the boundary
-      // every tick.
+      // band → walk toward (close to attack range, half speed so we
+      // don't outrun fleeing prey). Inside band → back-pedal at full
+      // speed. In band → settle (vel = 0). The deadband stops the
+      // archer from oscillating across the boundary every tick.
       if (tgtFound) {
         const kiteFrac = profile.archerKiteFraction || 0.7;
         const preferred = state.rac.effRange[i] * kiteFrac;
@@ -759,11 +759,12 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
           const ux = (tgtX - myX) / d;
           const uy = (tgtY - myY) / d;
           if (d > preferred * (1 + KITE_DEADBAND)) {
-            // too far → close
-            desiredVx = ux * maxV;
-            desiredVy = uy * maxV;
+            // too far → close at half speed (full speed plus a faster-
+            // moving target lets archers chase enemies across the map).
+            desiredVx = ux * maxV * 0.5;
+            desiredVy = uy * maxV * 0.5;
           } else if (d < preferred * (1 - KITE_DEADBAND)) {
-            // too close → back-pedal slightly faster than march
+            // too close → back-pedal at full speed.
             desiredVx = -ux * maxV;
             desiredVy = -uy * maxV;
           }
@@ -937,24 +938,21 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
           desiredVx = dx / dt;
           desiredVy = dy / dt;
         }
-      } else if (
-        tgtFound &&
-        order !== STANDING_ORDER_IDX_HOLD &&
-        role !== ROLE_ARCHER
-      ) {
+      } else if (tgtFound && order !== STANDING_ORDER_IDX_HOLD) {
         // Leader / non-formation roles: aim at world target unless
         // standing order is HOLD (then sit until enemy comes to us).
-        // Archers explicitly excluded — they should never plow toward
-        // an out-of-kite-range target. Outside KITE band, they hold
-        // position (or follow squad leader once we wire that up); the
-        // visible bug was archers chasing fleeing units across the
-        // map at full speed.
+        // Archers advance at half speed — they need to walk forward
+        // with the army at start of round, but full-speed chase let
+        // them outrun friendly infantry and chase fleeing enemies
+        // across the map. At 0.5× a faster fleeing target stays out
+        // of range and friendlies intercept first.
+        const archerSlow = role === ROLE_ARCHER ? 0.5 : 1;
         const dx = tgtX - myX;
         const dy = tgtY - myY;
         const d = distToTarget;
         if (d > 1e-3) {
-          desiredVx = (dx / d) * marchMaxV;
-          desiredVy = (dy / d) * marchMaxV;
+          desiredVx = (dx / d) * marchMaxV * archerSlow;
+          desiredVy = (dy / d) * marchMaxV * archerSlow;
         }
       }
     }
