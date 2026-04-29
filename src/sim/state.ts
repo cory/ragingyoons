@@ -639,6 +639,18 @@ function spawnSideRacs(
   let remaining = side.count;
   // Initial facing: side 0 racs face +x (forward=+1), side 1 racs face -x.
   const initialFacing = forward > 0 ? 0 : Math.PI;
+  // Squads-per-column cap — when a platoon has more squads than fit
+  // vertically in the playfield, wrap into additional X-rank columns
+  // BEHIND the front (away from enemy). Without this a 200-rac
+  // single-platoon spawn produces 17 squads × 19.6 m stride = 333 m
+  // of vertical stack on a 140 m field, with most squads spawning
+  // off-screen. The column wrap keeps every squad inside the bounds
+  // while preserving the formation's X-Y structure (front rank near
+  // the center-line, reserves trailing).
+  const SQUAD_COL_STRIDE = 6; // m between wrapped squad columns
+  const FIELD_FIT_MARGIN = 0.85;
+  const usableH = state.bounds.h * FIELD_FIT_MARGIN;
+  const maxSquadsPerColumn = Math.max(1, Math.floor(usableH / squadStrideY));
   for (let p = 0; p < effPlatoonCount; p++) {
     const thisPlatoonSize = Math.min(effMaxPlatoon, remaining);
     if (thisPlatoonSize <= 0) break;
@@ -654,8 +666,16 @@ function spawnSideRacs(
       platoonRemaining -= thisSquadSize;
       const squadId = state.nextSquadId++;
       const groupId = state.nextGroupId++;
-      const sCenterY = platoonY + (s - (squadCount - 1) * 0.5) * squadStrideY;
-      const sCenterX = platoonX;
+      // 2-D wrap: column-major. Squad s lives at (col, row) where
+      // col = s / maxSquadsPerColumn, row = s % maxSquadsPerColumn.
+      const sCol = Math.floor(s / maxSquadsPerColumn);
+      const sRow = s % maxSquadsPerColumn;
+      const rowsInThisCol = Math.min(
+        maxSquadsPerColumn,
+        squadCount - sCol * maxSquadsPerColumn,
+      );
+      const sCenterY = platoonY + (sRow - (rowsInThisCol - 1) * 0.5) * squadStrideY;
+      const sCenterX = platoonX - forward * sCol * SQUAD_COL_STRIDE;
       const leaderBurstIdx = Math.floor(thisSquadSize / 2);
       const leaderOff = formation.arrange({
         burstIdx: leaderBurstIdx,

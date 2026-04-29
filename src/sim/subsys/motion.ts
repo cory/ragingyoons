@@ -69,6 +69,15 @@ import {
  *  a rac knocked outside it has lost formation cohesion at that spot
  *  and shouldn't claim the frontal-defense bonus anymore. */
 const IN_FORMATION_R = 2.0;
+/** If a follower's distance to its slot exceeds this radius, the
+ *  formation is "shattered" for that rac and slot-direct steering
+ *  shuts off — the rac falls back to independent MARCH/ENGAGE.
+ *  Trying to reform after a deep dispersal pulled racs through enemy
+ *  lines and re-fed the blob (the user-visible bug: "once a formation
+ *  shatters we shouldn't try to reform"). 8 m ≈ 4 body-widths — past
+ *  this the slot-as-attractor isn't really part of the formation. */
+const FORMATION_SHATTER_R = 8.0;
+const FORMATION_SHATTER_R2 = FORMATION_SHATTER_R * FORMATION_SHATTER_R;
 /** Distance a panicked rac flees from its nearest enemy before
  *  arriving and standing still while it recovers morale. Bigger than
  *  any unit's attack range (longest is archer ~10–12 m) so a fleeing
@@ -903,20 +912,47 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
       // exempt so kite + flank can fire without slot-pull fighting
       // them.
       const usesFormation = role === ROLE_INFANTRY || role === ROLE_TANK;
+      // Slot-direct only fires while the rac is reasonably close to
+      // its slot. Once it's been knocked far out (combat chaos, blob
+      // collapse, retreat path), trying to "reform" creates worse
+      // problems — the rac sprints back across the field through
+      // enemies, fights the cross-unit repulsion of nearby allies,
+      // and the squad ends up worse off than if it just stood and
+      // fought independently. Past FORMATION_SHATTER_R the rac falls
+      // through to the world-target MARCH path (fight whatever is
+      // closest).
+      let usingSlotDirect = false;
+      let slotSx = 0, slotSy = 0;
+      let lvx = 0, lvy = 0;
       if (usesFormation && !isLeader && leaderAlive) {
         const lx = state.rac.x[leaderRow];
         const ly = state.rac.y[leaderRow];
-        const lvx = state.rac.vx[leaderRow];
-        const lvy = state.rac.vy[leaderRow];
-        // Wheel matrix cached once per leader at the top of motionTick.
+        lvx = state.rac.vx[leaderRow];
+        lvy = state.rac.vy[leaderRow];
         const cF = leaderRotCos[leaderRow];
         const sF = leaderRotSin[leaderRow];
         const sdx0 = state.rac.slotDx[i];
         const sdy0 = state.rac.slotDy[i];
         const rdx = sdx0 * cF - sdy0 * sF;
         const rdy = sdx0 * sF + sdy0 * cF;
-        const sX = lx + lvx * dt + rdx;
-        const sY = ly + lvy * dt + rdy;
+        const slotX = lx + rdx;
+        const slotY = ly + rdy;
+        const slotDx = slotX - myX;
+        const slotDy = slotY - myY;
+        const slotD2 = slotDx * slotDx + slotDy * slotDy;
+        if (slotD2 <= FORMATION_SHATTER_R2) {
+          slotSx = slotX;
+          slotSy = slotY;
+          usingSlotDirect = true;
+        }
+      }
+      if (usingSlotDirect) {
+        // Aim at predicted slot = leader.next-tick-pos + rotated offset.
+        // slotSx / slotSy were already computed (with current leader pos);
+        // adding leader.vel * dt projects forward one tick so a moving
+        // leader doesn't leave the squad behind.
+        const sX = slotSx + lvx * dt;
+        const sY = slotSy + lvy * dt;
         const dx = sX - myX;
         const dy = sY - myY;
         const reqSpeed = Math.hypot(dx, dy) / dt;
@@ -1156,8 +1192,23 @@ export function motionTick(state: BattleState, content: ContentBundle, log: Logg
     // Facing follows velocity direction (skip if not moving so we
     // don't reset facing to the +x default every frame an idle rac
     // spends in engage).
+    //
+    // EXCEPTION: a squad leader with a target faces the target, not
+    // its velocity. Leaders' facing drives the wheel rotation for
+    // every follower's slot, so a sideways nudge from cross-unit
+    // repulsion (especially in melee with desiredV=0) used to rotate
+    // the leader's facing → rotate the whole formation → phalanx vs
+    // phalanx pivoted into an end-to-end clash. Leaders now face
+    // their actual target so the formation stays oriented toward the
+    // enemy line.
     state.rac.prevFacing[i] = state.rac.facing[i];
-    if (newVx * newVx + newVy * newVy > 1e-6) {
+    if (isLeader && tgtFound) {
+      const fdx = tgtX - myX;
+      const fdy = tgtY - myY;
+      if (fdx * fdx + fdy * fdy > 1e-6) {
+        state.rac.facing[i] = Math.atan2(fdy, fdx);
+      }
+    } else if (newVx * newVx + newVy * newVy > 1e-6) {
       state.rac.facing[i] = Math.atan2(newVy, newVx);
     }
 

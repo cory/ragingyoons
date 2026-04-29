@@ -579,7 +579,15 @@ export const DOCTRINES: readonly DoctrineDef[] = [
     splitAxis: "front-rear",
     independentInContact: false, // shield wall holds at all costs
     tierSizes: [48, 144, 432, 1296],
-    standingOrder: "slow", // shield wall maintains formation under pressure
+    // Was "slow" (50% march speed) for a "shield-wall-maintains-
+    // integrity" feel, but the formation-contact profile already drops
+    // speed to 30% on contact (via speedMul override). The standing
+    // SLOW order on top of that meant phalanx walked at half pace
+    // toward an "advance" enemy and lost the engage-first race —
+    // equal-numbers phalanx-vs-default-line was a losing matchup,
+    // which felt wrong. Advance closes the gap; phalanx still wins
+    // at the line via tier-0 size (48 vs 12) + contact synaspismos.
+    standingOrder: "advance",
   },
   // 2 — City+Lockpickers / Coastal+Lockpickers: bounding overwatch.
   // Real fire teams are 4-12 strong; we cap at 12.
